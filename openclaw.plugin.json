@@ -1,0 +1,59 @@
+{
+  "id": "memory-qdrant",
+  "name": "Qdrant Memory Plugin",
+  "description": "Vector-based memory storage and retrieval with deduplication",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "qdrantUrl": {
+        "type": "string",
+        "default": "http://localhost:6333",
+        "description": "Qdrant server URL"
+      },
+      "collectionName": {
+        "type": "string",
+        "default": "mrc_bot_memory",
+        "description": "Qdrant collection name"
+      },
+      "vectorSize": {
+        "type": "number",
+        "default": 768,
+        "description": "Embedding vector dimension"
+      },
+      "embeddingApiUrl": {
+        "type": "string",
+        "default": "http://localhost:8899",
+        "description": "Local embedding service URL"
+      },
+      "timeout": {
+        "type": "number",
+        "default": 10000,
+        "description": "Request timeout in ms"
+      },
+      "maxRetries": {
+        "type": "number",
+        "default": 3,
+        "description": "Max retry attempts"
+      },
+      "defaultNamespace": {
+        "type": "string",
+        "default": "default",
+        "description": "Default namespace for memories"
+      },
+      "similarityThreshold": {
+        "type": "number",
+        "default": 0.95,
+        "description": "Threshold for deduplication (0-1)"
+      }
+    }
+  },
+  "uiHints": {
+    "qdrantUrl": { "label": "Qdrant URL" },
+    "collectionName": { "label": "Collection Name" },
+    "vectorSize": { "label": "Vector Size" },
+    "embeddingApiUrl": { "label": "Embedding Service URL" },
+    "similarityThreshold": { "label": "Deduplication Threshold" }
+  }
+}

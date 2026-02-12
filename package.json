@@ -1,0 +1,12 @@
+{
+  "name": "memory-qdrant-plugin",
+  "version": "1.0.0",
+  "description": "Long-term memory using Qdrant vector database with deduplication",
+  "main": "index.ts",
+  "dependencies": {},
+  "peerDependencies": {
+    "openclaw": ">=1.0.0"
+  },
+  "keywords": ["openclaw", "plugin", "memory", "qdrant", "vector"],
+  "license": "MIT"
+}
