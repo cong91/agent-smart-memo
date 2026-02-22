@@ -1,6 +1,6 @@
 /**
  * Auto-Capture Module v2 - Ollama LLM Based
- * 
+ *
  * Uses local deepseek-r1:8b for intelligent fact extraction
  * Falls back to pattern matching if Ollama unavailable
  */
@@ -8,6 +8,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { SlotDB } from "../db/slot-db.js";
 import { extractWithOllama, checkOllamaHealth } from "../services/ollama-extractor.js";
+
+// Event type constant for type-safe event handling
+const AGENT_END_EVENT = "agent_end" as const;
 
 interface AutoCaptureConfig {
   enabled: boolean;
@@ -204,15 +207,19 @@ export function registerAutoCapture(
 
   console.log("[AutoCapture] Registered memory_auto_capture tool");
 
-  // Auto-capture hook after each conversation turn
-  api.on("agent_end", async (event, ctx) => {
+  // Auto-capture hook after each conversation turn using type-safe event name
+  api.on(AGENT_END_EVENT, async (event: unknown, ctx: unknown) => {
     try {
-      const sessionKey = ctx?.sessionKey || "agent:main:default";
+      // Type-safe casting for runtime values
+      const typedEvent = event as { messages?: unknown[]; response?: string; metadata?: Record<string, unknown> };
+      const typedCtx = ctx as { sessionKey?: string };
+      
+      const sessionKey = typedCtx?.sessionKey ?? "agent:main:default";
       const agentId = sessionKey.split(":")[1] || "main";
       const userId = sessionKey.split(":").slice(2).join(":") || "default";
       
-      // Get conversation messages from event
-      const messages = (event?.messages || []) as any[];
+      // Get conversation messages from event with type-safe access
+      const messages = (typedEvent?.messages ?? []) as ConversationMessage[];
       if (messages.length === 0) return;
       
       // Skip if only system messages
