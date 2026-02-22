@@ -44,6 +44,7 @@ export interface MemoryConfig {
   embeddingApiUrl: string;
   timeout: number;
   maxRetries: number;
+  retryDelay: number;
   defaultNamespace: string;
   similarityThreshold: number;
 }
@@ -66,8 +67,9 @@ export interface SearchParams {
   minScore?: number;
 }
 
-// Tool Output
+// Tool Output - Match AgentToolResult structure
 export interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
+  details: unknown;
 }

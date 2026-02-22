@@ -1,18 +1,17 @@
-import { MemoryConfig } from "../types";
+import { MemoryConfig } from "../types.js";
 
 /**
  * Embedding service client - Local embedding service compatible
  */
 export class EmbeddingClient {
-  private config: MemoryConfig;
+  private config: Pick<MemoryConfig, "embeddingApiUrl" | "timeout">;
   private logger: any;
   private dimensions: number;
   
-  constructor(config: Partial<MemoryConfig> & { model?: string; dimensions?: number }, logger?: any) {
+  constructor(config: { embeddingApiUrl?: string; timeout?: number; dimensions?: number; model?: string }, logger?: any) {
     this.config = {
       embeddingApiUrl: config.embeddingApiUrl || "http://localhost:8000",
       timeout: config.timeout || 30000,
-      ...config,
     };
     this.logger = logger || console;
     this.dimensions = config.dimensions || 1024;

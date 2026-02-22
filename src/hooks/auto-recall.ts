@@ -193,36 +193,31 @@ export function injectRecallContext(systemPrompt: string, context: {
  * Register auto-recall hook
  */
 export function registerAutoRecall(api: OpenClawPluginApi, db: SlotDB): void {
-  // Hook into agent lifecycle if supported
-  if (api.hooks?.onBeforeAgentStart) {
-    api.hooks.onBeforeAgentStart(async (ctx: any) => {
-      const sessionKey = ctx?.sessionKey || "agent:main:default";
-      const parts = sessionKey.split(":");
-      const agentId = parts.length >= 2 ? parts[1] : "main";
-      const userId = parts.length >= 3 ? parts.slice(2).join(":") : "default";
+  // Hook into agent lifecycle using the on() method
+  api.on("before_agent_start", async (event, ctx) => {
+    const sessionKey = ctx?.sessionKey || "agent:main:default";
+    const parts = sessionKey.split(":");
+    const agentId = parts.length >= 2 ? parts[1] : "main";
+    const userId = parts.length >= 3 ? parts.slice(2).join(":") : "default";
+    
+    const recallCtx: RecallContext = {
+      sessionKey,
+      stateDir: process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`,
+      userId,
+      agentId,
+    };
+    
+    try {
+      const context = await gatherRecallContext(db, recallCtx);
       
-      const recallCtx: RecallContext = {
-        sessionKey,
-        stateDir: ctx?.stateDir || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`,
-        userId,
-        agentId,
+      // Return system prompt override via the hook result
+      return {
+        systemPrompt: injectRecallContext("", context),
       };
-      
-      try {
-        const context = await gatherRecallContext(db, recallCtx);
-        
-        // If there's a way to modify system prompt, do it
-        if (ctx.systemPrompt !== undefined) {
-          ctx.systemPrompt = injectRecallContext(ctx.systemPrompt, context);
-        }
-        
-        // Also store in context for tools to access
-        ctx.recallContext = context;
-      } catch (error) {
-        console.error("Auto-recall error:", error);
-      }
-    });
-  }
+    } catch (error) {
+      console.error("Auto-recall error:", error);
+    }
+  });
 }
 
 /**

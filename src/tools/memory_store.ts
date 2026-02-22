@@ -1,7 +1,7 @@
-import { QdrantClient } from "../services/qdrant";
-import { EmbeddingClient } from "../services/embedding";
-import { DeduplicationService } from "../services/dedupe";
-import { StoreParams, ToolResult, MemoryEntry, Point } from "../types";
+import { QdrantClient } from "../services/qdrant.js";
+import { EmbeddingClient } from "../services/embedding.js";
+import { DeduplicationService } from "../services/dedupe.js";
+import { StoreParams, ToolResult, Point } from "../types.js";
 
 export const memoryStoreSchema = {
   type: "object",
@@ -38,6 +38,7 @@ export function createMemoryStoreTool(
 ) {
   return {
     name: "memory_store",
+    label: "Memory Store",
     description: "Store a memory in the vector database. Automatically deduplicates similar content.",
     parameters: memoryStoreSchema,
     
@@ -48,6 +49,7 @@ export function createMemoryStoreTool(
           return {
             content: [{ type: "text", text: "Error: text is required" }],
             isError: true,
+            details: { error: "Missing text parameter" },
           };
         }
         
@@ -56,6 +58,7 @@ export function createMemoryStoreTool(
           return {
             content: [{ type: "text", text: "Error: text cannot be empty" }],
             isError: true,
+            details: { error: "Empty text" },
           };
         }
         
@@ -63,6 +66,7 @@ export function createMemoryStoreTool(
           return {
             content: [{ type: "text", text: "Error: text exceeds 10000 character limit" }],
             isError: true,
+            details: { error: "Text too long", length: text.length },
           };
         }
         
@@ -100,6 +104,7 @@ export function createMemoryStoreTool(
           
           return {
             content: [{ type: "text", text: `Memory updated (duplicate detected, ID: ${duplicateId})` }],
+            details: { id: duplicateId, updated: true },
           };
         }
         
@@ -123,12 +128,14 @@ export function createMemoryStoreTool(
         
         return {
           content: [{ type: "text", text: `Memory stored successfully (ID: ${id})` }],
+          details: { id, created: true },
         };
         
       } catch (error: any) {
         return {
           content: [{ type: "text", text: `Error storing memory: ${error.message}` }],
           isError: true,
+          details: { error: error.message },
         };
       }
     },

@@ -9,7 +9,6 @@
  * - memory_slot_list: List all slots with scope filter
  */
 
-import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { SlotDB } from "../db/slot-db.js";
 
@@ -61,12 +60,16 @@ export function registerSlotTools(api: OpenClawPluginApi, defaultCategories: str
   // Tool 1: memory_slot_get
   api.registerTool({
     name: "memory_slot_get",
+    label: "Slot Memory Get",
     description: `Retrieve a memory slot by its key (dot-notation like "profile.name") or get all slots in a category. Supports cross-agent sharing with scope filter.`,
-    parameters: Type.Object({
-      key: Type.Optional(Type.String({ description: 'Dot-notation key, e.g. "profile.name"' })),
-      category: Type.Optional(Type.String({ description: 'Category: "profile", "preferences", "project", "environment", "custom"' })),
-      scope: Type.Optional(Type.String({ description: 'Scope filter: "private" (default), "team" (shared), "public" (global), "all" (merge all scopes)' })),
-    }),
+    parameters: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: 'Dot-notation key, e.g. "profile.name"' },
+        category: { type: "string", description: 'Category: "profile", "preferences", "project", "environment", "custom"' },
+        scope: { type: "string", description: 'Scope filter: "private" (default), "team" (shared), "public" (global), "all" (merge all scopes)' },
+      },
+    },
     async execute(_id: string, params: { key?: string; category?: string; scope?: string }, ctx: any) {
       try {
         const stateDir = ctx?.stateDir || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
@@ -144,14 +147,19 @@ export function registerSlotTools(api: OpenClawPluginApi, defaultCategories: str
   // Tool 2: memory_slot_set
   api.registerTool({
     name: "memory_slot_set",
+    label: "Slot Memory Set",
     description: `Store or update a structured memory slot with scoping. Uses upsert semantics with auto-versioning. Scope determines visibility: "private" (agent-only), "team" (shared across agents), "public" (global).`,
-    parameters: Type.Object({
-      key: Type.String({ description: 'Dot-notation key, e.g. "profile.name"' }),
-      value: Type.Any({ description: "Value to store" }),
-      category: Type.Optional(Type.String({ description: "Override auto-inferred category" })),
-      source: Type.Optional(Type.String({ description: '"manual", "auto_capture", or "tool"' })),
-      scope: Type.Optional(Type.String({ description: 'Visibility scope: "private" (default), "team" (shared), "public" (global)' })),
-    }),
+    parameters: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: 'Dot-notation key, e.g. "profile.name"' },
+        value: { description: "Value to store" },
+        category: { type: "string", description: "Override auto-inferred category" },
+        source: { type: "string", description: '"manual", "auto_capture", or "tool"' },
+        scope: { type: "string", description: 'Visibility scope: "private" (default), "team" (shared), "public" (global)' },
+      },
+      required: ["key", "value"],
+    },
     async execute(_id: string, params: { key: string; value: unknown; category?: string; source?: string; scope?: string }, ctx: any) {
       try {
         const stateDir = ctx?.stateDir || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
@@ -177,12 +185,16 @@ export function registerSlotTools(api: OpenClawPluginApi, defaultCategories: str
   // Tool 3: memory_slot_list
   api.registerTool({
     name: "memory_slot_list",
+    label: "Slot Memory List",
     description: `List all stored memory slots with optional scope filter. Shows which scope each slot belongs to.`,
-    parameters: Type.Object({
-      category: Type.Optional(Type.String({ description: "Filter by category" })),
-      prefix: Type.Optional(Type.String({ description: "Filter by key prefix" })),
-      scope: Type.Optional(Type.String({ description: 'Scope filter: "private", "team", "public", or "all" (default: all)' })),
-    }),
+    parameters: {
+      type: "object",
+      properties: {
+        category: { type: "string", description: "Filter by category" },
+        prefix: { type: "string", description: "Filter by key prefix" },
+        scope: { type: "string", description: 'Scope filter: "private", "team", "public", or "all" (default: all)' },
+      },
+    },
     async execute(_id: string, params: { category?: string; prefix?: string; scope?: string }, ctx: any) {
       try {
         const stateDir = ctx?.stateDir || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;

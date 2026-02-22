@@ -261,7 +261,7 @@ export class SlotDB {
          WHERE scope_user_id = ? AND scope_agent_id = ? AND category = ?
          ORDER BY key ASC`,
       );
-      const rows = stmt.all(scopeUserId, scopeAgentId, input.category) as SlotRow[];
+      const rows = stmt.all(scopeUserId, scopeAgentId, input.category) as unknown as SlotRow[];
 
       return rows.map((r) => this.rowToSlot(r));
     }
@@ -272,7 +272,7 @@ export class SlotDB {
        WHERE scope_user_id = ? AND scope_agent_id = ?
        ORDER BY category ASC, key ASC`,
     );
-    const rows = stmt.all(scopeUserId, scopeAgentId) as SlotRow[];
+    const rows = stmt.all(scopeUserId, scopeAgentId) as unknown as SlotRow[];
 
     return rows.map((r) => this.rowToSlot(r));
   }
@@ -288,7 +288,7 @@ export class SlotDB {
     this.cleanExpired(scopeUserId, scopeAgentId);
 
     let query = `SELECT * FROM slots WHERE scope_user_id = ? AND scope_agent_id = ?`;
-    const params: unknown[] = [scopeUserId, scopeAgentId];
+    const params: (string | number | null)[] = [scopeUserId, scopeAgentId];
 
     if (input?.category) {
       query += ` AND category = ?`;
@@ -303,7 +303,7 @@ export class SlotDB {
     query += ` ORDER BY category ASC, key ASC`;
 
     const stmt = this.db.prepare(query);
-    const rows = stmt.all(...params) as SlotRow[];
+    const rows = stmt.all(...params) as unknown as SlotRow[];
     return rows.map((r) => this.rowToSlot(r));
   }
 
@@ -337,7 +337,7 @@ export class SlotDB {
        WHERE scope_user_id = ? AND scope_agent_id = ?
        ORDER BY category ASC, key ASC`,
     );
-    const rows = stmt.all(scopeUserId, scopeAgentId) as SlotRow[];
+    const rows = stmt.all(scopeUserId, scopeAgentId) as unknown as SlotRow[];
 
     const state: Record<string, Record<string, unknown>> = {};
 

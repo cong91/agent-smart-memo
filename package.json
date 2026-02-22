@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@sinclair/typebox": "^0.34.0",
+    "@types/node": "^22.0.0",
     "openclaw": "*",
     "typescript": "^5.0.0"
   }

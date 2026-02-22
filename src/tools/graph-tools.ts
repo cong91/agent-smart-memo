@@ -9,7 +9,6 @@
  * - memory_graph_search: Search entities + traverse graph
  */
 
-import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { SlotDB } from "../db/slot-db.js";
 
@@ -46,12 +45,16 @@ export function registerGraphTools(api: OpenClawPluginApi): void {
   // ===========================================================================
   api.registerTool({
     name: "memory_graph_entity_get",
+    label: "Graph Entity Get",
     description: `Retrieve an entity from the graph by its ID, or list entities with optional filters (type, name). Entities represent people, projects, technologies, or concepts with their properties.`,
-    parameters: Type.Object({
-      id: Type.Optional(Type.String({ description: "Entity UUID to retrieve" })),
-      type: Type.Optional(Type.String({ description: "Filter by entity type: person, project, technology, concept" })),
-      name: Type.Optional(Type.String({ description: "Filter by name (partial match)" })),
-    }),
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Entity UUID to retrieve" },
+        type: { type: "string", description: "Filter by entity type: person, project, technology, concept" },
+        name: { type: "string", description: "Filter by name (partial match)" },
+      },
+    },
     async execute(
       _id: string,
       params: { id?: string; type?: string; name?: string },
@@ -119,17 +122,21 @@ export function registerGraphTools(api: OpenClawPluginApi): void {
   // ===========================================================================
   api.registerTool({
     name: "memory_graph_entity_set",
+    label: "Graph Entity Set",
     description: `Create or update an entity in the graph. Entities represent key concepts like people, projects, technologies. Use this to build a knowledge graph of your work context.`,
-    parameters: Type.Object({
-      id: Type.Optional(Type.String({ description: "Entity UUID (omit to create new)" })),
-      name: Type.String({ description: "Entity name (e.g., 'MrC', 'OpenClaw Project', 'React')" }),
-      type: Type.String({ description: "Entity type: person, project, technology, concept" }),
-      properties: Type.Optional(
-        Type.Record(Type.String(), Type.Any(), {
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Entity UUID (omit to create new)" },
+        name: { type: "string", description: "Entity name (e.g., 'MrC', 'OpenClaw Project', 'React')" },
+        type: { type: "string", description: "Entity type: person, project, technology, concept" },
+        properties: {
+          type: "object",
           description: "Additional properties as key-value pairs",
-        }),
-      ),
-    }),
+        },
+      },
+      required: ["name", "type"],
+    },
     async execute(
       _id: string,
       params: { id?: string; name: string; type: string; properties?: Record<string, any> },
@@ -185,18 +192,22 @@ export function registerGraphTools(api: OpenClawPluginApi): void {
   // ===========================================================================
   api.registerTool({
     name: "memory_graph_rel_add",
+    label: "Graph Relationship Add",
     description: `Create a relationship between two entities. Relationships define how entities connect (e.g., person 'manages' project, project 'uses' technology). Weight indicates strength (0.0-1.0).`,
-    parameters: Type.Object({
-      source_id: Type.String({ description: "Source entity UUID" }),
-      target_id: Type.String({ description: "Target entity UUID" }),
-      relation_type: Type.String({ description: "Relationship type: manages, uses, depends_on, works_with, created_by, etc." }),
-      weight: Type.Optional(Type.Number({ description: "Relationship strength 0.0-1.0 (default: 1.0)" })),
-      properties: Type.Optional(
-        Type.Record(Type.String(), Type.Any(), {
+    parameters: {
+      type: "object",
+      properties: {
+        source_id: { type: "string", description: "Source entity UUID" },
+        target_id: { type: "string", description: "Target entity UUID" },
+        relation_type: { type: "string", description: "Relationship type: manages, uses, depends_on, works_with, created_by, etc." },
+        weight: { type: "number", description: "Relationship strength 0.0-1.0 (default: 1.0)" },
+        properties: {
+          type: "object",
           description: "Additional relationship properties",
-        }),
-      ),
-    }),
+        },
+      },
+      required: ["source_id", "target_id", "relation_type"],
+    },
     async execute(
       _id: string,
       params: {
@@ -260,13 +271,17 @@ export function registerGraphTools(api: OpenClawPluginApi): void {
   // ===========================================================================
   api.registerTool({
     name: "memory_graph_rel_remove",
+    label: "Graph Relationship Remove",
     description: `Delete a relationship by its ID, or delete a specific relationship between two entities.`,
-    parameters: Type.Object({
-      id: Type.Optional(Type.String({ description: "Relationship UUID to delete" })),
-      source_id: Type.Optional(Type.String({ description: "Source entity UUID (alternative to id)" })),
-      target_id: Type.Optional(Type.String({ description: "Target entity UUID (alternative to id)" })),
-      relation_type: Type.Optional(Type.String({ description: "Relation type (alternative to id)" })),
-    }),
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Relationship UUID to delete" },
+        source_id: { type: "string", description: "Source entity UUID (alternative to id)" },
+        target_id: { type: "string", description: "Target entity UUID (alternative to id)" },
+        relation_type: { type: "string", description: "Relation type (alternative to id)" },
+      },
+    },
     async execute(
       _id: string,
       params: { id?: string; source_id?: string; target_id?: string; relation_type?: string },
@@ -328,12 +343,17 @@ export function registerGraphTools(api: OpenClawPluginApi): void {
   // ===========================================================================
   api.registerTool({
     name: "memory_graph_search",
+    label: "Graph Search",
     description: `Search the knowledge graph by traversing from a starting entity. Finds connected entities up to a specified depth. Useful for discovering relationships and context around a person, project, or concept.`,
-    parameters: Type.Object({
-      entity_id: Type.String({ description: "Starting entity UUID to traverse from" }),
-      depth: Type.Optional(Type.Number({ description: "Traversal depth (1-3, default: 2)" })),
-      relation_type: Type.Optional(Type.String({ description: "Filter by specific relation type" })),
-    }),
+    parameters: {
+      type: "object",
+      properties: {
+        entity_id: { type: "string", description: "Starting entity UUID to traverse from" },
+        depth: { type: "number", description: "Traversal depth (1-3, default: 2)" },
+        relation_type: { type: "string", description: "Filter by specific relation type" },
+      },
+      required: ["entity_id"],
+    },
     async execute(
       _id: string,
       params: { entity_id: string; depth?: number; relation_type?: string },

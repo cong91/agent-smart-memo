@@ -36,6 +36,7 @@ interface AgentMemoConfig {
   qdrantHost?: string;
   qdrantPort?: number;
   qdrantCollection?: string;
+  qdrantVectorSize?: number;
   ollamaHost?: string;
   ollamaPort?: number;
   ollamaModel?: string;
@@ -85,6 +86,10 @@ const agentMemoPlugin = {
         type: "string",
         description: "Qdrant collection name",
       },
+      qdrantVectorSize: {
+        type: "number",
+        description: "Qdrant vector size (default: 1024)",
+      },
       ollamaHost: {
         type: "string",
         description: "Ollama server host",
@@ -126,6 +131,7 @@ const agentMemoPlugin = {
     const qdrantHost = config.qdrantHost || "localhost";
     const qdrantPort = config.qdrantPort || 6333;
     const qdrantCollection = config.qdrantCollection || "mrc_bot_memory";
+    const qdrantVectorSize = config.qdrantVectorSize || 1024;
     const ollamaHost = config.ollamaHost || "http://localhost";
     const ollamaPort = config.ollamaPort || 11434;
     const ollamaModel = config.ollamaModel || "deepseek-r1:8b";
@@ -154,6 +160,7 @@ const agentMemoPlugin = {
       host: qdrantHost,
       port: qdrantPort,
       collection: qdrantCollection,
+      vectorSize: qdrantVectorSize,
     });
 
     const embedding = new EmbeddingClient({
@@ -161,7 +168,7 @@ const agentMemoPlugin = {
       dimensions: embedDimensions,
     });
 
-    const dedupe = new DeduplicationService({ threshold: 0.95 });
+    const dedupe = new DeduplicationService(0.95, console);
 
     // ----------------------------------------------------------------
     // Register Qdrant tools from modules

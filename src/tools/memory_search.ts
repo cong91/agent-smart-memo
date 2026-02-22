@@ -1,6 +1,6 @@
-import { QdrantClient } from "../services/qdrant";
-import { EmbeddingClient } from "../services/embedding";
-import { SearchParams, ToolResult, MemoryEntry, ScoredPoint } from "../types";
+import { QdrantClient } from "../services/qdrant.js";
+import { EmbeddingClient } from "../services/embedding.js";
+import { SearchParams, ToolResult, ScoredPoint } from "../types.js";
 
 export const memorySearchSchema = {
   type: "object",
@@ -44,6 +44,7 @@ export function createMemorySearchTool(
 ) {
   return {
     name: "memory_search",
+    label: "Memory Search",
     description: "Search stored memories by semantic similarity. Returns most relevant past information.",
     parameters: memorySearchSchema,
     
@@ -54,6 +55,7 @@ export function createMemorySearchTool(
           return {
             content: [{ type: "text", text: "Error: query is required" }],
             isError: true,
+            details: { error: "Missing query parameter" },
           };
         }
         
@@ -62,6 +64,7 @@ export function createMemorySearchTool(
           return {
             content: [{ type: "text", text: "Error: query cannot be empty" }],
             isError: true,
+            details: { error: "Empty query" },
           };
         }
         
@@ -95,16 +98,17 @@ export function createMemorySearchTool(
         const results = await qdrant.search(vector, limit, filter);
         
         // Filter by minScore
-        const filtered = results.filter(r => r.score >= minScore);
+        const filtered = results.filter((r: ScoredPoint) => r.score >= minScore);
         
         if (filtered.length === 0) {
           return {
             content: [{ type: "text", text: "No relevant memories found." }],
+            details: { count: 0, query },
           };
         }
         
         // Format results
-        const formatted = filtered.map((r, i) => {
+        const formatted = filtered.map((r: ScoredPoint, i: number) => {
           const payload = r.payload;
           const date = payload.timestamp 
             ? new Date(payload.timestamp).toLocaleDateString() 
@@ -128,12 +132,14 @@ export function createMemorySearchTool(
             type: "text",
             text: `Found ${filtered.length} relevant memories for "${query}":\n\n${formatted}`,
           }],
+          details: { count: filtered.length, query, results: filtered },
         };
         
       } catch (error: any) {
         return {
           content: [{ type: "text", text: `Error searching memories: ${error.message}` }],
           isError: true,
+          details: { error: error.message },
         };
       }
     },

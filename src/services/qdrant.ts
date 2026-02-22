@@ -1,20 +1,31 @@
-import { MemoryConfig, Point, SearchResponse, ScoredPoint } from "../types";
+import { MemoryConfig, Point, SearchResponse, ScoredPoint } from "../types.js";
+
+interface QdrantConfig {
+  host: string;
+  port: number;
+  collection: string;
+  vectorSize: number;
+  timeout?: number;
+  maxRetries?: number;
+  retryDelay?: number;
+}
 
 /**
  * Qdrant client with retry logic
  */
 export class QdrantClient {
-  private config: MemoryConfig;
+  private config: Required<QdrantConfig>;
   private logger: any;
   
-  constructor(config: Partial<MemoryConfig> & { host: string; port: number; collection: string }, logger?: any) {
+  constructor(config: QdrantConfig, logger?: any) {
     this.config = {
-      qdrantUrl: `http://${config.host}:${config.port}`,
-      collectionName: config.collection,
+      host: config.host,
+      port: config.port,
+      collection: config.collection,
+      vectorSize: config.vectorSize,
       timeout: config.timeout || 30000,
       maxRetries: config.maxRetries || 3,
       retryDelay: config.retryDelay || 1000,
-      ...config,
     };
     this.logger = logger || console;
   }
@@ -31,7 +42,7 @@ export class QdrantClient {
     options: RequestInit,
     attempt: number = 1
   ): Promise<any> {
-    const url = `${this.config.qdrantUrl}${path}`;
+    const url = `http://${this.config.host}:${this.config.port}${path}`;
     
     try {
       const controller = new AbortController();
@@ -79,7 +90,7 @@ export class QdrantClient {
    */
   async collectionExists(): Promise<boolean> {
     try {
-      await this.request(`/collections/${this.config.collectionName}`, { method: "GET" });
+      await this.request(`/collections/${this.config.collection}`, { method: "GET" });
       return true;
     } catch (error: any) {
       if (error.message.includes("404")) {
@@ -95,13 +106,13 @@ export class QdrantClient {
   async createCollection(): Promise<void> {
     const exists = await this.collectionExists();
     if (exists) {
-      this.logger.info(`[Qdrant] Collection ${this.config.collectionName} already exists`);
+      this.logger.info(`[Qdrant] Collection ${this.config.collection} already exists`);
       return;
     }
     
-    this.logger.info(`[Qdrant] Creating collection ${this.config.collectionName}`);
+    this.logger.info(`[Qdrant] Creating collection ${this.config.collection}`);
     
-    await this.request(`/collections/${this.config.collectionName}`, {
+    await this.request(`/collections/${this.config.collection}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -122,7 +133,7 @@ export class QdrantClient {
    * Upsert points
    */
   async upsert(points: Point[]): Promise<void> {
-    await this.request(`/collections/${this.config.collectionName}/points`, {
+    await this.request(`/collections/${this.config.collection}/points`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ points }),
@@ -149,7 +160,7 @@ export class QdrantClient {
     }
     
     const response: SearchResponse = await this.request(
-      `/collections/${this.config.collectionName}/points/search`,
+      `/collections/${this.config.collection}/points/search`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -164,7 +175,7 @@ export class QdrantClient {
    * Delete points by filter
    */
   async deleteByFilter(filter: Record<string, any>): Promise<void> {
-    await this.request(`/collections/${this.config.collectionName}/points/delete`, {
+    await this.request(`/collections/${this.config.collection}/points/delete`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ filter }),
