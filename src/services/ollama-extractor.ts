@@ -5,8 +5,11 @@
 
 import type { SlotDB } from "../db/slot-db.js";
 
-const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "deepseek-r1:8b";
+interface OllamaConfig {
+  ollamaHost: string;
+  ollamaPort: number;
+  ollamaModel: string;
+}
 
 interface ExtractionResult {
   slot_updates: Array<{
@@ -27,16 +30,18 @@ interface ExtractionResult {
  */
 export async function extractWithOllama(
   conversation: string,
-  currentSlots: Record<string, Record<string, any>>
+  currentSlots: Record<string, Record<string, any>>,
+  config: OllamaConfig
 ): Promise<ExtractionResult> {
   const prompt = buildExtractionPrompt(conversation, currentSlots);
+  const baseUrl = `${config.ollamaHost}:${config.ollamaPort}`;
   
   try {
-    const response = await fetch(`${OLLAMA_HOST}/api/generate`, {
+    const response = await fetch(`${baseUrl}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: OLLAMA_MODEL,
+        model: config.ollamaModel,
         prompt: prompt,
         stream: false,
         format: "json",
@@ -106,9 +111,9 @@ If no new facts found, return empty arrays. Return ONLY the JSON, no other text.
 /**
  * Health check for Ollama
  */
-export async function checkOllamaHealth(): Promise<boolean> {
+export async function checkOllamaHealth(host: string, port: number): Promise<boolean> {
   try {
-    const response = await fetch(`${OLLAMA_HOST}/api/tags`, { method: "GET" });
+    const response = await fetch(`${host}:${port}/api/tags`, { method: "GET" });
     return response.ok;
   } catch {
     return false;

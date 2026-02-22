@@ -26,6 +26,26 @@ import { registerAutoRecall } from "./hooks/auto-recall.js";
 import { registerAutoCapture } from "./hooks/auto-capture.js";
 
 // ============================================================================
+// Plugin Configuration Interface
+// ============================================================================
+
+interface AgentMemoConfig {
+  slotCategories?: string[];
+  maxSlots?: number;
+  injectStateTokenBudget?: number;
+  qdrantHost?: string;
+  qdrantPort?: number;
+  qdrantCollection?: string;
+  ollamaHost?: string;
+  ollamaPort?: number;
+  ollamaModel?: string;
+  embedModel?: string;
+  embedDimensions?: number;
+  autoCaptureEnabled?: boolean;
+  autoCaptureMinConfidence?: number;
+}
+
+// ============================================================================
 // Plugin Definition
 // ============================================================================
 
@@ -36,54 +56,141 @@ const agentMemoPlugin = {
   name: "Agent Memo (Slot Memory + Graph)",
   description: "Structured slot memory, graph relationships, and semantic search for OpenClaw",
   kind: "memory" as const,
-  configSchema: emptyPluginConfigSchema(),
+  configSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      slotCategories: {
+        type: "array",
+        items: { type: "string" },
+        description: "Allowed slot categories",
+      },
+      maxSlots: {
+        type: "number",
+        description: "Maximum number of slots per scope",
+      },
+      injectStateTokenBudget: {
+        type: "number",
+        description: "Max tokens for Current State injection",
+      },
+      qdrantHost: {
+        type: "string",
+        description: "Qdrant server host",
+      },
+      qdrantPort: {
+        type: "number",
+        description: "Qdrant server port",
+      },
+      qdrantCollection: {
+        type: "string",
+        description: "Qdrant collection name",
+      },
+      ollamaHost: {
+        type: "string",
+        description: "Ollama server host",
+      },
+      ollamaPort: {
+        type: "number",
+        description: "Ollama server port",
+      },
+      ollamaModel: {
+        type: "string",
+        description: "Ollama model for auto-capture",
+      },
+      embedModel: {
+        type: "string",
+        description: "Embedding model for vectorization (default: mxbai-embed-large)",
+      },
+      embedDimensions: {
+        type: "number",
+        description: "Embedding dimensions (default: 1024)",
+      },
+      autoCaptureEnabled: {
+        type: "boolean",
+        description: "Enable auto-capture feature",
+      },
+      autoCaptureMinConfidence: {
+        type: "number",
+        description: "Minimum confidence for auto-capture",
+      },
+    },
+  },
 
   register(api: OpenClawPluginApi) {
     // ----------------------------------------------------------------
+    // Get configuration from api.config with defaults
+    // ----------------------------------------------------------------
+    const config = (api.config as AgentMemoConfig) || {};
+    
+    const slotCategories = config.slotCategories || DEFAULT_CATEGORIES;
+    const qdrantHost = config.qdrantHost || "localhost";
+    const qdrantPort = config.qdrantPort || 6333;
+    const qdrantCollection = config.qdrantCollection || "mrc_bot_memory";
+    const ollamaHost = config.ollamaHost || "http://localhost";
+    const ollamaPort = config.ollamaPort || 11434;
+    const ollamaModel = config.ollamaModel || "deepseek-r1:8b";
+    const embedModel = config.embedModel || "mxbai-embed-large";
+    const embedDimensions = config.embedDimensions || 1024;
+    const autoCaptureEnabled = config.autoCaptureEnabled !== false; // default true
+    const autoCaptureMinConfidence = config.autoCaptureMinConfidence || 0.7;
+    
+    // State directory from env or default
+    const stateDir = process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
+
+    console.log("[AgentMemo] Configuration:");
+    console.log(`  Slot categories: ${slotCategories.join(", ")}`);
+    console.log(`  Qdrant: ${qdrantHost}:${qdrantPort}/${qdrantCollection}`);
+    console.log(`  Ollama: ${ollamaHost}:${ollamaPort} (model: ${ollamaModel})`);
+    console.log(`  Embedding: ${embedModel} (${embedDimensions}d)`);
+    console.log(`  AutoCapture: ${autoCaptureEnabled ? "enabled" : "disabled"}`);
+
+    // ----------------------------------------------------------------
     // Initialize services
     // ----------------------------------------------------------------
-    const stateDir = process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
     const slotDB = new SlotDB(stateDir);
-    
+
     // Qdrant services (if available)
     const qdrant = new QdrantClient({
-      host: process.env.QDRANT_HOST || "localhost",
-      port: parseInt(process.env.QDRANT_PORT || "6333"),
-      collection: process.env.QDRANT_COLLECTION || "mrc_bot_memory",
+      host: qdrantHost,
+      port: qdrantPort,
+      collection: qdrantCollection,
     });
-    
+
     const embedding = new EmbeddingClient({
-      model: "text-embedding-3-small",
-      dimensions: 1024,
+      model: embedModel,
+      dimensions: embedDimensions,
     });
-    
+
     const dedupe = new DeduplicationService({ threshold: 0.95 });
-    
+
     // ----------------------------------------------------------------
     // Register Qdrant tools from modules
     // ----------------------------------------------------------------
     const memorySearchTool = createMemorySearchTool(qdrant, embedding, "default");
     const memoryStoreTool = createMemoryStoreTool(qdrant, embedding, dedupe, "default");
-    
+
     api.registerTool(memorySearchTool);
     api.registerTool(memoryStoreTool);
-    
+
     // ----------------------------------------------------------------
     // Register Slot & Graph tools
     // ----------------------------------------------------------------
-    registerSlotTools(api, DEFAULT_CATEGORIES);
+    registerSlotTools(api, slotCategories);
     registerGraphTools(api);
-    
+
     // ----------------------------------------------------------------
     // Register lifecycle hooks
     // ----------------------------------------------------------------
     registerAutoRecall(api, slotDB);
     registerAutoCapture(api, slotDB, {
-      enabled: true,
-      minConfidence: 0.7,
-      batchSize: 1,
+      enabled: autoCaptureEnabled,
+      minConfidence: autoCaptureMinConfidence,
+      useLLM: true,
+      ollamaHost,
+      ollamaPort,
+      ollamaModel,
     });
-    
+
     console.log("[AgentMemo] Plugin registered successfully");
     console.log("[AgentMemo] Tools: memory_search, memory_store, memory_slot_*, memory_graph_*");
     console.log("[AgentMemo] Hooks: auto-recall, auto-capture");

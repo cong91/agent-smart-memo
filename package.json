@@ -5,14 +5,18 @@
   "type": "module",
   "main": "dist/index.js",
   "openclaw": {
-    "extensions": ["./dist/index.js"]
+    "extensions": [
+      "./dist/index.js"
+    ]
   },
   "scripts": {
     "build": "tsc",
     "test": "node --experimental-sqlite tests/test.js",
     "clean": "rm -rf dist"
   },
-  "dependencies": {},
+  "dependencies": {
+    "dotenv": "^17.3.1"
+  },
   "devDependencies": {
     "@sinclair/typebox": "^0.34.0",
     "openclaw": "*",

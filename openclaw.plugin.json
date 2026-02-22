@@ -17,12 +17,62 @@
       "injectStateTokenBudget": {
         "type": "number",
         "description": "Max tokens for Current State injection in auto-recall (default: 500)"
+      },
+      "qdrantHost": {
+        "type": "string",
+        "description": "Qdrant server host (default: localhost)"
+      },
+      "qdrantPort": {
+        "type": "number",
+        "description": "Qdrant server port (default: 6333)"
+      },
+      "qdrantCollection": {
+        "type": "string",
+        "description": "Qdrant collection name (default: mrc_bot_memory)"
+      },
+      "ollamaHost": {
+        "type": "string",
+        "description": "Ollama server host (default: http://localhost)"
+      },
+      "ollamaPort": {
+        "type": "number",
+        "description": "Ollama server port (default: 11434)"
+      },
+      "ollamaModel": {
+        "type": "string",
+        "description": "Ollama model for auto-capture (default: deepseek-r1:8b)"
+      },
+      "embedModel": {
+        "type": "string",
+        "description": "Embedding model for vectorization (default: mxbai-embed-large)"
+      },
+      "embedDimensions": {
+        "type": "number",
+        "description": "Embedding dimensions (default: 1024)"
+      },
+      "autoCaptureEnabled": {
+        "type": "boolean",
+        "description": "Enable auto-capture feature (default: true)"
+      },
+      "autoCaptureMinConfidence": {
+        "type": "number",
+        "description": "Minimum confidence for auto-capture (default: 0.7)"
       }
     }
   },
   "uiHints": {
     "slotCategories": { "label": "Slot Categories", "placeholder": "profile, preferences, project, environment" },
     "maxSlots": { "label": "Max Slots", "placeholder": "500" },
-    "injectStateTokenBudget": { "label": "State Injection Token Budget", "placeholder": "500" }
+    "injectStateTokenBudget": { "label": "State Injection Token Budget", "placeholder": "500" },
+    "qdrantHost": { "label": "Qdrant Host", "placeholder": "localhost" },
+    "qdrantPort": { "label": "Qdrant Port", "placeholder": "6333" },
+    "qdrantCollection": { "label": "Qdrant Collection", "placeholder": "mrc_bot_memory" },
+    "ollamaHost": { "label": "Ollama Host", "placeholder": "http://localhost" },
+    "ollamaPort": { "label": "Ollama Port", "placeholder": "11434" },
+    "ollamaModel": { "label": "Ollama Model", "placeholder": "deepseek-r1:8b" },
+    "embedModel": { "label": "Embedding Model", "placeholder": "mxbai-embed-large" },
+    "embedDimensions": { "label": "Embedding Dimensions", "placeholder": "1024" },
+    "autoCaptureEnabled": { "label": "Auto Capture Enabled" },
+    "autoCaptureMinConfidence": { "label": "Min Confidence", "placeholder": "0.7" }
   }
 }

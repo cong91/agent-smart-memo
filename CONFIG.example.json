@@ -1,0 +1,41 @@
+# Agent-Memo Plugin Configuration
+#
+# Add this to your ~/.openclaw/openclaw.json under plugins.entries.agent-memo.config
+#
+# Example configuration:
+
+{
+  "plugins": {
+    "entries": {
+      "agent-memo": {
+        "enabled": true,
+        "config": {
+          "slotCategories": ["profile", "preferences", "project", "environment", "custom"],
+          "maxSlots": 500,
+          "injectStateTokenBudget": 500,
+          "qdrantHost": "localhost",
+          "qdrantPort": 6333,
+          "qdrantCollection": "mrc_bot_memory",
+          "ollamaHost": "http://localhost",
+          "ollamaPort": 11434,
+          "ollamaModel": "deepseek-r1:8b",
+          "autoCaptureEnabled": true,
+          "autoCaptureMinConfidence": 0.7
+        }
+      }
+    }
+  }
+}
+
+# All fields are optional - defaults will be used if not specified:
+# - slotCategories: ["profile", "preferences", "project", "environment", "custom"]
+# - maxSlots: 500
+# - injectStateTokenBudget: 500
+# - qdrantHost: "localhost"
+# - qdrantPort: 6333
+# - qdrantCollection: "mrc_bot_memory"
+# - ollamaHost: "http://localhost"
+# - ollamaPort: 11434
+# - ollamaModel: "deepseek-r1:8b"
+# - autoCaptureEnabled: true
+# - autoCaptureMinConfidence: 0.7

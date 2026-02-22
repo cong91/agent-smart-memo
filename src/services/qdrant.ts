@@ -10,7 +10,7 @@ export class QdrantClient {
   constructor(config: Partial<MemoryConfig> & { host: string; port: number; collection: string }, logger?: any) {
     this.config = {
       qdrantUrl: `http://${config.host}:${config.port}`,
-      collection: config.collection,
+      collectionName: config.collection,
       timeout: config.timeout || 30000,
       maxRetries: config.maxRetries || 3,
       retryDelay: config.retryDelay || 1000,

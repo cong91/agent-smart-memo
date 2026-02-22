@@ -13,12 +13,18 @@ interface AutoCaptureConfig {
   enabled: boolean;
   minConfidence: number;
   useLLM: boolean;
+  ollamaHost: string;
+  ollamaPort: number;
+  ollamaModel: string;
 }
 
-const DEFAULT_CONFIG: AutoCaptureConfig = {
+const DEFAULT_CONFIG: Partial<AutoCaptureConfig> = {
   enabled: true,
   minConfidence: 0.7,
   useLLM: true,
+  ollamaHost: "http://localhost",
+  ollamaPort: 11434,
+  ollamaModel: "deepseek-r1:8b",
 };
 
 interface ConversationMessage {
@@ -32,7 +38,7 @@ interface ConversationMessage {
 async function extractFacts(
   messages: ConversationMessage[],
   currentSlots: Record<string, Record<string, any>>,
-  useLLM: boolean,
+  cfg: AutoCaptureConfig,
 ): Promise<{ slot_updates: any[]; memories: any[] }> {
   const text = messages
     .filter((m) => m.role === "user" || m.role === "assistant")
@@ -40,11 +46,11 @@ async function extractFacts(
     .join("\n");
 
   // Try Ollama first
-  if (useLLM) {
-    const isHealthy = await checkOllamaHealth();
+  if (cfg.useLLM) {
+    const isHealthy = await checkOllamaHealth(cfg.ollamaHost, cfg.ollamaPort);
     if (isHealthy) {
       console.log("[AutoCapture] Using Ollama LLM for extraction");
-      return extractWithOllama(text, currentSlots);
+      return extractWithOllama(text, currentSlots, cfg);
     }
     console.log("[AutoCapture] Ollama unavailable, using pattern fallback");
   }
@@ -147,7 +153,7 @@ export function registerAutoCapture(
         const messages = [{ role: "user" as const, content: params.text }];
         const currentState = db.getCurrentState(userId, agentId);
 
-        const extracted = await extractFacts(messages, currentState, params.use_llm ?? cfg.useLLM);
+        const extracted = await extractFacts(messages, currentState, cfg);
 
         // Store slots
         let slotsStored = 0;
@@ -185,4 +191,63 @@ export function registerAutoCapture(
   });
 
   console.log("[AutoCapture] Registered memory_auto_capture tool");
+
+  // Auto-capture hook after each conversation turn
+  if (api.hooks?.onAfterAgentEnd) {
+    api.hooks.onAfterAgentEnd(async (ctx: any) => {
+      try {
+        const sessionKey = ctx?.sessionKey || "agent:main:default";
+        const agentId = sessionKey.split(":")[1] || "main";
+        const userId = sessionKey.split(":").slice(2).join(":") || "default";
+        
+        // Get conversation messages
+        const messages = ctx?.messages || [];
+        if (messages.length === 0) return;
+        
+        // Skip if only system messages
+        const hasUserOrAssistant = messages.some((m: any) => 
+          m.role === "user" || m.role === "assistant"
+        );
+        if (!hasUserOrAssistant) return;
+        
+        console.log(`[AutoCapture] Processing ${messages.length} messages for ${agentId}`);
+        
+        const currentState = db.getCurrentState(userId, agentId);
+        const extracted = await extractFacts(messages, currentState, cfg);
+        
+        // Store slots
+        let slotsStored = 0;
+        for (const fact of extracted.slot_updates) {
+          if (fact.confidence < cfg.minConfidence) continue;
+          try {
+            db.set(userId, agentId, {
+              key: fact.key,
+              value: fact.value,
+              category: fact.category,
+              source: "auto_capture",
+              confidence: fact.confidence,
+            });
+            slotsStored++;
+            console.log(`[AutoCapture] Stored: ${fact.key} = ${JSON.stringify(fact.value)}`);
+          } catch (e) {
+            console.error("[AutoCapture] Failed to store slot:", e);
+          }
+        }
+        
+        // Store memories to Qdrant if available
+        if (extracted.memories.length > 0) {
+          console.log(`[AutoCapture] ${extracted.memories.length} memories extracted (not stored - Qdrant tool not available in hook)`);
+        }
+        
+        if (slotsStored > 0) {
+          console.log(`[AutoCapture] Complete: ${slotsStored} slots stored`);
+        }
+      } catch (error) {
+        console.error("[AutoCapture] Hook error:", error);
+      }
+    });
+    console.log("[AutoCapture] Registered onAfterAgentEnd hook");
+  } else {
+    console.warn("[AutoCapture] onAfterAgentEnd hook not available - only manual capture enabled");
+  }
 }
