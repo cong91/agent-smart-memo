@@ -1,12 +1,21 @@
 {
-  "name": "memory-qdrant-plugin",
-  "version": "1.0.0",
-  "description": "Long-term memory using Qdrant vector database with deduplication",
-  "main": "index.ts",
-  "dependencies": {},
-  "peerDependencies": {
-    "openclaw": ">=1.0.0"
+  "name": "agent-memo",
+  "version": "3.0.0",
+  "description": "Slot Memory Plugin for OpenClaw — structured key-value state management with auto-recall injection",
+  "type": "module",
+  "main": "dist/index.js",
+  "openclaw": {
+    "extensions": ["./dist/index.js"]
   },
-  "keywords": ["openclaw", "plugin", "memory", "qdrant", "vector"],
-  "license": "MIT"
+  "scripts": {
+    "build": "tsc",
+    "test": "node --experimental-sqlite tests/test.js",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@sinclair/typebox": "^0.34.0",
+    "openclaw": "*",
+    "typescript": "^5.0.0"
+  }
 }

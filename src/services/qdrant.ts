@@ -7,9 +7,16 @@ export class QdrantClient {
   private config: MemoryConfig;
   private logger: any;
   
-  constructor(config: MemoryConfig, logger: any) {
-    this.config = config;
-    this.logger = logger;
+  constructor(config: Partial<MemoryConfig> & { host: string; port: number; collection: string }, logger?: any) {
+    this.config = {
+      qdrantUrl: `http://${config.host}:${config.port}`,
+      collection: config.collection,
+      timeout: config.timeout || 30000,
+      maxRetries: config.maxRetries || 3,
+      retryDelay: config.retryDelay || 1000,
+      ...config,
+    };
+    this.logger = logger || console;
   }
   
   private sleep(ms: number): Promise<void> {
