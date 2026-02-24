@@ -30,17 +30,21 @@
         "type": "string",
         "description": "Qdrant collection name (default: mrc_bot_memory)"
       },
-      "ollamaHost": {
+      "llmBaseUrl": {
         "type": "string",
-        "description": "Ollama server host (default: http://localhost)"
+        "description": "LLM API base URL (default: http://localhost:8317/v1)"
       },
-      "ollamaPort": {
-        "type": "number",
-        "description": "Ollama server port (default: 11434)"
-      },
-      "ollamaModel": {
+      "llmApiKey": {
         "type": "string",
-        "description": "Ollama model for auto-capture (default: deepseek-r1:8b)"
+        "description": "LLM API key (default: proxypal-local)"
+      },
+      "llmModel": {
+        "type": "string",
+        "description": "LLM model for auto-capture (default: gemini-3.1-pro-low)"
+      },
+      "embedBaseUrl": {
+        "type": "string",
+        "description": "Embedding service base URL for Ollama (default: http://localhost:11434)"
       },
       "embedModel": {
         "type": "string",
@@ -57,6 +61,10 @@
       "autoCaptureMinConfidence": {
         "type": "number",
         "description": "Minimum confidence for auto-capture (default: 0.7)"
+      },
+      "contextWindowMaxTokens": {
+        "type": "number",
+        "description": "Maximum tokens for context window in auto-capture (default: 12000)"
       }
     }
   },
@@ -67,12 +75,14 @@
     "qdrantHost": { "label": "Qdrant Host", "placeholder": "localhost" },
     "qdrantPort": { "label": "Qdrant Port", "placeholder": "6333" },
     "qdrantCollection": { "label": "Qdrant Collection", "placeholder": "mrc_bot_memory" },
-    "ollamaHost": { "label": "Ollama Host", "placeholder": "http://localhost" },
-    "ollamaPort": { "label": "Ollama Port", "placeholder": "11434" },
-    "ollamaModel": { "label": "Ollama Model", "placeholder": "deepseek-r1:8b" },
+    "llmBaseUrl": { "label": "LLM Base URL", "placeholder": "http://localhost:8317/v1" },
+    "llmApiKey": { "label": "LLM API Key", "placeholder": "proxypal-local" },
+    "llmModel": { "label": "LLM Model", "placeholder": "gemini-3.1-pro-low" },
+    "embedBaseUrl": { "label": "Embedding Base URL", "placeholder": "http://localhost:11434" },
     "embedModel": { "label": "Embedding Model", "placeholder": "mxbai-embed-large" },
     "embedDimensions": { "label": "Embedding Dimensions", "placeholder": "1024" },
     "autoCaptureEnabled": { "label": "Auto Capture Enabled" },
-    "autoCaptureMinConfidence": { "label": "Min Confidence", "placeholder": "0.7" }
+    "autoCaptureMinConfidence": { "label": "Min Confidence", "placeholder": "0.7" },
+    "contextWindowMaxTokens": { "label": "Context Window Max Tokens", "placeholder": "12000" }
   }
 }

@@ -1,3 +1,9 @@
+// Import MemoryNamespace from shared config
+import type { MemoryNamespace as SharedMemoryNamespace } from "./shared/memory-config.js";
+
+// Re-export for external use
+export type { MemoryNamespace as MemoryNamespace } from "./shared/memory-config.js";
+
 // Qdrant Types
 export interface Point {
   id: string;
@@ -23,12 +29,29 @@ export interface SearchResponse {
 export interface MemoryEntry {
   id: string;
   text: string;
-  namespace: string;
+  namespace: SharedMemoryNamespace;
   sessionId?: string;
   userId?: string;
+  source_agent?: string;
+  source_type?: "auto_capture" | "manual" | "tool_call";
   metadata: Record<string, any>;
   timestamp: number;
   updatedAt?: number;
+}
+
+/** Memory payload structure for Qdrant */
+export interface MemoryPayload {
+  text: string;
+  namespace: SharedMemoryNamespace;
+  source_agent: string;
+  source_type: "auto_capture" | "manual" | "tool_call";
+  userId: string;
+  sessionId?: string;
+  timestamp: number;
+  updatedAt?: number;
+  confidence?: number;
+  tags?: string[];
+  metadata?: Record<string, any>;
 }
 
 export interface MemorySearchResult {
@@ -45,14 +68,14 @@ export interface MemoryConfig {
   timeout: number;
   maxRetries: number;
   retryDelay: number;
-  defaultNamespace: string;
+  defaultNamespace: SharedMemoryNamespace;
   similarityThreshold: number;
 }
 
 // Tool Parameters
 export interface StoreParams {
   text: string;
-  namespace?: string;
+  namespace?: SharedMemoryNamespace;
   sessionId?: string;
   userId?: string;
   metadata?: Record<string, any>;
@@ -61,7 +84,7 @@ export interface StoreParams {
 export interface SearchParams {
   query: string;
   limit?: number;
-  namespace?: string;
+  namespace?: SharedMemoryNamespace;
   sessionId?: string;
   userId?: string;
   minScore?: number;

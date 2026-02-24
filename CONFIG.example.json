@@ -16,9 +16,9 @@
           "qdrantHost": "localhost",
           "qdrantPort": 6333,
           "qdrantCollection": "mrc_bot_memory",
-          "ollamaHost": "http://localhost",
-          "ollamaPort": 11434,
-          "ollamaModel": "deepseek-r1:8b",
+          "llmBaseUrl": "http://localhost:8317/v1",
+          "llmApiKey": "proxypal-local",
+          "llmModel": "gemini-3.1-pro-low",
           "autoCaptureEnabled": true,
           "autoCaptureMinConfidence": 0.7
         }
@@ -34,8 +34,8 @@
 # - qdrantHost: "localhost"
 # - qdrantPort: 6333
 # - qdrantCollection: "mrc_bot_memory"
-# - ollamaHost: "http://localhost"
-# - ollamaPort: 11434
-# - ollamaModel: "deepseek-r1:8b"
+# - llmBaseUrl: "http://localhost:8317/v1"
+# - llmApiKey: "proxypal-local"
+# - llmModel: "gemini-3.1-pro-low"
 # - autoCaptureEnabled: true
 # - autoCaptureMinConfidence: 0.7

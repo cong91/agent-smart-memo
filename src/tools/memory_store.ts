@@ -1,7 +1,7 @@
 import { QdrantClient } from "../services/qdrant.js";
 import { EmbeddingClient } from "../services/embedding.js";
 import { DeduplicationService } from "../services/dedupe.js";
-import { StoreParams, ToolResult, Point } from "../types.js";
+import { StoreParams, ToolResult, Point, MemoryNamespace } from "../types.js";
 
 export const memoryStoreSchema = {
   type: "object",
@@ -12,7 +12,7 @@ export const memoryStoreSchema = {
     },
     namespace: {
       type: "string",
-      description: "Namespace for organization (default: 'default')",
+      description: "Namespace for organization (default: 'agent_decisions')",
     },
     sessionId: {
       type: "string",
@@ -34,7 +34,7 @@ export function createMemoryStoreTool(
   qdrant: QdrantClient,
   embedding: EmbeddingClient,
   dedupe: DeduplicationService,
-  defaultNamespace: string
+  defaultNamespace: MemoryNamespace
 ) {
   return {
     name: "memory_store",
@@ -42,7 +42,11 @@ export function createMemoryStoreTool(
     description: "Store a memory in the vector database. Automatically deduplicates similar content.",
     parameters: memoryStoreSchema,
     
-    async execute(_id: string, params: StoreParams): Promise<ToolResult> {
+    async execute(
+      _id: string, 
+      params: StoreParams & { agentId?: string },
+      _signal?: AbortSignal
+    ): Promise<ToolResult> {
       try {
         // Validate
         if (!params.text || typeof params.text !== "string") {
@@ -70,7 +74,8 @@ export function createMemoryStoreTool(
           };
         }
         
-        const namespace = params.namespace || defaultNamespace;
+        // Use provided namespace or default
+        const namespace = (params.namespace as MemoryNamespace) || defaultNamespace;
         
         // Generate embedding
         const vector = await embedding.embed(text);
@@ -92,6 +97,8 @@ export function createMemoryStoreTool(
             payload: {
               text,
               namespace,
+              source_agent: params.agentId || "unknown",
+              source_type: "tool_call" as const,
               sessionId: params.sessionId || null,
               userId: params.userId || null,
               metadata: params.metadata || {},
@@ -117,6 +124,8 @@ export function createMemoryStoreTool(
           payload: {
             text,
             namespace,
+            source_agent: params.agentId || "unknown",
+            source_type: "tool_call" as const,
             sessionId: params.sessionId || null,
             userId: params.userId || null,
             metadata: params.metadata || {},

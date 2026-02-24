@@ -45,6 +45,25 @@ export const PluginConfig = {
     enabled: process.env.AUTO_CAPTURE_ENABLED !== "false", // default true
     minConfidence: parseFloat(process.env.AUTO_CAPTURE_MIN_CONFIDENCE || "0.7"),
     useLLM: process.env.AUTO_CAPTURE_USE_LLM !== "false", // default true
+    // RAG Memory Isolation - Noise Filter settings
+    agentBlocklist: (process.env.AUTO_CAPTURE_AGENT_BLOCKLIST || "trading-bot,scrum-agent").split(",").filter(Boolean),
+    noisePatterns: (process.env.AUTO_CAPTURE_NOISE_PATTERNS || "").split(",").filter(Boolean).map((p) => new RegExp(p, "i")),
+    maxMessagesPerCapture: parseInt(process.env.AUTO_CAPTURE_MAX_MESSAGES || "50"),
+    minContentLength: parseInt(process.env.AUTO_CAPTURE_MIN_CONTENT_LENGTH || "20"),
+    noiseThreshold: parseFloat(process.env.AUTO_CAPTURE_NOISE_THRESHOLD || "0.5"),
+  },
+
+  // Context window management settings
+  contextWindow: {
+    maxConversationTokens: parseInt(
+      process.env.CONTEXT_WINDOW_MAX_TOKENS || "12000"
+    ),
+    tokenEstimateDivisor: parseInt(
+      process.env.CONTEXT_WINDOW_TOKEN_DIVISOR || "4"
+    ),
+    absoluteMaxMessages: parseInt(
+      process.env.CONTEXT_WINDOW_MAX_MESSAGES || "200"
+    ),
   },
 
   // State storage

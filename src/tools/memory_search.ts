@@ -1,6 +1,7 @@
 import { QdrantClient } from "../services/qdrant.js";
 import { EmbeddingClient } from "../services/embedding.js";
-import { SearchParams, ToolResult, ScoredPoint } from "../types.js";
+import { SearchParams, ToolResult, ScoredPoint, MemoryNamespace } from "../types.js";
+import { getAgentNamespaces } from "../shared/memory-config.js";
 
 export const memorySearchSchema = {
   type: "object",
@@ -17,7 +18,7 @@ export const memorySearchSchema = {
     },
     namespace: {
       type: "string",
-      description: "Filter by namespace",
+      description: "Filter by namespace (default: auto-detected from agent)",
     },
     sessionId: {
       type: "string",
@@ -33,6 +34,10 @@ export const memorySearchSchema = {
       minimum: 0,
       maximum: 1,
     },
+    sourceAgent: {
+      type: "string",
+      description: "Filter by source agent ID",
+    },
   },
   required: ["query"],
 };
@@ -40,7 +45,7 @@ export const memorySearchSchema = {
 export function createMemorySearchTool(
   qdrant: QdrantClient,
   embedding: EmbeddingClient,
-  defaultNamespace: string
+  defaultNamespace: MemoryNamespace
 ) {
   return {
     name: "memory_search",
@@ -48,7 +53,11 @@ export function createMemorySearchTool(
     description: "Search stored memories by semantic similarity. Returns most relevant past information.",
     parameters: memorySearchSchema,
     
-    async execute(_id: string, params: SearchParams): Promise<ToolResult> {
+    async execute(
+      _id: string, 
+      params: SearchParams & { sourceAgent?: string; agentId?: string },
+      _signal?: AbortSignal
+    ): Promise<ToolResult> {
       try {
         // Validate
         if (!params.query || typeof params.query !== "string") {
@@ -69,13 +78,27 @@ export function createMemorySearchTool(
         }
         
         const limit = Math.min(Math.max(params.limit || 5, 1), 20);
-        const namespace = params.namespace || defaultNamespace;
         const minScore = params.minScore ?? 0.7;
         
-        // Build filter
-        const filterConditions: any[] = [
-          { key: "namespace", match: { value: namespace } },
-        ];
+        // Determine namespaces to search
+        const agentId = params.agentId || "";
+        const namespaces: MemoryNamespace[] = params.namespace 
+          ? [params.namespace as MemoryNamespace]
+          : getAgentNamespaces(agentId);
+        
+        // Build namespace filter (OR if multiple namespaces)
+        const namespaceConditions = namespaces.map(ns => ({
+          key: "namespace",
+          match: { value: ns },
+        }));
+        
+        const filterConditions: any[] = [];
+        
+        if (namespaceConditions.length === 1) {
+          filterConditions.push(namespaceConditions[0]);
+        } else if (namespaceConditions.length > 1) {
+          filterConditions.push({ should: namespaceConditions });
+        }
         
         if (params.sessionId) {
           filterConditions.push({
@@ -88,6 +111,13 @@ export function createMemorySearchTool(
           filterConditions.push({
             key: "userId",
             match: { value: params.userId },
+          });
+        }
+        
+        if (params.sourceAgent) {
+          filterConditions.push({
+            key: "source_agent",
+            match: { value: params.sourceAgent },
           });
         }
         
@@ -116,6 +146,7 @@ export function createMemorySearchTool(
           
           const lines = [
             `[${i + 1}] Score: ${(r.score * 100).toFixed(1)}%`,
+            `Namespace: ${payload.namespace || "unknown"}`,
             `Text: ${payload.text}`,
             `Date: ${date}`,
           ];

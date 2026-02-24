@@ -127,6 +127,32 @@ export class QdrantClient {
     });
     
     this.logger.info(`[Qdrant] Collection created successfully`);
+    
+    // Create payload indexes for memory isolation
+    await this.createPayloadIndex("namespace", "keyword");
+    await this.createPayloadIndex("source_agent", "keyword");
+    await this.createPayloadIndex("source_type", "keyword");
+    await this.createPayloadIndex("userId", "keyword");
+  }
+  
+  /**
+   * Create payload index for efficient filtering
+   */
+  async createPayloadIndex(fieldName: string, fieldType: "keyword" | "integer" | "float" | "bool"): Promise<void> {
+    try {
+      await this.request(`/collections/${this.config.collection}/index`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          field_name: fieldName,
+          field_schema: fieldType,
+        }),
+      });
+      this.logger.info(`[Qdrant] Created payload index: ${fieldName}`);
+    } catch (error: any) {
+      // Index may already exist, log but don't fail
+      this.logger.warn(`[Qdrant] Failed to create index ${fieldName}: ${error.message}`);
+    }
   }
   
   /**

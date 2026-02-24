@@ -1,7 +1,7 @@
 /**
  * Agent-Memo: Slot Memory Plugin for OpenClaw v3.0
  * 
- * Refactored to use modular tool structure
+ * Refactored to use modular tool structure with single Qdrant collection
  * - Slot tools: memory_slot_get/set/list
  * - Graph tools: memory_graph_entity_get/set/rel_add/rel_remove/search
  * - Qdrant tools: memory_search, memory_store (from modules)
@@ -37,13 +37,15 @@ interface AgentMemoConfig {
   qdrantPort?: number;
   qdrantCollection?: string;
   qdrantVectorSize?: number;
-  ollamaHost?: string;
-  ollamaPort?: number;
-  ollamaModel?: string;
+  llmBaseUrl?: string;
+  llmApiKey?: string;
+  llmModel?: string;
+  embedBaseUrl?: string;
   embedModel?: string;
   embedDimensions?: number;
   autoCaptureEnabled?: boolean;
   autoCaptureMinConfidence?: number;
+  contextWindowMaxTokens?: number;
 }
 
 // ============================================================================
@@ -84,23 +86,27 @@ const agentMemoPlugin = {
       },
       qdrantCollection: {
         type: "string",
-        description: "Qdrant collection name",
+        description: "Qdrant collection name (default: mrc_bot_memory)",
       },
       qdrantVectorSize: {
         type: "number",
         description: "Qdrant vector size (default: 1024)",
       },
-      ollamaHost: {
+      llmBaseUrl: {
         type: "string",
-        description: "Ollama server host",
+        description: "LLM API base URL (OpenAI compatible)",
       },
-      ollamaPort: {
-        type: "number",
-        description: "Ollama server port",
-      },
-      ollamaModel: {
+      llmApiKey: {
         type: "string",
-        description: "Ollama model for auto-capture",
+        description: "LLM API key",
+      },
+      llmModel: {
+        type: "string",
+        description: "LLM model for auto-capture",
+      },
+      embedBaseUrl: {
+        type: "string",
+        description: "Embedding service base URL (default: http://localhost:11434)",
       },
       embedModel: {
         type: "string",
@@ -118,44 +124,53 @@ const agentMemoPlugin = {
         type: "number",
         description: "Minimum confidence for auto-capture",
       },
+      contextWindowMaxTokens: {
+        type: "number",
+        description: "Maximum tokens for context window in auto-capture (default: 12000)",
+      },
     },
   },
 
   register(api: OpenClawPluginApi) {
     // ----------------------------------------------------------------
     // Get configuration from api.config with defaults
+    // Handle both wrapped config ({ enabled, config }) and unwrapped config
     // ----------------------------------------------------------------
-    const config = (api.config as AgentMemoConfig) || {};
+    const rawConfig = api.config as any;
+    const config: AgentMemoConfig = rawConfig?.config || rawConfig || {};
     
     const slotCategories = config.slotCategories || DEFAULT_CATEGORIES;
     const qdrantHost = config.qdrantHost || "localhost";
     const qdrantPort = config.qdrantPort || 6333;
     const qdrantCollection = config.qdrantCollection || "mrc_bot_memory";
     const qdrantVectorSize = config.qdrantVectorSize || 1024;
-    const ollamaHost = config.ollamaHost || "http://localhost";
-    const ollamaPort = config.ollamaPort || 11434;
-    const ollamaModel = config.ollamaModel || "deepseek-r1:8b";
+    const llmBaseUrl = config.llmBaseUrl || "http://localhost:8317/v1";
+    const llmApiKey = config.llmApiKey || "proxypal-local";
+    const llmModel = config.llmModel || "gemini-3.1-pro-low";
+    const embedBaseUrl = config.embedBaseUrl || "http://localhost:11434";
     const embedModel = config.embedModel || "mxbai-embed-large";
     const embedDimensions = config.embedDimensions || 1024;
     const autoCaptureEnabled = config.autoCaptureEnabled !== false; // default true
     const autoCaptureMinConfidence = config.autoCaptureMinConfidence || 0.7;
-    
+    const contextWindowMaxTokens = config.contextWindowMaxTokens || 12000;
+
     // State directory from env or default
     const stateDir = process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
 
     console.log("[AgentMemo] Configuration:");
     console.log(`  Slot categories: ${slotCategories.join(", ")}`);
     console.log(`  Qdrant: ${qdrantHost}:${qdrantPort}/${qdrantCollection}`);
-    console.log(`  Ollama: ${ollamaHost}:${ollamaPort} (model: ${ollamaModel})`);
-    console.log(`  Embedding: ${embedModel} (${embedDimensions}d)`);
+    console.log(`  LLM: ${llmBaseUrl} (model: ${llmModel})`);
+    console.log(`  Embedding: ${embedBaseUrl} (model: ${embedModel}, ${embedDimensions}d)`);
     console.log(`  AutoCapture: ${autoCaptureEnabled ? "enabled" : "disabled"}`);
+    console.log(`  ContextWindow: ${contextWindowMaxTokens} tokens`);
 
     // ----------------------------------------------------------------
     // Initialize services
     // ----------------------------------------------------------------
     const slotDB = new SlotDB(stateDir);
 
-    // Qdrant services (if available)
+    // Single Qdrant collection for all agents - namespace isolation via payload
     const qdrant = new QdrantClient({
       host: qdrantHost,
       port: qdrantPort,
@@ -164,6 +179,7 @@ const agentMemoPlugin = {
     });
 
     const embedding = new EmbeddingClient({
+      embeddingApiUrl: embedBaseUrl,
       model: embedModel,
       dimensions: embedDimensions,
     });
@@ -173,8 +189,8 @@ const agentMemoPlugin = {
     // ----------------------------------------------------------------
     // Register Qdrant tools from modules
     // ----------------------------------------------------------------
-    const memorySearchTool = createMemorySearchTool(qdrant, embedding, "default");
-    const memoryStoreTool = createMemoryStoreTool(qdrant, embedding, dedupe, "default");
+    const memorySearchTool = createMemorySearchTool(qdrant, embedding, "agent_decisions");
+    const memoryStoreTool = createMemoryStoreTool(qdrant, embedding, dedupe, "agent_decisions");
 
     api.registerTool(memorySearchTool);
     api.registerTool(memoryStoreTool);
@@ -188,14 +204,15 @@ const agentMemoPlugin = {
     // ----------------------------------------------------------------
     // Register lifecycle hooks
     // ----------------------------------------------------------------
-    registerAutoRecall(api, slotDB);
-    registerAutoCapture(api, slotDB, {
+    registerAutoRecall(api, slotDB, qdrant, embedding);
+    registerAutoCapture(api, slotDB, qdrant, embedding, dedupe, {
       enabled: autoCaptureEnabled,
       minConfidence: autoCaptureMinConfidence,
       useLLM: true,
-      ollamaHost,
-      ollamaPort,
-      ollamaModel,
+      llmBaseUrl,
+      llmApiKey,
+      llmModel,
+      contextWindowMaxTokens,
     });
 
     console.log("[AgentMemo] Plugin registered successfully");
