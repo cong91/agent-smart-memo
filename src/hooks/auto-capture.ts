@@ -2,7 +2,7 @@
  * Auto-Capture Module v3 - LLM Based
  *
  * Uses OpenAI Completions API compatible LLM for intelligent fact extraction
- * Default: gemini-3.1-pro-low via local proxy
+ * Default: gemini-2.5-flash via local proxy
  * Falls back to pattern matching if LLM unavailable
  */
 

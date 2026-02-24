@@ -141,6 +141,14 @@ function buildSystemInstruction(
 ): string {
   return `You are a memory extraction assistant. Your task is to analyze conversations and extract facts about the user.
 
+CRITICAL LANGUAGE RULE:
+- You MUST extract and write memories in the EXACT SAME LANGUAGE as the user's input.
+- For example:  
+  + If the user speaks Vietnamese, the extracted memories MUST be in Vietnamese.
+  + If the user speaks English, the extracted memories MUST be in English.
+  + If the user speaks any language, the extracted memories MUST be in same language.
+- DO NOT translate to English. Keep the original language of the conversation.
+
 EXTRACTION GUIDELINES:
 - Extract facts the user explicitly states or clearly implies from context
 - Focus on: names, locations, preferences, project details, tech stack, deadlines, goals
@@ -227,6 +235,19 @@ Output:
 {
   "slot_updates": [],
   "memories": []
+}
+
+EXAMPLE 6 - Vietnamese input (MUST output in Vietnamese):
+Input: "Tôi tên là Minh và tôi làm việc ở Hà Nội. Tôi thích uống cà phê vào buổi sáng."
+Output:
+{
+  "slot_updates": [
+    {"key": "profile.name", "value": "Minh", "confidence": 0.95, "category": "profile"},
+    {"key": "profile.location", "value": "Hà Nội", "confidence": 0.9, "category": "profile"}
+  ],
+  "memories": [
+    {"text": "Người dùng thích uống cà phê vào buổi sáng", "namespace": "user_profile", "confidence": 0.85}
+  ]
 }
 
 REMEMBER: It's OK to return empty arrays if there's nothing meaningful to extract. Quality over quantity.`;
