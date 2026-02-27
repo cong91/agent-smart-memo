@@ -1,9 +1,3 @@
-# Agent-Memo Plugin Configuration
-#
-# Add this to your ~/.openclaw/openclaw.json under plugins.entries.agent-memo.config
-#
-# Example configuration:
-
 {
   "plugins": {
     "entries": {
@@ -18,7 +12,7 @@
           "qdrantCollection": "mrc_bot_memory",
           "llmBaseUrl": "http://localhost:8317/v1",
           "llmApiKey": "proxypal-local",
-          "llmModel": "gemini-3.1-pro-low",
+          "llmModel": "gemini-2.5-flash",
           "autoCaptureEnabled": true,
           "autoCaptureMinConfidence": 0.7
         }
@@ -26,16 +20,3 @@
     }
   }
 }
-
-# All fields are optional - defaults will be used if not specified:
-# - slotCategories: ["profile", "preferences", "project", "environment", "custom"]
-# - maxSlots: 500
-# - injectStateTokenBudget: 500
-# - qdrantHost: "localhost"
-# - qdrantPort: 6333
-# - qdrantCollection: "mrc_bot_memory"
-# - llmBaseUrl: "http://localhost:8317/v1"
-# - llmApiKey: "proxypal-local"
-# - llmModel: "gemini-3.1-pro-low"
-# - autoCaptureEnabled: true
-# - autoCaptureMinConfidence: 0.7
