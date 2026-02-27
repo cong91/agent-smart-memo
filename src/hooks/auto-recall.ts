@@ -9,7 +9,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { SlotDB } from "../db/slot-db.js";
 import { QdrantClient } from "../services/qdrant.js";
 import { EmbeddingClient } from "../services/embedding.js";
-import { getAgentNamespaces, MemoryNamespace } from "../shared/memory-config.js";
+import { getAgentNamespaces, MemoryNamespace, normalizeUserId } from "../shared/memory-config.js";
 
 // Token budget for different context types
 const TOKEN_BUDGETS = {
@@ -140,15 +140,29 @@ export async function gatherRecallContext(
   ];
   
   const mergedState: Record<string, Record<string, unknown>> = {};
+  const mergedTimestamps: Record<string, Record<string, string>> = {};
   
   for (const scope of scopes) {
     const state = db.getCurrentState(scope.userId, scope.agentId);
-    for (const [category, slots] of Object.entries(state)) {
-      if (!mergedState[category]) mergedState[category] = {};
-      // Private takes precedence over team, team over public
-      for (const [key, value] of Object.entries(slots)) {
-        if (!(key in mergedState[category])) {
+    const slots = db.list(scope.userId, scope.agentId);
+    // Build timestamp map
+    const tsMap: Record<string, string> = {};
+    for (const s of slots) {
+      tsMap[s.key] = s.updated_at;
+    }
+    
+    for (const [category, catSlots] of Object.entries(state)) {
+      if (!mergedState[category]) {
+        mergedState[category] = {};
+        mergedTimestamps[category] = {};
+      }
+      for (const [key, value] of Object.entries(catSlots)) {
+        const existingTs = mergedTimestamps[category]?.[key];
+        const newTs = tsMap[key] || "";
+        // Keep the NEWEST version (freshness wins)
+        if (!existingTs || newTs > existingTs) {
           mergedState[category][key] = value;
+          mergedTimestamps[category][key] = newTs;
         }
       }
     }
@@ -294,7 +308,7 @@ export function registerAutoRecall(
     const sessionKey = typedCtx?.sessionKey || "agent:main:default";
     const parts = sessionKey.split(":");
     const agentId = parts.length >= 2 ? parts[1] : "main";
-    const userId = parts.length >= 3 ? parts.slice(2).join(":") : "default";
+    const userId = normalizeUserId(parts.length >= 3 ? parts.slice(2).join(":") : "default");
     
     // Extract user query from last user message for semantic search
     let userQuery = "";
@@ -344,7 +358,7 @@ export async function getRecallContextText(
 ): Promise<string> {
   const parts = sessionKey.split(":");
   const agentId = parts.length >= 2 ? parts[1] : "main";
-  const userId = parts.length >= 3 ? parts.slice(2).join(":") : "default";
+  const userId = normalizeUserId(parts.length >= 3 ? parts.slice(2).join(":") : "default");
   
   const ctx: RecallContext = {
     sessionKey,

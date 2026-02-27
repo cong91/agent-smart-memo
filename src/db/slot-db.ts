@@ -11,6 +11,7 @@ import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { mkdirSync, existsSync } from "node:fs";
 import { GraphDB } from "./graph-db.js";
+import { getSlotTTL } from "../shared/memory-config.js";
 
 // Re-export GraphDB types
 export { GraphDB };
@@ -401,12 +402,29 @@ export class SlotDB {
 
   private cleanExpired(scopeUserId: string, scopeAgentId: string): void {
     const now = new Date().toISOString();
+    // Remove explicitly expired slots
     const stmt = this.db.prepare(
       `DELETE FROM slots
        WHERE scope_user_id = ? AND scope_agent_id = ?
          AND expires_at IS NOT NULL AND expires_at < ?`,
     );
     stmt.run(scopeUserId, scopeAgentId, now);
+    
+    // Auto-expire slots based on category TTL
+    // Project/task slots older than 7 days get removed automatically
+    const categories = ['project', 'environment', 'custom'];
+    for (const cat of categories) {
+      const ttlDays = getSlotTTL(cat);
+      const cutoff = new Date(Date.now() - ttlDays * 24 * 60 * 60 * 1000).toISOString();
+      const ttlStmt = this.db.prepare(
+        `DELETE FROM slots
+         WHERE scope_user_id = ? AND scope_agent_id = ?
+           AND category = ? AND updated_at < ?
+           AND key NOT LIKE '_autocapture%'
+           AND source = 'auto_capture'`,
+      );
+      ttlStmt.run(scopeUserId, scopeAgentId, cat, cutoff);
+    }
   }
 
   close(): void {

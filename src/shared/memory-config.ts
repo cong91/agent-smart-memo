@@ -106,6 +106,38 @@ export function isBlockedAgent(agentId: string): boolean {
 }
 
 /**
+ * Normalize scope_user_id to prevent fragmentation.
+ * Maps all session-based IDs (hook:*, cron:*, subagent:*) to 'default'.
+ * Preserves __team__ and __public__ scopes.
+ * 
+ * ROOT CAUSE FIX: Each session generates a unique scope_user_id like
+ * "hook:e0758a07-..." or "cron:5668fdad-...", causing massive duplication.
+ * Since this is a single-user system, we normalize everything to 'default'.
+ */
+export function normalizeUserId(rawUserId: string): string {
+  // Preserve special scopes
+  if (rawUserId === '__team__' || rawUserId === '__public__') {
+    return rawUserId;
+  }
+  // Always normalize to 'default' for single-user system
+  return 'default';
+}
+
+/** Slot TTL configuration by category (in days) */
+export const SLOT_TTL_DAYS: Record<string, number> = {
+  project: 7,        // Project/task slots: 7 days
+  environment: 3,    // Environment slots: 3 days  
+  custom: 14,        // Custom slots: 14 days
+  profile: 90,       // Profile slots: 90 days
+  preferences: 90,   // Preferences: 90 days
+};
+
+/** Get TTL in days for a slot category */
+export function getSlotTTL(category: string): number {
+  return SLOT_TTL_DAYS[category] ?? 30; // default 30 days
+}
+
+/**
  * NoiseFilter class for auto-capture
  * Determines whether content should be captured or skipped
  */

@@ -13,7 +13,7 @@ import { QdrantClient } from "../services/qdrant.js";
 import { EmbeddingClient } from "../services/embedding.js";
 import { DeduplicationService } from "../services/dedupe.js";
 import { extractWithLLM, checkLLMHealth } from "../services/llm-extractor.js";
-import { NoiseFilter, getAutoCaptureNamespace, isTraderAgent, MemoryNamespace } from "../shared/memory-config.js";
+import { NoiseFilter, getAutoCaptureNamespace, isTraderAgent, MemoryNamespace, normalizeUserId } from "../shared/memory-config.js";
 
 // Event type constant for type-safe event handling
 const AGENT_END_EVENT = "agent_end" as const;
@@ -229,7 +229,7 @@ async function extractFacts(
   currentSlots: Record<string, Record<string, any>>,
   cfg: AutoCaptureConfig,
   forceUseLLM?: boolean,
-): Promise<{ slot_updates: any[]; memories: any[] }> {
+): Promise<{ slot_updates: any[]; slot_removals: any[]; memories: any[] }> {
   // Build context window config from optional cfg setting
   const contextWindowConfig: ContextWindowConfig = {
     maxConversationTokens: cfg.contextWindowMaxTokens ?? DEFAULT_CONTEXT_WINDOW.maxConversationTokens,
@@ -275,9 +275,10 @@ async function extractFacts(
 /**
  * Pattern-based extraction (fallback)
  */
-function extractWithPatterns(text: string): { slot_updates: any[]; memories: any[] } {
-  const result: { slot_updates: any[]; memories: any[] } = {
+function extractWithPatterns(text: string): { slot_updates: any[]; slot_removals: any[]; memories: any[] } {
+  const result: { slot_updates: any[]; slot_removals: any[]; memories: any[] } = {
     slot_updates: [],
+    slot_removals: [],
     memories: [],
   };
 
@@ -369,7 +370,7 @@ export function registerAutoCapture(
       try {
         const sessionKey = ctx?.sessionKey || "agent:main:default";
         const agentId = sessionKey.split(":")[1] || "main";
-        const userId = sessionKey.split(":").slice(2).join(":") || "default";
+        const userId = normalizeUserId(sessionKey.split(":").slice(2).join(":") || "default");
 
         const messages = [{ role: "user" as const, content: params.text }];
         const currentState = db.getCurrentState(userId, agentId);
@@ -436,7 +437,7 @@ export function registerAutoCapture(
       
       const sessionKey = typedCtx?.sessionKey ?? "agent:main:default";
       const agentId = sessionKey.split(":")[1] || "main";
-      const userId = sessionKey.split(":").slice(2).join(":") || "default";
+      const userId = normalizeUserId(sessionKey.split(":").slice(2).join(":") || "default");
       
       // Initialize noise filter for this agent
       const noiseFilter = new NoiseFilter(agentId);
@@ -529,26 +530,32 @@ export function registerAutoCapture(
       const currentState = db.getCurrentState(userId, agentId);
       const extracted = await extractFacts(lastTurnMessages, currentState, cfg);
       
-      // Store slots
+      // Process slot REMOVALS first (invalidation)
+      let slotsRemoved = 0;
+      if (extracted.slot_removals && extracted.slot_removals.length > 0) {
+        for (const removal of extracted.slot_removals) {
+          try {
+            const deleted = db.delete(userId, agentId, removal.key);
+            if (deleted) {
+              slotsRemoved++;
+              console.log(`[AutoCapture] Removed stale slot: ${removal.key} (reason: ${removal.reason})`);
+            }
+          } catch (e) {
+            console.error("[AutoCapture] Failed to remove slot:", e);
+          }
+        }
+      }
       
+      // Store slots
       let slotsStored = 0;
       
-      
-      
       // Save hash to SlotDB for next comparison
-      
       db.set(userId, agentId, {
-      
         key: hashKey,
-      
         value: contentHash,
-      
         category: "custom",
-      
         source: "auto_capture",
-      
         confidence: 1.0,
-      
       });
       for (const fact of extracted.slot_updates) {
         if (fact.confidence < cfg.minConfidence!) continue;
@@ -666,8 +673,8 @@ export function registerAutoCapture(
         console.log(`[AutoCapture] No memories to store (empty extraction result)`);
       }
       
-      if (slotsStored > 0 || memoriesStored > 0) {
-        console.log(`[AutoCapture] Complete: ${slotsStored} slots stored, ${memoriesStored} memories stored`);
+      if (slotsStored > 0 || memoriesStored > 0 || slotsRemoved > 0) {
+        console.log(`[AutoCapture] Complete: ${slotsStored} stored, ${slotsRemoved} removed, ${memoriesStored} memories`);
       }
     } catch (error) {
       console.error("[AutoCapture] Hook error:", error);
