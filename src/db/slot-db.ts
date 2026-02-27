@@ -183,7 +183,7 @@ export class SlotDB {
         confidence,
         newVersion,
         now,
-        input.expires_at || null,
+        input.expires_at !== undefined ? input.expires_at : existing.expires_at,
         existing.id,
       );
 
@@ -195,7 +195,7 @@ export class SlotDB {
         confidence,
         version: newVersion,
         updated_at: now,
-        expires_at: input.expires_at || null,
+        expires_at: input.expires_at !== undefined ? input.expires_at : existing.expires_at,
       };
     }
 
@@ -410,8 +410,7 @@ export class SlotDB {
     );
     stmt.run(scopeUserId, scopeAgentId, now);
     
-    // Auto-expire slots based on category TTL
-    // Project/task slots older than 7 days get removed automatically
+    // Auto-expire slots based on category TTL (auto_capture source)
     const categories = ['project', 'environment', 'custom'];
     for (const cat of categories) {
       const ttlDays = getSlotTTL(cat);
@@ -425,6 +424,24 @@ export class SlotDB {
       );
       ttlStmt.run(scopeUserId, scopeAgentId, cat, cutoff);
     }
+
+    // Safety cleanup: volatile project status slots should expire even if source was manual/tool.
+    // This prevents stale "current phase/task" slots from persisting forever.
+    const projectCutoff = new Date(Date.now() - getSlotTTL('project') * 24 * 60 * 60 * 1000).toISOString();
+    const volatileProjectStmt = this.db.prepare(
+      `DELETE FROM slots
+       WHERE scope_user_id = ? AND scope_agent_id = ?
+         AND category = 'project'
+         AND updated_at < ?
+         AND key IN (
+           'project.current',
+           'project.current_task',
+           'project.current_epic',
+           'project.phase',
+           'project.status'
+         )`,
+    );
+    volatileProjectStmt.run(scopeUserId, scopeAgentId, projectCutoff);
   }
 
   close(): void {

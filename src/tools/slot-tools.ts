@@ -6,6 +6,7 @@
  * Tools:
  * - memory_slot_get: Retrieve a slot by key or category (with scope filter)
  * - memory_slot_set: Upsert a slot with scope (private/team/public)
+ * - memory_slot_delete: Delete a slot by key with explicit scope
  * - memory_slot_list: List all slots with scope filter
  */
 
@@ -182,7 +183,41 @@ export function registerSlotTools(api: OpenClawPluginApi, defaultCategories: str
     },
   });
 
-  // Tool 3: memory_slot_list
+  // Tool 3: memory_slot_delete
+  api.registerTool({
+    name: "memory_slot_delete",
+    label: "Slot Memory Delete",
+    description: `Delete a memory slot by key from a specific scope. Use this for explicit cleanup/reset of structured memory.`,
+    parameters: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: 'Dot-notation key to delete, e.g. "project.current_task"' },
+        scope: { type: "string", description: 'Scope to delete from: "private" (default), "team", or "public"' },
+      },
+      required: ["key"],
+    },
+    async execute(_id: string, params: { key: string; scope?: string }, ctx: any) {
+      try {
+        const stateDir = ctx?.stateDir || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
+        const sessionKey = ctx?.sessionKey || "agent:main:default";
+        const { userId, agentId } = extractScope(sessionKey, params.scope || "private");
+        const db = getSlotDB(stateDir);
+
+        const deleted = db.delete(userId, agentId, params.key);
+        const scopeLabel = params.scope || "private";
+
+        if (!deleted) {
+          return createResult(`No slot found for key "${params.key}" in scope "${scopeLabel}".`);
+        }
+
+        return createResult(`✅ Deleted slot "${params.key}" from scope "${scopeLabel}".`);
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  // Tool 4: memory_slot_list
   api.registerTool({
     name: "memory_slot_list",
     label: "Slot Memory List",

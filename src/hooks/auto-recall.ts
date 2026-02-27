@@ -36,6 +36,8 @@ function formatCurrentState(state: Record<string, Record<string, unknown>>): str
   for (const [category, slots] of Object.entries(state)) {
     xml += `  <${category}>\n`;
     for (const [key, value] of Object.entries(slots)) {
+      // Skip internal keys (e.g. _autocapture_hash)
+      if (key.startsWith('_')) continue;
       const displayKey = key.includes(".") ? key.split(".").slice(1).join(".") : key;
       const displayValue = typeof value === "object" ? JSON.stringify(value) : String(value);
       // Truncate long values
@@ -157,6 +159,8 @@ export async function gatherRecallContext(
         mergedTimestamps[category] = {};
       }
       for (const [key, value] of Object.entries(catSlots)) {
+        // Skip internal keys (e.g. _autocapture_hash)
+        if (key.startsWith('_')) continue;
         const existingTs = mergedTimestamps[category]?.[key];
         const newTs = tsMap[key] || "";
         // Keep the NEWEST version (freshness wins)

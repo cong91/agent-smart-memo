@@ -125,11 +125,16 @@ YOUR 3 JOBS:
 
 SLOT INVALIDATION (NEW - MOST IMPORTANT):
 - Review currentSlots carefully. If conversation shows a task/phase is COMPLETED or CHANGED, add it to slot_removals.
+- Treat these keys as VOLATILE status keys and actively invalidate them when stale:
+  project.current, project.current_task, project.current_epic, project.phase, project.status
+- Trigger invalidation on phrases like: "đã xong", "đã hoàn thành", "done", "completed", "finished", "move to", "moved to", "next phase".
 - Examples of stale data to remove:
   + project.current_task says "working on X" but conversation shows X is done
   + project.current_epic says "Phase 10" but team moved to Phase 11
+  + project.phase says "10" but conversation says current phase is 11
   + environment.current_time from yesterday
   + Any slot that CONTRADICTS current conversation
+- IMPORTANT: when phase/task changes, prefer BOTH actions: remove stale slot(s) AND add updated slot value.
 - Be aggressive about removing outdated project/task status slots
 
 CATEGORIES: profile, preferences, project, environment, custom
@@ -177,8 +182,9 @@ ${conversation}
 Instructions:
 1. Extract NEW facts from conversation
 2. Check currentSlots - mark any OUTDATED/COMPLETED items in slot_removals
-3. If a slot value should be UPDATED (not just removed), put new value in slot_updates
-4. Return JSON only`;
+3. Especially audit volatile project keys: project.current, project.current_task, project.current_epic, project.phase, project.status
+4. If a slot value should be UPDATED (not just removed), put new value in slot_updates
+5. Return JSON only`;
 }
 
 /**

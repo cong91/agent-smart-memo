@@ -2,7 +2,7 @@
  * Agent-Memo: Slot Memory Plugin for OpenClaw v3.0
  * 
  * Refactored to use modular tool structure with single Qdrant collection
- * - Slot tools: memory_slot_get/set/list
+ * - Slot tools: memory_slot_get/set/delete/list
  * - Graph tools: memory_graph_entity_get/set/rel_add/rel_remove/search
  * - Qdrant tools: memory_search, memory_store (from modules)
  * - Hooks: auto-recall, auto-capture

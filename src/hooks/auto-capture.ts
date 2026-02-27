@@ -378,12 +378,21 @@ export function registerAutoCapture(
         // Pass use_llm param to override config
         const extracted = await extractFacts(messages, currentState, cfg, params.use_llm);
 
+        // Process slot removals first (manual tool parity with hook behavior)
+        let slotsRemoved = 0;
+        if (extracted.slot_removals && extracted.slot_removals.length > 0) {
+          for (const removal of extracted.slot_removals) {
+            try {
+              const deleted = db.delete(userId, agentId, removal.key);
+              if (deleted) slotsRemoved++;
+            } catch (e) {
+              console.error("[AutoCapture] Failed to remove slot:", e);
+            }
+          }
+        }
+
         // Store slots
-
         let slotsStored = 0;
-
-        
-
 
         for (const fact of extracted.slot_updates) {
           if (fact.confidence < cfg.minConfidence!) continue;
@@ -405,9 +414,9 @@ export function registerAutoCapture(
         return {
           content: [{
             type: "text",
-            text: `✅ Extraction complete!\nMethod: ${params.use_llm !== false ? "LLM" : "Pattern"}\nSlots stored: ${slotsStored}\n\nExtracted:\n${JSON.stringify(extracted, null, 2)}`,
+            text: `✅ Extraction complete!\nMethod: ${params.use_llm !== false ? "LLM" : "Pattern"}\nSlots stored: ${slotsStored}\nSlots removed: ${slotsRemoved}\n\nExtracted:\n${JSON.stringify(extracted, null, 2)}`,
           }],
-          details: { extracted, slotsStored },
+          details: { extracted, slotsStored, slotsRemoved },
         };
       } catch (error: any) {
         return {
@@ -468,11 +477,13 @@ export function registerAutoCapture(
         return;
       }
       
-      // Chỉ lấy 4 messages cuối (last turn)
-      const lastTurnMessages = messages.slice(-4);
+      // Use a wider window than just last 4 messages so model can see
+      // transition language like "đã xong", "move to phase X", etc.
+      // extractFacts() will still enforce token budget.
+      const captureWindowMessages = messages.slice(-12);
 
       // Hash content để detect duplicate
-      const turnText = lastTurnMessages
+      const turnText = captureWindowMessages
         .map((m: any) => `${m.role}: ${extractMessageText(m.content)}`)
         .join("\n");
 
@@ -511,7 +522,7 @@ export function registerAutoCapture(
       const targetNamespace: MemoryNamespace = getAutoCaptureNamespace(agentId);
       
       // Combine all message text for noise detection (only NEW messages)
-      const fullText = lastTurnMessages
+      const fullText = captureWindowMessages
         .map((m: any) => extractMessageText(m.content))
         .join(" ");
       
@@ -525,10 +536,10 @@ export function registerAutoCapture(
         return;
       }
       
-      console.log(`[AutoCapture] Processing ${lastTurnMessages.length} NEW messages for ${agentId} (namespace: ${targetNamespace})`);
+      console.log(`[AutoCapture] Processing ${captureWindowMessages.length} recent messages for ${agentId} (namespace: ${targetNamespace})`);
       
       const currentState = db.getCurrentState(userId, agentId);
-      const extracted = await extractFacts(lastTurnMessages, currentState, cfg);
+      const extracted = await extractFacts(captureWindowMessages, currentState, cfg);
       
       // Process slot REMOVALS first (invalidation)
       let slotsRemoved = 0;
