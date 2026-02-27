@@ -5,6 +5,7 @@
  * Default: gemini-2.5-flash via local proxy
  * Falls back to pattern matching if LLM unavailable
  */
+import crypto from "crypto";
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { SlotDB } from "../db/slot-db.js";
@@ -33,7 +34,7 @@ const DEFAULT_CONFIG: AutoCaptureConfig = {
   useLLM: true,
   llmBaseUrl: "http://localhost:8317/v1",
   llmApiKey: "proxypal-local",
-  llmModel: "gemini-3.1-pro-low",
+  llmModel: "gemini-2.5-flash",
 };
 
 interface ConversationMessage {
@@ -350,6 +351,7 @@ export function registerAutoCapture(
   // Lock to prevent re-entrant/infinite loops
   let isCapturing = false;
 
+
   // Manual capture tool
   api.registerTool({
     name: "memory_auto_capture",
@@ -376,7 +378,12 @@ export function registerAutoCapture(
         const extracted = await extractFacts(messages, currentState, cfg, params.use_llm);
 
         // Store slots
+
         let slotsStored = 0;
+
+        
+
+
         for (const fact of extracted.slot_updates) {
           if (fact.confidence < cfg.minConfidence!) continue;
           
@@ -460,11 +467,50 @@ export function registerAutoCapture(
         return;
       }
       
+      // Chỉ lấy 4 messages cuối (last turn)
+      const lastTurnMessages = messages.slice(-4);
+
+      // Hash content để detect duplicate
+      const turnText = lastTurnMessages
+        .map((m: any) => `${m.role}: ${extractMessageText(m.content)}`)
+        .join("\n");
+
+      // Skip empty/noise turns: NO_REPLY, HEARTBEAT_OK, tool-only responses
+      const trimmedText = turnText.replace(/^(user|assistant|system):\s*/gm, '').trim();
+      const noisePatterns = [
+        /^NO_REPLY$/i,
+        /^HEARTBEAT_OK$/i,
+        /^\[Tool:/,
+        /^\{"type":"toolCall"/,
+        /^$/,
+      ];
+      const meaningfulLines = trimmedText.split('\n').filter(line => {
+        const l = line.trim();
+        return l.length > 0 && !noisePatterns.some(p => p.test(l));
+      });
+      if (meaningfulLines.length === 0) {
+        console.log(`[AutoCapture] Skipping: no meaningful content (NO_REPLY/HEARTBEAT_OK/tool-only)`);
+        return;
+      }
+
+      const contentHash = crypto.createHash('sha256').update(turnText).digest('hex').slice(0, 16);
+
+      // Check hash từ SlotDB (persist qua restart)
+      const hashKey = '_autocapture_hash';
+      const existingSlot = db.get(userId, agentId, { key: hashKey });
+      const existingHash = Array.isArray(existingSlot) ? undefined : existingSlot?.value;
+
+      if (existingHash === contentHash) {
+        console.log(`[AutoCapture] Skipping: content hash unchanged (${contentHash})`);
+        return;
+      }
+
+      console.log(`[AutoCapture] New content detected (hash: ${String(existingHash)?.slice(0,8)}→${contentHash.slice(0,8)})`);
       // Get target namespace for this agent
       const targetNamespace: MemoryNamespace = getAutoCaptureNamespace(agentId);
       
-      // Combine all message text for noise detection
-      const fullText = messages
+      // Combine all message text for noise detection (only NEW messages)
+      const fullText = lastTurnMessages
         .map((m: any) => extractMessageText(m.content))
         .join(" ");
       
@@ -478,13 +524,32 @@ export function registerAutoCapture(
         return;
       }
       
-      console.log(`[AutoCapture] Processing ${messages.length} messages for ${agentId} (namespace: ${targetNamespace})`);
+      console.log(`[AutoCapture] Processing ${lastTurnMessages.length} NEW messages for ${agentId} (namespace: ${targetNamespace})`);
       
       const currentState = db.getCurrentState(userId, agentId);
-      const extracted = await extractFacts(messages, currentState, cfg);
+      const extracted = await extractFacts(lastTurnMessages, currentState, cfg);
       
       // Store slots
+      
       let slotsStored = 0;
+      
+      
+      
+      // Save hash to SlotDB for next comparison
+      
+      db.set(userId, agentId, {
+      
+        key: hashKey,
+      
+        value: contentHash,
+      
+        category: "custom",
+      
+        source: "auto_capture",
+      
+        confidence: 1.0,
+      
+      });
       for (const fact of extracted.slot_updates) {
         if (fact.confidence < cfg.minConfidence!) continue;
         try {
