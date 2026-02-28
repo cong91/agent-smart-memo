@@ -1,5 +1,5 @@
 {
-  "name": "agent-memo",
+  "name": "agent-smart-memo",
   "version": "4.0.0",
   "description": "Slot Memory Plugin for OpenClaw \u2014 structured key-value state management with auto-recall injection and integrated essence distillation",
   "type": "module",

@@ -1,5 +1,5 @@
 {
-  "id": "agent-memo",
+  "id": "agent-smart-memo",
   "kind": "memory",
   "configSchema": {
     "type": "object",
