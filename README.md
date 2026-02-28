@@ -116,14 +116,16 @@ User sends message → Agent responds
 
 ### Essence Distillation Modes
 
-The plugin automatically selects a distillation mode based on content:
+The plugin automatically detects what kind of content is being discussed and applies the right distillation mode:
 
-| Mode | When | What it keeps |
-|------|------|---------------|
-| `general` | Default | Decision-grade facts, rules, configurations |
-| `principles` | Learning content detected | Invariant principles, atomic rules |
-| `requirements` | Technical discussions | Non-negotiable constraints, specs |
-| `market_signal` | Trading/market content | Directional signals, risk levels, triggers |
+| Mode | Auto-detected when... | What it keeps |
+|------|----------------------|---------------|
+| `general` | Most conversations | Key decisions, rules, configurations |
+| `principles` | Learning or teaching content | Core principles, atomic rules |
+| `requirements` | Technical specs or constraints | Measurable requirements, acceptance criteria |
+| `market_signal` | Financial or market discussions | Actionable signals, risk levels, triggers |
+
+Modes are inferred automatically — no configuration needed.
 
 ## Available Tools
 
