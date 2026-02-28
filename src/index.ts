@@ -46,6 +46,7 @@ interface AgentMemoConfig {
   autoCaptureEnabled?: boolean;
   autoCaptureMinConfidence?: number;
   contextWindowMaxTokens?: number;
+  summarizeEveryActions?: number;
 }
 
 // ============================================================================
@@ -128,6 +129,10 @@ const agentMemoPlugin = {
         type: "number",
         description: "Maximum tokens for context window in auto-capture (default: 12000)",
       },
+      summarizeEveryActions: {
+        type: "number",
+        description: "Auto-summarize project_living_state every N actions (default: 6)",
+      },
     },
   },
 
@@ -153,6 +158,7 @@ const agentMemoPlugin = {
     const autoCaptureEnabled = config.autoCaptureEnabled !== false; // default true
     const autoCaptureMinConfidence = config.autoCaptureMinConfidence || 0.7;
     const contextWindowMaxTokens = config.contextWindowMaxTokens || 12000;
+    const summarizeEveryActions = config.summarizeEveryActions || 6;
 
     // State directory from env or default
     const stateDir = process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
@@ -164,6 +170,7 @@ const agentMemoPlugin = {
     console.log(`  Embedding: ${embedBaseUrl} (model: ${embedModel}, ${embedDimensions}d)`);
     console.log(`  AutoCapture: ${autoCaptureEnabled ? "enabled" : "disabled"}`);
     console.log(`  ContextWindow: ${contextWindowMaxTokens} tokens`);
+    console.log(`  SummarizeEveryActions: ${summarizeEveryActions}`);
 
     // ----------------------------------------------------------------
     // Initialize services
@@ -213,6 +220,7 @@ const agentMemoPlugin = {
       llmApiKey,
       llmModel,
       contextWindowMaxTokens,
+      summarizeEveryActions,
     });
 
     console.log("[AgentMemo] Plugin registered successfully");

@@ -13,7 +13,7 @@ import { QdrantClient } from "../services/qdrant.js";
 import { EmbeddingClient } from "../services/embedding.js";
 import { DeduplicationService } from "../services/dedupe.js";
 import { extractWithLLM, checkLLMHealth } from "../services/llm-extractor.js";
-import { NoiseFilter, getAutoCaptureNamespace, isTraderAgent, MemoryNamespace, normalizeUserId } from "../shared/memory-config.js";
+import { NoiseFilter, getAutoCaptureNamespace, isTraderAgent, MemoryNamespace, normalizeUserId, isLearningContent } from "../shared/memory-config.js";
 
 // Event type constant for type-safe event handling
 const AGENT_END_EVENT = "agent_end" as const;
@@ -26,6 +26,7 @@ interface AutoCaptureConfig {
   llmApiKey: string;
   llmModel: string;
   contextWindowMaxTokens?: number;
+  summarizeEveryActions?: number;
 }
 
 const DEFAULT_CONFIG: AutoCaptureConfig = {
@@ -35,11 +36,85 @@ const DEFAULT_CONFIG: AutoCaptureConfig = {
   llmBaseUrl: "http://localhost:8317/v1",
   llmApiKey: "proxypal-local",
   llmModel: "gemini-2.5-flash",
+  summarizeEveryActions: 6,
 };
 
 interface ConversationMessage {
   role: "user" | "assistant" | "system";
   content: string;
+}
+
+
+interface LivingStateSummary {
+  last_actions: string[];
+  current_focus: string;
+  next_steps: string[];
+}
+
+function trimLine(s: string, max = 180): string {
+  const t = s.replace(/\s+/g, " ").trim();
+  return t.length > max ? `${t.slice(0, max)}...` : t;
+}
+
+function inferCurrentFocus(lines: string[]): string {
+  const joined = lines.join(" ").toLowerCase();
+
+  const focusPatterns: Array<{ re: RegExp; label: string }> = [
+    { re: /\b(test|fix|bug|error|debug)\b/, label: "Fixing/testing implementation details" },
+    { re: /\b(refactor|cleanup|optimi[sz]e)\b/, label: "Refactoring and improving code quality" },
+    { re: /\b(implement|th[êe]m|t[ií]ch h[ợo]p|x[aâ]y d[ựu]ng)\b/, label: "Implementing requested feature changes" },
+    { re: /\b(prompt|inject|system prompt|before_agent_start)\b/, label: "Updating prompt injection and session context" },
+    { re: /\b(slot|memory|project_living_state)\b/, label: "Maintaining SlotDB project living state" },
+  ];
+
+  for (const p of focusPatterns) {
+    if (p.re.test(joined)) return p.label;
+  }
+
+  return "Working on current user-requested task";
+}
+
+function inferNextSteps(lines: string[], currentFocus: string): string[] {
+  const lower = lines.map((l) => l.toLowerCase());
+  const next: string[] = [];
+
+  const hasTest = lower.some((l) => /\btest|spec|verify|assert\b/.test(l));
+  const hasBuild = lower.some((l) => /\bbuild|compile|tsc\b/.test(l));
+  const hasHook = lower.some((l) => /\bhook|auto-capture|auto-recall|before_agent_start\b/.test(l));
+
+  if (hasHook) next.push("Validate hook flow end-to-end with realistic session events");
+  if (hasBuild) next.push("Re-run build to ensure no TypeScript/runtime regressions");
+  if (hasTest) next.push("Run and review targeted tests for auto-capture and recall behavior");
+
+  if (next.length === 0) {
+    next.push(`Continue: ${currentFocus}`);
+    next.push("Verify outputs in SlotDB and injected system prompt context");
+  }
+
+  return next.slice(0, 3);
+}
+
+function summarizeProjectLivingState(messages: ConversationMessage[]): LivingStateSummary {
+  const actionable = messages
+    .filter((m) => m.role === "assistant" || m.role === "user")
+    .map((m) => extractMessageText(m.content))
+    .flatMap((txt) => txt.split("\n"))
+    .map((l) => trimLine(l))
+    .filter((l) => l.length > 0)
+    .filter((l) => !/^NO_REPLY$/i.test(l))
+    .filter((l) => !/^HEARTBEAT_OK$/i.test(l))
+    .filter((l) => !/^\[Tool/i.test(l))
+    .slice(-16);
+
+  const lastActions = actionable.slice(-5);
+  const currentFocus = inferCurrentFocus(actionable);
+  const nextSteps = inferNextSteps(actionable, currentFocus);
+
+  return {
+    last_actions: lastActions,
+    current_focus: currentFocus,
+    next_steps: nextSteps,
+  };
 }
 
 /**
@@ -64,6 +139,25 @@ const DEFAULT_CONTEXT_WINDOW: ContextWindowConfig = {
   tokenEstimateDivisor: 4,
   absoluteMaxMessages: 200,
 };
+
+/**
+ * PROJECT CONTEXT PATTERNS (TASK-4)
+ * Detects configuration, deployment, and environment-related content
+ */
+const PROJECT_CONTEXT_PATTERNS: RegExp[] = [
+  /\b(đã config|đã chốt|rule mới|quy định|cấu hình)\b/i,
+  /\b(deploy|release|migration|rollback)\b/i,
+  /\b(production|staging|environment)\b/i,
+  /\b(API key|endpoint|port|host|database)\b/i,
+];
+
+/**
+ * Check if content contains project context patterns
+ * Used to route configuration/deployment content to project_context namespace
+ */
+function isProjectContextContent(text: string): boolean {
+  return PROJECT_CONTEXT_PATTERNS.some(p => p.test(text));
+}
 
 /**
  * Extract text content from a message.
@@ -352,6 +446,10 @@ export function registerAutoCapture(
   // Lock to prevent re-entrant/infinite loops
   let isCapturing = false;
 
+  // Auto-summarize counters (per process lifecycle)
+  let actionCounter = 0;
+  const summarizeEvery = Math.max(1, cfg.summarizeEveryActions ?? 6);
+
 
   // Manual capture tool
   api.registerTool({
@@ -518,16 +616,28 @@ export function registerAutoCapture(
       }
 
       console.log(`[AutoCapture] New content detected (hash: ${String(existingHash)?.slice(0,8)}→${contentHash.slice(0,8)})`);
-      // Get target namespace for this agent
-      const targetNamespace: MemoryNamespace = getAutoCaptureNamespace(agentId);
       
-      // Combine all message text for noise detection (only NEW messages)
+      // Combine all message text for noise detection and namespace routing
       const fullText = captureWindowMessages
         .map((m: any) => extractMessageText(m.content))
         .join(" ");
       
-      // Check if content should be skipped (noise filter)
-      if (noiseFilter.shouldSkip(fullText)) {
+      // V2 NAMESPACE ROUTING LOGIC
+      let targetNamespace: MemoryNamespace = getAutoCaptureNamespace(agentId, fullText);
+      
+      // PRIORITY 1: Learning content gets special routing - NEVER filtered as noise
+      if (isLearningContent(fullText)) {
+        targetNamespace = "agent_learnings" as MemoryNamespace;
+        console.log(`[AutoCapture] Learning content detected → routing to agent_learnings`);
+      }
+      // PRIORITY 2: Project context detection for scrum/fullstack/creator agents
+      else if (isProjectContextContent(fullText) && ["scrum", "fullstack", "creator"].includes(agentId)) {
+        targetNamespace = "project_context" as MemoryNamespace;
+        console.log(`[AutoCapture] Project context detected → routing to project_context`);
+      }
+      
+      // Check if content should be skipped (noise filter) - but learning content bypasses this
+      if (!isLearningContent(fullText) && noiseFilter.shouldSkip(fullText)) {
         if (isTraderAgent(agentId)) {
           console.log(`[AutoCapture] Skipping trading content for trader agent - use memory_store tool to save trading data`);
         } else {
@@ -684,6 +794,38 @@ export function registerAutoCapture(
         console.log(`[AutoCapture] No memories to store (empty extraction result)`);
       }
       
+      // Auto-summarize project living state after every N actions OR task transition
+      actionCounter += 1;
+      const transitionKeys = new Set([
+        "project.current",
+        "project.current_task",
+        "project.current_epic",
+        "project.phase",
+        "project.status",
+      ]);
+      const hasTaskTransition =
+        extracted.slot_updates.some((s: any) => transitionKeys.has(s.key)) ||
+        extracted.slot_removals.some((s: any) => transitionKeys.has(s.key));
+      const shouldSummarize = actionCounter % summarizeEvery === 0 || hasTaskTransition;
+
+      if (shouldSummarize) {
+        try {
+          const summary = summarizeProjectLivingState(captureWindowMessages);
+          db.set(userId, agentId, {
+            key: "project_living_state",
+            value: summary,
+            category: "project",
+            source: "auto_capture",
+            confidence: 0.85,
+          });
+          console.log(
+            `[AutoCapture] Updated slot: project_living_state (${hasTaskTransition ? "task transition" : `every ${summarizeEvery} actions`})`
+          );
+        } catch (summaryError) {
+          console.error("[AutoCapture] Failed to update project_living_state:", summaryError);
+        }
+      }
+
       if (slotsStored > 0 || memoriesStored > 0 || slotsRemoved > 0) {
         console.log(`[AutoCapture] Complete: ${slotsStored} stored, ${slotsRemoved} removed, ${memoriesStored} memories`);
       }

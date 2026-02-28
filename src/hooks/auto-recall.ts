@@ -50,6 +50,61 @@ function formatCurrentState(state: Record<string, Record<string, unknown>>): str
   return xml;
 }
 
+
+function formatProjectLivingState(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+
+  const v = value as {
+    last_actions?: unknown;
+    current_focus?: unknown;
+    next_steps?: unknown;
+  };
+
+  const lastActions = Array.isArray(v.last_actions)
+    ? v.last_actions.map((x) => String(x)).slice(-5)
+    : [];
+  const currentFocus = typeof v.current_focus === "string" ? v.current_focus : "";
+  const nextSteps = Array.isArray(v.next_steps)
+    ? v.next_steps.map((x) => String(x)).slice(0, 5)
+    : [];
+
+  if (lastActions.length === 0 && !currentFocus && nextSteps.length === 0) {
+    return "";
+  }
+
+  const xmlEscape = (s: string) =>
+    s.replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;");
+
+  let xml = "<project-living-state>\n";
+
+  if (lastActions.length > 0) {
+    xml += "  <last_actions>\n";
+    lastActions.forEach((a, i) => {
+      xml += `    <action index="${i + 1}">${xmlEscape(a)}</action>\n`;
+    });
+    xml += "  </last_actions>\n";
+  }
+
+  if (currentFocus) {
+    xml += `  <current_focus>${xmlEscape(currentFocus)}</current_focus>\n`;
+  }
+
+  if (nextSteps.length > 0) {
+    xml += "  <next_steps>\n";
+    nextSteps.forEach((s, i) => {
+      xml += `    <step index="${i + 1}">${xmlEscape(s)}</step>\n`;
+    });
+    xml += "  </next_steps>\n";
+  }
+
+  xml += "</project-living-state>";
+  return xml;
+}
+
 /**
  * Format graph context showing related entities
  */
@@ -130,6 +185,7 @@ export async function gatherRecallContext(
   userQuery?: string,
 ): Promise<{
   currentState: string;
+  projectLivingState: string;
   graphContext: string;
   recentUpdates: string;
   semanticMemories: string;
@@ -173,6 +229,20 @@ export async function gatherRecallContext(
   }
   
   const currentStateXml = formatCurrentState(mergedState);
+
+  // 1.5 Get project_living_state slot (private > team > public)
+  const projectLivingCandidates = [
+    db.get(ctx.userId, ctx.agentId, { key: "project_living_state" }),
+    db.get(ctx.userId, "__team__", { key: "project_living_state" }),
+    db.get("__public__", "__public__", { key: "project_living_state" }),
+  ];
+  let projectLivingStateXml = "";
+  for (const c of projectLivingCandidates) {
+    if (c && !Array.isArray(c)) {
+      projectLivingStateXml = formatProjectLivingState(c.value);
+      if (projectLivingStateXml) break;
+    }
+  }
   
   // 2. Get Graph Context (from private scope only for privacy)
   const allEntities = db.graph.listEntities(ctx.userId, ctx.agentId);
@@ -245,6 +315,7 @@ export async function gatherRecallContext(
   
   return {
     currentState: currentStateXml,
+    projectLivingState: projectLivingStateXml,
     graphContext: graphContextXml,
     recentUpdates,
     semanticMemories: semanticMemoriesXml,
@@ -256,6 +327,7 @@ export async function gatherRecallContext(
  */
 export function injectRecallContext(systemPrompt: string, context: {
   currentState: string;
+  projectLivingState: string;
   graphContext: string;
   recentUpdates: string;
   semanticMemories: string;
@@ -267,6 +339,10 @@ export function injectRecallContext(systemPrompt: string, context: {
     injectionParts.push(context.currentState);
   }
   
+  if (context.projectLivingState) {
+    injectionParts.push(context.projectLivingState);
+  }
+
   if (context.graphContext) {
     injectionParts.push(context.graphContext);
   }
@@ -375,6 +451,7 @@ export async function getRecallContextText(
   
   const parts2: string[] = [];
   if (context.currentState) parts2.push(context.currentState);
+  if (context.projectLivingState) parts2.push(context.projectLivingState);
   if (context.graphContext) parts2.push(context.graphContext);
   if (context.recentUpdates) parts2.push(context.recentUpdates);
   if (context.semanticMemories) parts2.push(context.semanticMemories);

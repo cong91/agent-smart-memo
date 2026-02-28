@@ -7,7 +7,9 @@
     "properties": {
       "slotCategories": {
         "type": "array",
-        "items": { "type": "string" },
+        "items": {
+          "type": "string"
+        },
         "description": "Allowed slot categories (default: profile, preferences, project, environment, custom)"
       },
       "maxSlots": {
@@ -65,24 +67,76 @@
       "contextWindowMaxTokens": {
         "type": "number",
         "description": "Maximum tokens for context window in auto-capture (default: 12000)"
+      },
+      "summarizeEveryActions": {
+        "type": "number",
+        "description": "Auto-summarize project_living_state every N actions (default: 6)"
       }
     }
   },
   "uiHints": {
-    "slotCategories": { "label": "Slot Categories", "placeholder": "profile, preferences, project, environment" },
-    "maxSlots": { "label": "Max Slots", "placeholder": "500" },
-    "injectStateTokenBudget": { "label": "State Injection Token Budget", "placeholder": "500" },
-    "qdrantHost": { "label": "Qdrant Host", "placeholder": "localhost" },
-    "qdrantPort": { "label": "Qdrant Port", "placeholder": "6333" },
-    "qdrantCollection": { "label": "Qdrant Collection", "placeholder": "mrc_bot_memory" },
-    "llmBaseUrl": { "label": "LLM Base URL", "placeholder": "http://localhost:8317/v1" },
-    "llmApiKey": { "label": "LLM API Key", "placeholder": "proxypal-local" },
-    "llmModel": { "label": "LLM Model", "placeholder": "gemini-3.1-pro-low" },
-    "embedBaseUrl": { "label": "Embedding Base URL", "placeholder": "http://localhost:11434" },
-    "embedModel": { "label": "Embedding Model", "placeholder": "mxbai-embed-large" },
-    "embedDimensions": { "label": "Embedding Dimensions", "placeholder": "1024" },
-    "autoCaptureEnabled": { "label": "Auto Capture Enabled" },
-    "autoCaptureMinConfidence": { "label": "Min Confidence", "placeholder": "0.7" },
-    "contextWindowMaxTokens": { "label": "Context Window Max Tokens", "placeholder": "12000" }
+    "slotCategories": {
+      "label": "Slot Categories",
+      "placeholder": "profile, preferences, project, environment"
+    },
+    "maxSlots": {
+      "label": "Max Slots",
+      "placeholder": "500"
+    },
+    "injectStateTokenBudget": {
+      "label": "State Injection Token Budget",
+      "placeholder": "500"
+    },
+    "qdrantHost": {
+      "label": "Qdrant Host",
+      "placeholder": "localhost"
+    },
+    "qdrantPort": {
+      "label": "Qdrant Port",
+      "placeholder": "6333"
+    },
+    "qdrantCollection": {
+      "label": "Qdrant Collection",
+      "placeholder": "mrc_bot_memory"
+    },
+    "llmBaseUrl": {
+      "label": "LLM Base URL",
+      "placeholder": "http://localhost:8317/v1"
+    },
+    "llmApiKey": {
+      "label": "LLM API Key",
+      "placeholder": "proxypal-local"
+    },
+    "llmModel": {
+      "label": "LLM Model",
+      "placeholder": "gemini-3.1-pro-low"
+    },
+    "embedBaseUrl": {
+      "label": "Embedding Base URL",
+      "placeholder": "http://localhost:11434"
+    },
+    "embedModel": {
+      "label": "Embedding Model",
+      "placeholder": "mxbai-embed-large"
+    },
+    "embedDimensions": {
+      "label": "Embedding Dimensions",
+      "placeholder": "1024"
+    },
+    "autoCaptureEnabled": {
+      "label": "Auto Capture Enabled"
+    },
+    "autoCaptureMinConfidence": {
+      "label": "Min Confidence",
+      "placeholder": "0.7"
+    },
+    "contextWindowMaxTokens": {
+      "label": "Context Window Max Tokens",
+      "placeholder": "12000"
+    },
+    "summarizeEveryActions": {
+      "label": "Summarize Every N Actions",
+      "placeholder": "6"
+    }
   }
 }

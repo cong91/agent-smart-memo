@@ -8,7 +8,9 @@ export type MemoryNamespace =
   | "agent_decisions"
   | "user_profile"
   | "project_context"
-  | "trading_signals";
+  | "trading_signals"
+  | "agent_learnings"
+  | "system_rules";
 
 /**
  * Maps agent IDs to their allowed namespaces.
@@ -16,11 +18,11 @@ export type MemoryNamespace =
  * All listed namespaces are searchable by auto-recall.
  */
 export const AGENT_NAMESPACE_MAP: Record<string, MemoryNamespace[]> = {
-  assistant: ["agent_decisions", "user_profile"],
-  scrum: ["agent_decisions", "project_context"],
-  fullstack: ["agent_decisions", "project_context"],
-  creator: ["agent_decisions", "project_context"],
-  trader: ["trading_signals", "agent_decisions"],
+  assistant: ["agent_decisions", "user_profile", "agent_learnings"],
+  scrum: ["agent_decisions", "project_context", "agent_learnings"],
+  fullstack: ["agent_decisions", "project_context", "agent_learnings"],
+  creator: ["agent_decisions", "project_context", "agent_learnings"],
+  trader: ["trading_signals", "agent_decisions", "agent_learnings"],
 };
 
 /** Default namespaces for agents not in the map */
@@ -55,6 +57,22 @@ export const TRADING_NOISE_PATTERNS: RegExp[] = [
   /\b@\s*\d+[\d,.]*/i, // @ price format
 ];
 
+/** Learning content detection patterns */
+export const LEARNING_PATTERNS: RegExp[] = [
+  /\b(learned|lesson|takeaway|kinh nghiệm|bài học|rút ra)\b/i,
+  /\b(fixed|resolved|root cause|nguyên nhân gốc|đã sửa)\b/i,
+  /\b(best practice|pattern|anti-pattern|gotcha)\b/i,
+  /\b(never|always|remember to|lưu ý|nhớ rằng)\b/i,
+];
+
+/**
+ * Check if content contains learning patterns
+ * Used to route valuable lessons to agent_learnings namespace
+ */
+export function isLearningContent(text: string): boolean {
+  return LEARNING_PATTERNS.some(p => p.test(text));
+}
+
 /**
  * Get namespaces for an agent.
  * Returns mapped namespaces or DEFAULT_NAMESPACES if agent not in map.
@@ -67,8 +85,16 @@ export function getAgentNamespaces(agentId: string): MemoryNamespace[] {
  * Get the default storage namespace for auto-capture.
  * For trader: always "agent_decisions" (trading data goes through memory_store)
  * For others: first namespace in their map
+ * 
+ * V2 UPDATE: Now accepts text parameter to detect learning content
+ * Learning content is routed to "agent_learnings" namespace
  */
-export function getAutoCaptureNamespace(agentId: string): MemoryNamespace {
+export function getAutoCaptureNamespace(agentId: string, text?: string): MemoryNamespace {
+  // Learning content gets special routing - highest priority
+  if (text && isLearningContent(text)) {
+    return "agent_learnings";
+  }
+  
   if (agentId === "trader") {
     return "agent_decisions"; // Trading data goes through memory_store manually
   }
@@ -176,8 +202,9 @@ export class NoiseFilter {
 
   /**
    * Get the target namespace for auto-capture for this agent
+   * V2 UPDATE: Now accepts optional text parameter for learning detection
    */
-  getTargetNamespace(): MemoryNamespace {
-    return getAutoCaptureNamespace(this.agentId);
+  getTargetNamespace(text?: string): MemoryNamespace {
+    return getAutoCaptureNamespace(this.agentId, text);
   }
 }

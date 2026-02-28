@@ -96,3 +96,6 @@ export interface ToolResult {
   isError?: boolean;
   details: unknown;
 }
+
+// Essence-Distiller Types (V2)
+export type { EssenceDocument, ExtractionResult, DistillationConfig, DistillationPipeline } from "./types/essence-distiller.js";
