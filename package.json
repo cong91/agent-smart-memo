@@ -1,7 +1,7 @@
 {
-  "name": "agent-smart-memo",
+  "name": "@mrc2204/agent-smart-memo",
   "version": "4.0.0",
-  "description": "Slot Memory Plugin for OpenClaw \u2014 structured key-value state management with auto-recall injection and integrated essence distillation",
+  "description": "Smart Memory Plugin for OpenClaw \u2014 structured slot memory with auto-capture, auto-recall, essence distillation, and Qdrant vector search",
   "type": "module",
   "main": "dist/index.js",
   "openclaw": {
@@ -22,5 +22,31 @@
     "@types/node": "^22.0.0",
     "openclaw": "*",
     "typescript": "^5.0.0"
-  }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cong91/agent-smart-memo.git"
+  },
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "memory",
+    "ai",
+    "agent",
+    "smart-memo",
+    "qdrant",
+    "auto-capture"
+  ],
+  "author": "mrc2204",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist/",
+    "openclaw.plugin.json",
+    "CONFIG.example.json",
+    "README.md",
+    "LICENSE"
+  ]
 }

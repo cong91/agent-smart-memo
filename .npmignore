@@ -1,0 +1,21 @@
+# Source (publish dist/ only)
+src/
+tests/
+tsconfig.json
+.env
+.env.bak
+.env.example
+
+# Git
+.git/
+.gitignore
+.github/
+
+# Dev
+node_modules/
+*.log
+.DS_Store
+
+# Backup
+*.bak*
+scripts/
