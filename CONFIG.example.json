@@ -1,7 +1,7 @@
 {
-  "_comment": "Add this to your ~/.openclaw/openclaw.json under plugins section",
-  
-  "plugins_config_example": {
+  "_readme": "Copy the 'plugins' section below into your ~/.openclaw/openclaw.json",
+
+  "plugins": {
     "allow": ["agent-smart-memo"],
     "slots": {
       "memory": "agent-smart-memo"
@@ -10,31 +10,26 @@
       "agent-smart-memo": {
         "enabled": true,
         "config": {
-          "_section_qdrant": "=== Qdrant Vector Database ===",
           "qdrantHost": "localhost",
           "qdrantPort": 6333,
-          "qdrantCollection": "mrc_bot_memory",
-          
-          "_section_llm": "=== LLM for Auto-Capture ===",
-          "llmBaseUrl": "http://localhost:8317/v1",
-          "llmApiKey": "your-api-key-here",
-          "llmModel": "gemini-2.5-flash",
-          
-          "_section_embed": "=== Embedding Model (Ollama) ===",
+          "qdrantCollection": "openclaw_memory",
+
+          "llmBaseUrl": "https://api.openai.com/v1",
+          "llmApiKey": "sk-your-api-key-here",
+          "llmModel": "gpt-4o-mini",
+
           "embedBaseUrl": "http://localhost:11434",
           "embedModel": "mxbai-embed-large",
           "embedDimensions": 1024,
-          
-          "_section_slots": "=== Slot Memory ===",
-          "slotCategories": ["profile", "preferences", "project", "environment", "custom"],
-          "maxSlots": 500,
-          "injectStateTokenBudget": 500,
-          
-          "_section_capture": "=== Auto-Capture ===",
+
           "autoCaptureEnabled": true,
           "autoCaptureMinConfidence": 0.7,
           "contextWindowMaxTokens": 12000,
-          "summarizeEveryActions": 6
+          "summarizeEveryActions": 6,
+
+          "slotCategories": ["profile", "preferences", "project", "environment", "custom"],
+          "maxSlots": 500,
+          "injectStateTokenBudget": 500
         }
       }
     }
