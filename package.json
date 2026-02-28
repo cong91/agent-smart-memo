@@ -1,20 +1,25 @@
 {
   "name": "agent-memo",
-  "version": "3.0.0",
-  "description": "Slot Memory Plugin for OpenClaw — structured key-value state management with auto-recall injection",
+  "version": "4.0.0",
+  "description": "Slot Memory Plugin for OpenClaw \u2014 structured key-value state management with auto-recall injection and integrated essence distillation",
   "type": "module",
   "main": "dist/index.js",
   "openclaw": {
-    "extensions": ["./dist/index.js"]
+    "extensions": [
+      "./dist/index.js"
+    ]
   },
   "scripts": {
     "build": "tsc",
     "test": "node --experimental-sqlite tests/test.js",
     "clean": "rm -rf dist"
   },
-  "dependencies": {},
+  "dependencies": {
+    "dotenv": "^17.3.1"
+  },
   "devDependencies": {
     "@sinclair/typebox": "^0.34.0",
+    "@types/node": "^22.0.0",
     "openclaw": "*",
     "typescript": "^5.0.0"
   }

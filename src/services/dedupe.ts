@@ -1,4 +1,4 @@
-import { ScoredPoint, MemoryEntry } from "../types";
+import { ScoredPoint } from "../types.js";
 
 /**
  * Deduplication utilities

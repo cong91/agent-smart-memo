@@ -1,18 +1,18 @@
-import { MemoryConfig } from "../types";
+import { MemoryConfig } from "../types.js";
 
 /**
- * Embedding service client - Local embedding service compatible
+ * Embedding service client - Ollama compatible
  */
 export class EmbeddingClient {
-  private config: MemoryConfig;
+  private config: Pick<MemoryConfig, "embeddingApiUrl" | "timeout"> & { model: string };
   private logger: any;
   private dimensions: number;
   
-  constructor(config: Partial<MemoryConfig> & { model?: string; dimensions?: number }, logger?: any) {
+  constructor(config: { embeddingApiUrl?: string; timeout?: number; dimensions?: number; model?: string }, logger?: any) {
     this.config = {
-      embeddingApiUrl: config.embeddingApiUrl || "http://localhost:8000",
+      embeddingApiUrl: config.embeddingApiUrl || "http://localhost:11434",
       timeout: config.timeout || 30000,
-      ...config,
+      model: config.model || "mxbai-embed-large",
     };
     this.logger = logger || console;
     this.dimensions = config.dimensions || 1024;
@@ -40,7 +40,8 @@ export class EmbeddingClient {
     const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
     
     try {
-      const url = `${this.config.embeddingApiUrl}/embed`;
+      // Ollama API endpoint for embeddings
+      const url = `${this.config.embeddingApiUrl}/api/embeddings`;
       
       const response = await fetch(url, {
         method: "POST",
@@ -48,7 +49,8 @@ export class EmbeddingClient {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          text: text,
+          model: this.config.model,
+          prompt: text,
         }),
         signal: controller.signal,
       });
@@ -63,7 +65,7 @@ export class EmbeddingClient {
       
       const data = await response.json();
       
-      // Local embedding service format: {embedding: [...], vector_size: 768, model: "..."}
+      // Ollama API format: { embedding: [0.1, 0.2, ...] }
       if (data.embedding && Array.isArray(data.embedding)) {
         return data.embedding;
       }

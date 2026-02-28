@@ -1,0 +1,22 @@
+{
+  "plugins": {
+    "entries": {
+      "agent-memo": {
+        "enabled": true,
+        "config": {
+          "slotCategories": ["profile", "preferences", "project", "environment", "custom"],
+          "maxSlots": 500,
+          "injectStateTokenBudget": 500,
+          "qdrantHost": "localhost",
+          "qdrantPort": 6333,
+          "qdrantCollection": "mrc_bot_memory",
+          "llmBaseUrl": "http://localhost:8317/v1",
+          "llmApiKey": "proxypal-local",
+          "llmModel": "gemini-2.5-flash",
+          "autoCaptureEnabled": true,
+          "autoCaptureMinConfidence": 0.7
+        }
+      }
+    }
+  }
+}

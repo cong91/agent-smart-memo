@@ -11,6 +11,7 @@ import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { mkdirSync, existsSync } from "node:fs";
 import { GraphDB } from "./graph-db.js";
+import { getSlotTTL } from "../shared/memory-config.js";
 
 // Re-export GraphDB types
 export { GraphDB };
@@ -182,7 +183,7 @@ export class SlotDB {
         confidence,
         newVersion,
         now,
-        input.expires_at || null,
+        input.expires_at !== undefined ? input.expires_at : existing.expires_at,
         existing.id,
       );
 
@@ -194,7 +195,7 @@ export class SlotDB {
         confidence,
         version: newVersion,
         updated_at: now,
-        expires_at: input.expires_at || null,
+        expires_at: input.expires_at !== undefined ? input.expires_at : existing.expires_at,
       };
     }
 
@@ -261,7 +262,7 @@ export class SlotDB {
          WHERE scope_user_id = ? AND scope_agent_id = ? AND category = ?
          ORDER BY key ASC`,
       );
-      const rows = stmt.all(scopeUserId, scopeAgentId, input.category) as SlotRow[];
+      const rows = stmt.all(scopeUserId, scopeAgentId, input.category) as unknown as SlotRow[];
 
       return rows.map((r) => this.rowToSlot(r));
     }
@@ -272,7 +273,7 @@ export class SlotDB {
        WHERE scope_user_id = ? AND scope_agent_id = ?
        ORDER BY category ASC, key ASC`,
     );
-    const rows = stmt.all(scopeUserId, scopeAgentId) as SlotRow[];
+    const rows = stmt.all(scopeUserId, scopeAgentId) as unknown as SlotRow[];
 
     return rows.map((r) => this.rowToSlot(r));
   }
@@ -288,7 +289,7 @@ export class SlotDB {
     this.cleanExpired(scopeUserId, scopeAgentId);
 
     let query = `SELECT * FROM slots WHERE scope_user_id = ? AND scope_agent_id = ?`;
-    const params: unknown[] = [scopeUserId, scopeAgentId];
+    const params: (string | number | null)[] = [scopeUserId, scopeAgentId];
 
     if (input?.category) {
       query += ` AND category = ?`;
@@ -303,7 +304,7 @@ export class SlotDB {
     query += ` ORDER BY category ASC, key ASC`;
 
     const stmt = this.db.prepare(query);
-    const rows = stmt.all(...params) as SlotRow[];
+    const rows = stmt.all(...params) as unknown as SlotRow[];
     return rows.map((r) => this.rowToSlot(r));
   }
 
@@ -337,7 +338,7 @@ export class SlotDB {
        WHERE scope_user_id = ? AND scope_agent_id = ?
        ORDER BY category ASC, key ASC`,
     );
-    const rows = stmt.all(scopeUserId, scopeAgentId) as SlotRow[];
+    const rows = stmt.all(scopeUserId, scopeAgentId) as unknown as SlotRow[];
 
     const state: Record<string, Record<string, unknown>> = {};
 
@@ -401,12 +402,46 @@ export class SlotDB {
 
   private cleanExpired(scopeUserId: string, scopeAgentId: string): void {
     const now = new Date().toISOString();
+    // Remove explicitly expired slots
     const stmt = this.db.prepare(
       `DELETE FROM slots
        WHERE scope_user_id = ? AND scope_agent_id = ?
          AND expires_at IS NOT NULL AND expires_at < ?`,
     );
     stmt.run(scopeUserId, scopeAgentId, now);
+    
+    // Auto-expire slots based on category TTL (auto_capture source)
+    const categories = ['project', 'environment', 'custom'];
+    for (const cat of categories) {
+      const ttlDays = getSlotTTL(cat);
+      const cutoff = new Date(Date.now() - ttlDays * 24 * 60 * 60 * 1000).toISOString();
+      const ttlStmt = this.db.prepare(
+        `DELETE FROM slots
+         WHERE scope_user_id = ? AND scope_agent_id = ?
+           AND category = ? AND updated_at < ?
+           AND key NOT LIKE '_autocapture%'
+           AND source = 'auto_capture'`,
+      );
+      ttlStmt.run(scopeUserId, scopeAgentId, cat, cutoff);
+    }
+
+    // Safety cleanup: volatile project status slots should expire even if source was manual/tool.
+    // This prevents stale "current phase/task" slots from persisting forever.
+    const projectCutoff = new Date(Date.now() - getSlotTTL('project') * 24 * 60 * 60 * 1000).toISOString();
+    const volatileProjectStmt = this.db.prepare(
+      `DELETE FROM slots
+       WHERE scope_user_id = ? AND scope_agent_id = ?
+         AND category = 'project'
+         AND updated_at < ?
+         AND key IN (
+           'project.current',
+           'project.current_task',
+           'project.current_epic',
+           'project.phase',
+           'project.status'
+         )`,
+    );
+    volatileProjectStmt.run(scopeUserId, scopeAgentId, projectCutoff);
   }
 
   close(): void {

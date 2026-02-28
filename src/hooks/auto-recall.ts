@@ -1,12 +1,15 @@
 /**
  * Auto-Recall Enhancement - Task 3.4
- * 
- * Automatically injects Slot Memory and Graph context into System Prompt
+ *
+ * Automatically injects Slot Memory, Graph context, and Semantic Memories into System Prompt
  * before each agent run (OnBeforeAgentStart hook).
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { SlotDB } from "../db/slot-db.js";
+import { QdrantClient } from "../services/qdrant.js";
+import { EmbeddingClient } from "../services/embedding.js";
+import { getAgentNamespaces, MemoryNamespace, normalizeUserId } from "../shared/memory-config.js";
 
 // Token budget for different context types
 const TOKEN_BUDGETS = {
@@ -33,6 +36,8 @@ function formatCurrentState(state: Record<string, Record<string, unknown>>): str
   for (const [category, slots] of Object.entries(state)) {
     xml += `  <${category}>\n`;
     for (const [key, value] of Object.entries(slots)) {
+      // Skip internal keys (e.g. _autocapture_hash)
+      if (key.startsWith('_')) continue;
       const displayKey = key.includes(".") ? key.split(".").slice(1).join(".") : key;
       const displayValue = typeof value === "object" ? JSON.stringify(value) : String(value);
       // Truncate long values
@@ -42,6 +47,61 @@ function formatCurrentState(state: Record<string, Record<string, unknown>>): str
     xml += `  </${category}>\n`;
   }
   xml += "</current-state>";
+  return xml;
+}
+
+
+function formatProjectLivingState(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+
+  const v = value as {
+    last_actions?: unknown;
+    current_focus?: unknown;
+    next_steps?: unknown;
+  };
+
+  const lastActions = Array.isArray(v.last_actions)
+    ? v.last_actions.map((x) => String(x)).slice(-5)
+    : [];
+  const currentFocus = typeof v.current_focus === "string" ? v.current_focus : "";
+  const nextSteps = Array.isArray(v.next_steps)
+    ? v.next_steps.map((x) => String(x)).slice(0, 5)
+    : [];
+
+  if (lastActions.length === 0 && !currentFocus && nextSteps.length === 0) {
+    return "";
+  }
+
+  const xmlEscape = (s: string) =>
+    s.replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;");
+
+  let xml = "<project-living-state>\n";
+
+  if (lastActions.length > 0) {
+    xml += "  <last_actions>\n";
+    lastActions.forEach((a, i) => {
+      xml += `    <action index="${i + 1}">${xmlEscape(a)}</action>\n`;
+    });
+    xml += "  </last_actions>\n";
+  }
+
+  if (currentFocus) {
+    xml += `  <current_focus>${xmlEscape(currentFocus)}</current_focus>\n`;
+  }
+
+  if (nextSteps.length > 0) {
+    xml += "  <next_steps>\n";
+    nextSteps.forEach((s, i) => {
+      xml += `    <step index="${i + 1}">${xmlEscape(s)}</step>\n`;
+    });
+    xml += "  </next_steps>\n";
+  }
+
+  xml += "</project-living-state>";
   return xml;
 }
 
@@ -59,7 +119,7 @@ function formatGraphContext(
   // List entities
   xml += "  <entities>\n";
   entities.slice(0, 10).forEach((e) => { // Limit to 10 entities
-    xml += `    <entity name=\"${e.name}\" type=\"${e.type}\"/>\n`;
+    xml += `    <entity name="${e.name}" type="${e.type}"/>\n`;
   });
   xml += "  </entities>\n";
   
@@ -77,15 +137,58 @@ function formatGraphContext(
 }
 
 /**
+ * Format semantic memories as XML for system prompt injection
+ */
+function formatSemanticMemories(memories: Array<{ text: string; score: number; namespace?: string }>): string {
+  if (memories.length === 0) return "";
+  
+  let xml = "<semantic-memories>\n";
+  memories.forEach((m, i) => {
+    const nsAttr = m.namespace ? ` ns="${m.namespace}"` : "";
+    xml += `  <memory index="${i + 1}" relevance="${(m.score * 100).toFixed(0)}%"${nsAttr}>${m.text}</memory>\n`;
+  });
+  xml += "</semantic-memories>";
+  return xml;
+}
+
+/**
+ * Build multi-namespace filter for Qdrant search
+ */
+function buildNamespaceFilter(namespaces: MemoryNamespace[]): any {
+  if (namespaces.length === 0) {
+    return { must: [{ key: "namespace", match: { value: "agent_decisions" } }] };
+  }
+  
+  if (namespaces.length === 1) {
+    return { must: [{ key: "namespace", match: { value: namespaces[0] } }] };
+  }
+  
+  // Multiple namespaces - use OR (should)
+  return {
+    must: [{
+      should: namespaces.map(ns => ({
+        key: "namespace",
+        match: { value: ns },
+      })),
+    }],
+  };
+}
+
+/**
  * Gather auto-recall context from all memory sources
  */
 export async function gatherRecallContext(
   db: SlotDB,
+  qdrant: QdrantClient,
+  embedding: EmbeddingClient,
   ctx: RecallContext,
+  userQuery?: string,
 ): Promise<{
   currentState: string;
+  projectLivingState: string;
   graphContext: string;
   recentUpdates: string;
+  semanticMemories: string;
 }> {
   // 1. Get Current State from slots (all scopes)
   const scopes = [
@@ -95,21 +198,51 @@ export async function gatherRecallContext(
   ];
   
   const mergedState: Record<string, Record<string, unknown>> = {};
+  const mergedTimestamps: Record<string, Record<string, string>> = {};
   
   for (const scope of scopes) {
     const state = db.getCurrentState(scope.userId, scope.agentId);
-    for (const [category, slots] of Object.entries(state)) {
-      if (!mergedState[category]) mergedState[category] = {};
-      // Private takes precedence over team, team over public
-      for (const [key, value] of Object.entries(slots)) {
-        if (!(key in mergedState[category])) {
+    const slots = db.list(scope.userId, scope.agentId);
+    // Build timestamp map
+    const tsMap: Record<string, string> = {};
+    for (const s of slots) {
+      tsMap[s.key] = s.updated_at;
+    }
+    
+    for (const [category, catSlots] of Object.entries(state)) {
+      if (!mergedState[category]) {
+        mergedState[category] = {};
+        mergedTimestamps[category] = {};
+      }
+      for (const [key, value] of Object.entries(catSlots)) {
+        // Skip internal keys (e.g. _autocapture_hash)
+        if (key.startsWith('_')) continue;
+        const existingTs = mergedTimestamps[category]?.[key];
+        const newTs = tsMap[key] || "";
+        // Keep the NEWEST version (freshness wins)
+        if (!existingTs || newTs > existingTs) {
           mergedState[category][key] = value;
+          mergedTimestamps[category][key] = newTs;
         }
       }
     }
   }
   
   const currentStateXml = formatCurrentState(mergedState);
+
+  // 1.5 Get project_living_state slot (private > team > public)
+  const projectLivingCandidates = [
+    db.get(ctx.userId, ctx.agentId, { key: "project_living_state" }),
+    db.get(ctx.userId, "__team__", { key: "project_living_state" }),
+    db.get("__public__", "__public__", { key: "project_living_state" }),
+  ];
+  let projectLivingStateXml = "";
+  for (const c of projectLivingCandidates) {
+    if (c && !Array.isArray(c)) {
+      projectLivingStateXml = formatProjectLivingState(c.value);
+      if (projectLivingStateXml) break;
+    }
+  }
   
   // 2. Get Graph Context (from private scope only for privacy)
   const allEntities = db.graph.listEntities(ctx.userId, ctx.agentId);
@@ -143,10 +276,49 @@ export async function gatherRecallContext(
     ? `<recent-updates>\n${recentSlots.map((s) => `  <update key="${s.key}" at="${s.updated_at}"/>`).join("\n")}\n</recent-updates>`
     : "";
   
+  // 4. Semantic Memories from Qdrant (NEW)
+  let semanticMemoriesXml = "";
+  if (userQuery && userQuery.trim().length > 0) {
+    try {
+      // Get agent's namespaces
+      const namespaces = getAgentNamespaces(ctx.agentId);
+      
+      // Generate embedding for the query
+      const vector = await embedding.embed(userQuery);
+      
+      // Build multi-namespace filter
+      const namespaceFilter = buildNamespaceFilter(namespaces);
+      
+      // Search for relevant memories
+      const results = await qdrant.search(vector, 5, namespaceFilter);
+      
+      // Filter by score and format
+      const relevantMemories = results
+        .filter((r: any) => r.score >= 0.7)
+        .map((r: any) => ({ 
+          text: r.payload?.text || "", 
+          score: r.score,
+          namespace: r.payload?.namespace,
+        }))
+        .filter((m: any) => m.text.length > 0);
+      
+      semanticMemoriesXml = formatSemanticMemories(relevantMemories);
+      
+      if (relevantMemories.length > 0) {
+        console.log(`[AutoRecall] Found ${relevantMemories.length} relevant semantic memories for query (namespaces: ${namespaces.join(", ")})`);
+      }
+    } catch (error: any) {
+      console.error("[AutoRecall] Error querying semantic memories:", error.message);
+      semanticMemoriesXml = "";
+    }
+  }
+  
   return {
     currentState: currentStateXml,
+    projectLivingState: projectLivingStateXml,
     graphContext: graphContextXml,
     recentUpdates,
+    semanticMemories: semanticMemoriesXml,
   };
 }
 
@@ -155,8 +327,10 @@ export async function gatherRecallContext(
  */
 export function injectRecallContext(systemPrompt: string, context: {
   currentState: string;
+  projectLivingState: string;
   graphContext: string;
   recentUpdates: string;
+  semanticMemories: string;
 }): string {
   // Build injection block
   const injectionParts: string[] = [];
@@ -165,12 +339,20 @@ export function injectRecallContext(systemPrompt: string, context: {
     injectionParts.push(context.currentState);
   }
   
+  if (context.projectLivingState) {
+    injectionParts.push(context.projectLivingState);
+  }
+
   if (context.graphContext) {
     injectionParts.push(context.graphContext);
   }
   
   if (context.recentUpdates) {
     injectionParts.push(context.recentUpdates);
+  }
+  
+  if (context.semanticMemories) {
+    injectionParts.push(context.semanticMemories);
   }
   
   if (injectionParts.length === 0) {
@@ -192,37 +374,56 @@ export function injectRecallContext(systemPrompt: string, context: {
 /**
  * Register auto-recall hook
  */
-export function registerAutoRecall(api: OpenClawPluginApi, db: SlotDB): void {
-  // Hook into agent lifecycle if supported
-  if (api.hooks?.onBeforeAgentStart) {
-    api.hooks.onBeforeAgentStart(async (ctx: any) => {
-      const sessionKey = ctx?.sessionKey || "agent:main:default";
-      const parts = sessionKey.split(":");
-      const agentId = parts.length >= 2 ? parts[1] : "main";
-      const userId = parts.length >= 3 ? parts.slice(2).join(":") : "default";
-      
-      const recallCtx: RecallContext = {
-        sessionKey,
-        stateDir: ctx?.stateDir || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`,
-        userId,
-        agentId,
-      };
-      
-      try {
-        const context = await gatherRecallContext(db, recallCtx);
-        
-        // If there's a way to modify system prompt, do it
-        if (ctx.systemPrompt !== undefined) {
-          ctx.systemPrompt = injectRecallContext(ctx.systemPrompt, context);
+export function registerAutoRecall(
+  api: OpenClawPluginApi,
+  db: SlotDB,
+  qdrant: QdrantClient,
+  embedding: EmbeddingClient
+): void {
+  // Hook into agent lifecycle using the on() method
+  api.on("before_agent_start", async (event: unknown, ctx: unknown) => {
+    const typedEvent = event as { messages?: Array<{ role: string; content: string }>; systemPrompt?: string };
+    const typedCtx = ctx as { sessionKey?: string };
+    
+    const sessionKey = typedCtx?.sessionKey || "agent:main:default";
+    const parts = sessionKey.split(":");
+    const agentId = parts.length >= 2 ? parts[1] : "main";
+    const userId = normalizeUserId(parts.length >= 3 ? parts.slice(2).join(":") : "default");
+    
+    // Extract user query from last user message for semantic search
+    let userQuery = "";
+    if (typedEvent?.messages && typedEvent.messages.length > 0) {
+      // Find the last user message
+      for (let i = typedEvent.messages.length - 1; i >= 0; i--) {
+        const msg = typedEvent.messages[i];
+        if (msg.role === "user" && msg.content) {
+          userQuery = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+          break;
         }
-        
-        // Also store in context for tools to access
-        ctx.recallContext = context;
-      } catch (error) {
-        console.error("Auto-recall error:", error);
       }
-    });
-  }
+    }
+    
+    const recallCtx: RecallContext = {
+      sessionKey,
+      stateDir: process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`,
+      userId,
+      agentId,
+    };
+    
+    try {
+      const context = await gatherRecallContext(db, qdrant, embedding, recallCtx, userQuery);
+      
+      // Get original system prompt from event if available
+      const originalPrompt = typedEvent?.systemPrompt || "";
+      
+      // Return system prompt override via the hook result
+      return {
+        systemPrompt: injectRecallContext(originalPrompt, context),
+      };
+    } catch (error) {
+      console.error("Auto-recall error:", error);
+    }
+  });
 }
 
 /**
@@ -230,11 +431,14 @@ export function registerAutoRecall(api: OpenClawPluginApi, db: SlotDB): void {
  */
 export async function getRecallContextText(
   db: SlotDB,
+  qdrant: QdrantClient,
+  embedding: EmbeddingClient,
   sessionKey: string,
+  userQuery?: string,
 ): Promise<string> {
   const parts = sessionKey.split(":");
   const agentId = parts.length >= 2 ? parts[1] : "main";
-  const userId = parts.length >= 3 ? parts.slice(2).join(":") : "default";
+  const userId = normalizeUserId(parts.length >= 3 ? parts.slice(2).join(":") : "default");
   
   const ctx: RecallContext = {
     sessionKey,
@@ -243,12 +447,14 @@ export async function getRecallContextText(
     agentId,
   };
   
-  const context = await gatherRecallContext(db, ctx);
+  const context = await gatherRecallContext(db, qdrant, embedding, ctx, userQuery);
   
   const parts2: string[] = [];
   if (context.currentState) parts2.push(context.currentState);
+  if (context.projectLivingState) parts2.push(context.projectLivingState);
   if (context.graphContext) parts2.push(context.graphContext);
   if (context.recentUpdates) parts2.push(context.recentUpdates);
+  if (context.semanticMemories) parts2.push(context.semanticMemories);
   
   return parts2.join("\n\n");
 }

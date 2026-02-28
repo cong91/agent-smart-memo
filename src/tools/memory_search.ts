@@ -1,6 +1,7 @@
-import { QdrantClient } from "../services/qdrant";
-import { EmbeddingClient } from "../services/embedding";
-import { SearchParams, ToolResult, MemoryEntry, ScoredPoint } from "../types";
+import { QdrantClient } from "../services/qdrant.js";
+import { EmbeddingClient } from "../services/embedding.js";
+import { SearchParams, ToolResult, ScoredPoint, MemoryNamespace } from "../types.js";
+import { getAgentNamespaces } from "../shared/memory-config.js";
 
 export const memorySearchSchema = {
   type: "object",
@@ -17,7 +18,7 @@ export const memorySearchSchema = {
     },
     namespace: {
       type: "string",
-      description: "Filter by namespace",
+      description: "Filter by namespace (default: auto-detected from agent)",
     },
     sessionId: {
       type: "string",
@@ -33,6 +34,10 @@ export const memorySearchSchema = {
       minimum: 0,
       maximum: 1,
     },
+    sourceAgent: {
+      type: "string",
+      description: "Filter by source agent ID",
+    },
   },
   required: ["query"],
 };
@@ -40,20 +45,26 @@ export const memorySearchSchema = {
 export function createMemorySearchTool(
   qdrant: QdrantClient,
   embedding: EmbeddingClient,
-  defaultNamespace: string
+  defaultNamespace: MemoryNamespace
 ) {
   return {
     name: "memory_search",
+    label: "Memory Search",
     description: "Search stored memories by semantic similarity. Returns most relevant past information.",
     parameters: memorySearchSchema,
     
-    async execute(_id: string, params: SearchParams): Promise<ToolResult> {
+    async execute(
+      _id: string, 
+      params: SearchParams & { sourceAgent?: string; agentId?: string },
+      _signal?: AbortSignal
+    ): Promise<ToolResult> {
       try {
         // Validate
         if (!params.query || typeof params.query !== "string") {
           return {
             content: [{ type: "text", text: "Error: query is required" }],
             isError: true,
+            details: { error: "Missing query parameter" },
           };
         }
         
@@ -62,17 +73,32 @@ export function createMemorySearchTool(
           return {
             content: [{ type: "text", text: "Error: query cannot be empty" }],
             isError: true,
+            details: { error: "Empty query" },
           };
         }
         
         const limit = Math.min(Math.max(params.limit || 5, 1), 20);
-        const namespace = params.namespace || defaultNamespace;
         const minScore = params.minScore ?? 0.7;
         
-        // Build filter
-        const filterConditions: any[] = [
-          { key: "namespace", match: { value: namespace } },
-        ];
+        // Determine namespaces to search
+        const agentId = params.agentId || "";
+        const namespaces: MemoryNamespace[] = params.namespace 
+          ? [params.namespace as MemoryNamespace]
+          : getAgentNamespaces(agentId);
+        
+        // Build namespace filter (OR if multiple namespaces)
+        const namespaceConditions = namespaces.map(ns => ({
+          key: "namespace",
+          match: { value: ns },
+        }));
+        
+        const filterConditions: any[] = [];
+        
+        if (namespaceConditions.length === 1) {
+          filterConditions.push(namespaceConditions[0]);
+        } else if (namespaceConditions.length > 1) {
+          filterConditions.push({ should: namespaceConditions });
+        }
         
         if (params.sessionId) {
           filterConditions.push({
@@ -88,6 +114,13 @@ export function createMemorySearchTool(
           });
         }
         
+        if (params.sourceAgent) {
+          filterConditions.push({
+            key: "source_agent",
+            match: { value: params.sourceAgent },
+          });
+        }
+        
         const filter = filterConditions.length > 0 ? { must: filterConditions } : undefined;
         
         // Generate embedding and search
@@ -95,16 +128,17 @@ export function createMemorySearchTool(
         const results = await qdrant.search(vector, limit, filter);
         
         // Filter by minScore
-        const filtered = results.filter(r => r.score >= minScore);
+        const filtered = results.filter((r: ScoredPoint) => r.score >= minScore);
         
         if (filtered.length === 0) {
           return {
             content: [{ type: "text", text: "No relevant memories found." }],
+            details: { count: 0, query },
           };
         }
         
         // Format results
-        const formatted = filtered.map((r, i) => {
+        const formatted = filtered.map((r: ScoredPoint, i: number) => {
           const payload = r.payload;
           const date = payload.timestamp 
             ? new Date(payload.timestamp).toLocaleDateString() 
@@ -112,6 +146,7 @@ export function createMemorySearchTool(
           
           const lines = [
             `[${i + 1}] Score: ${(r.score * 100).toFixed(1)}%`,
+            `Namespace: ${payload.namespace || "unknown"}`,
             `Text: ${payload.text}`,
             `Date: ${date}`,
           ];
@@ -128,12 +163,14 @@ export function createMemorySearchTool(
             type: "text",
             text: `Found ${filtered.length} relevant memories for "${query}":\n\n${formatted}`,
           }],
+          details: { count: filtered.length, query, results: filtered },
         };
         
       } catch (error: any) {
         return {
           content: [{ type: "text", text: `Error searching memories: ${error.message}` }],
           isError: true,
+          details: { error: error.message },
         };
       }
     },

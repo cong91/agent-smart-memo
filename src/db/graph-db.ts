@@ -178,7 +178,7 @@ export class GraphDB {
     filter?: EntityFilter,
   ): Entity[] {
     let query = `SELECT * FROM entities WHERE scope_user_id = ? AND scope_agent_id = ?`;
-    const params: unknown[] = [scopeUserId, scopeAgentId];
+    const params: (string | number | null)[] = [scopeUserId, scopeAgentId];
 
     if (filter?.type) {
       query += ` AND type = ?`;
@@ -193,7 +193,7 @@ export class GraphDB {
     query += ` ORDER BY updated_at DESC`;
 
     const stmt = this.db.prepare(query);
-    const rows = stmt.all(...params) as EntityRow[];
+    const rows = stmt.all(...params) as unknown as EntityRow[];
     return rows.map((r) => this.rowToEntity(r));
   }
 
@@ -306,7 +306,7 @@ export class GraphDB {
     direction: RelationDirection = "both",
   ): Relationship[] {
     let query: string;
-    const params: unknown[] = [scopeUserId, scopeAgentId];
+    const params: (string | number | null)[] = [scopeUserId, scopeAgentId];
 
     if (direction === "outgoing") {
       query = `SELECT * FROM relationships WHERE scope_user_id = ? AND scope_agent_id = ? AND source_entity_id = ?`;
@@ -322,7 +322,7 @@ export class GraphDB {
     query += ` ORDER BY weight DESC`;
 
     const stmt = this.db.prepare(query);
-    const rows = stmt.all(...params) as RelationshipRow[];
+    const rows = stmt.all(...params) as unknown as RelationshipRow[];
     return rows.map((r) => this.rowToRelationship(r));
   }
 
