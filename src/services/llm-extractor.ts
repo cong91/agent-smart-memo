@@ -12,6 +12,8 @@ interface LLMConfig {
   model: string;
 }
 
+export type DistillMode = "principles" | "requirements" | "market_signal" | "general";
+
 export interface ExtractionResult {
   slot_updates: Array<{
     key: string;
@@ -48,9 +50,10 @@ const EMPTY_RESULT: ExtractionResult = { slot_updates: [], slot_removals: [], me
 export async function extractWithLLM(
   conversation: string,
   currentSlots: Record<string, Record<string, any>>,
-  config: LLMConfig
+  config: LLMConfig,
+  distillMode: DistillMode = "general"
 ): Promise<ExtractionResult> {
-  const systemInstruction = buildSystemInstruction();
+  const systemInstruction = buildSystemInstruction(distillMode);
   const userPrompt = buildUserPrompt(conversation, currentSlots);
   
   const totalPromptChars = systemInstruction.length + userPrompt.length;
@@ -113,7 +116,7 @@ export async function extractWithLLM(
   }
 }
 
-function buildSystemInstruction(): string {
+function buildSystemInstruction(distillMode: DistillMode = "general"): string {
   return `You are a memory extraction assistant. Analyze conversations and extract/update/invalidate facts.
 
 LANGUAGE RULE: Extract in the SAME language as the input. Do NOT translate.
@@ -151,7 +154,47 @@ RESPONSE FORMAT (JSON only):
   "memories": [{"text": "fact description", "namespace": "project_context", "confidence": 0.85}]
 }
 
+DISTILL RULES (CRITICAL - apply to ALL outputs):
+- DISTILL, never summarize. Remove all decoration/noise; keep only decision-grade core.
+- memories[].text must be terse atomic fragments. No filler words, no transitions.
+- Ban phrases in output: 'in conclusion', 'moreover', 'therefore', 'overall', 'it seems', 'anh ấy nói rằng', 'đã thảo luận về'.
+- Preserve critical numbers, thresholds, symbols, time windows.
+- slot_updates[].value: concise, actionable. Not "anh Công muốn backup trước khi sửa" → "Rule: PHẢI backup config trước khi sửa openclaw.json"
+
+MODE-SPECIFIC DISTILL:
+${getDistillDirective(distillMode)}
+
 Return empty arrays if nothing to extract/remove. Quality over quantity.`;
+}
+
+function getDistillDirective(mode: DistillMode): string {
+  switch (mode) {
+    case "principles":
+      return [
+        "Extract invariant principles only.",
+        "Each memory: one principle in atomic form.",
+        "No examples, no anecdotes, no story.",
+      ].join("\n");
+    case "requirements":
+      return [
+        "Extract non-negotiable requirements and constraints.",
+        "Use implementable constraint wording.",
+        "Prefer measurable/observable constraints.",
+      ].join("\n");
+    case "market_signal":
+      return [
+        "Extract tradable market signals only.",
+        "Keep directional signal, risk level, trigger/action.",
+        "No macro storytelling, no generic education.",
+      ].join("\n");
+    case "general":
+    default:
+      return [
+        "Extract decision-grade facts and rules.",
+        "Keep technical details, configurations, constraints.",
+        "Remove conversational noise and pleasantries.",
+      ].join("\n");
+  }
 }
 
 function buildUserPrompt(

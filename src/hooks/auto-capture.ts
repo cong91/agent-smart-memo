@@ -12,7 +12,7 @@ import { SlotDB } from "../db/slot-db.js";
 import { QdrantClient } from "../services/qdrant.js";
 import { EmbeddingClient } from "../services/embedding.js";
 import { DeduplicationService } from "../services/dedupe.js";
-import { extractWithLLM, checkLLMHealth } from "../services/llm-extractor.js";
+import { extractWithLLM, checkLLMHealth, DistillMode } from "../services/llm-extractor.js";
 import { NoiseFilter, getAutoCaptureNamespace, isTraderAgent, MemoryNamespace, normalizeUserId, isLearningContent } from "../shared/memory-config.js";
 
 // Event type constant for type-safe event handling
@@ -115,6 +115,29 @@ function summarizeProjectLivingState(messages: ConversationMessage[]): LivingSta
     current_focus: currentFocus,
     next_steps: nextSteps,
   };
+}
+
+/**
+ * Infer distill mode based on agent type and content
+ */
+function inferDistillMode(agentId: string, text: string): DistillMode {
+  // Trader agent → market signals
+  if (isTraderAgent(agentId)) {
+    return "market_signal";
+  }
+
+  // Learning content → principles
+  if (isLearningContent(text)) {
+    return "principles";
+  }
+
+  // Scrum/Fullstack/Creator → requirements (technical constraints)
+  if (["scrum", "fullstack", "creator"].includes(agentId)) {
+    return "requirements";
+  }
+
+  // Default
+  return "general";
 }
 
 /**
@@ -323,6 +346,7 @@ async function extractFacts(
   currentSlots: Record<string, Record<string, any>>,
   cfg: AutoCaptureConfig,
   forceUseLLM?: boolean,
+  distillMode: DistillMode = "general",
 ): Promise<{ slot_updates: any[]; slot_removals: any[]; memories: any[] }> {
   // Build context window config from optional cfg setting
   const contextWindowConfig: ContextWindowConfig = {
@@ -357,7 +381,7 @@ async function extractFacts(
         apiKey: cfg.llmApiKey,
         model: cfg.llmModel,
       };
-      return extractWithLLM(text, currentSlots, llmConfig);
+      return extractWithLLM(text, currentSlots, llmConfig, distillMode);
     }
     console.log("[AutoCapture] LLM unavailable, using pattern fallback");
   }
@@ -474,7 +498,8 @@ export function registerAutoCapture(
         const currentState = db.getCurrentState(userId, agentId);
 
         // Pass use_llm param to override config
-        const extracted = await extractFacts(messages, currentState, cfg, params.use_llm);
+        const distillMode = inferDistillMode(agentId, params.text);
+        const extracted = await extractFacts(messages, currentState, cfg, params.use_llm, distillMode);
 
         // Process slot removals first (manual tool parity with hook behavior)
         let slotsRemoved = 0;
@@ -649,7 +674,9 @@ export function registerAutoCapture(
       console.log(`[AutoCapture] Processing ${captureWindowMessages.length} recent messages for ${agentId} (namespace: ${targetNamespace})`);
       
       const currentState = db.getCurrentState(userId, agentId);
-      const extracted = await extractFacts(captureWindowMessages, currentState, cfg);
+      const distillMode = inferDistillMode(agentId, fullText);
+      console.log(`[AutoCapture] Distill mode: ${distillMode} (agent: ${agentId})`);
+      const extracted = await extractFacts(captureWindowMessages, currentState, cfg, undefined, distillMode);
       
       // Process slot REMOVALS first (invalidation)
       let slotsRemoved = 0;

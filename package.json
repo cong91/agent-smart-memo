@@ -1,7 +1,7 @@
 {
   "name": "agent-memo",
-  "version": "3.0.0",
-  "description": "Slot Memory Plugin for OpenClaw — structured key-value state management with auto-recall injection",
+  "version": "4.0.0",
+  "description": "Slot Memory Plugin for OpenClaw \u2014 structured key-value state management with auto-recall injection and integrated essence distillation",
   "type": "module",
   "main": "dist/index.js",
   "openclaw": {
