@@ -111,7 +111,7 @@ const agentMemoPlugin = {
       },
       embedModel: {
         type: "string",
-        description: "Embedding model for vectorization (default: mxbai-embed-large)",
+        description: "Embedding model for vectorization (default: qwen3-embedding:0.6b)",
       },
       embedDimensions: {
         type: "number",
@@ -153,7 +153,7 @@ const agentMemoPlugin = {
     const llmApiKey = config.llmApiKey || "proxypal-local";
     const llmModel = config.llmModel || "gemini-2.5-flash";
     const embedBaseUrl = config.embedBaseUrl || "http://localhost:11434";
-    const embedModel = config.embedModel || "mxbai-embed-large";
+    const embedModel = config.embedModel || "qwen3-embedding:0.6b";
     const embedDimensions = config.embedDimensions || 1024;
     const autoCaptureEnabled = config.autoCaptureEnabled !== false; // default true
     const autoCaptureMinConfidence = config.autoCaptureMinConfidence || 0.7;

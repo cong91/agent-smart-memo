@@ -12,7 +12,7 @@ export class EmbeddingClient {
     this.config = {
       embeddingApiUrl: config.embeddingApiUrl || "http://localhost:11434",
       timeout: config.timeout || 30000,
-      model: config.model || "mxbai-embed-large",
+      model: config.model || "qwen3-embedding:0.6b",
     };
     this.logger = logger || console;
     this.dimensions = config.dimensions || 1024;

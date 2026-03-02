@@ -49,6 +49,17 @@ interface LivingStateSummary {
   last_actions: string[];
   current_focus: string;
   next_steps: string[];
+  active_context?: string;
+  timestamp?: number;
+  ttl?: number;
+}
+
+interface SessionSummaryValue {
+  summary: string;
+  key_decisions: string[];
+  outcomes: string[];
+  ttl: number;
+  timestamp: number;
 }
 
 function trimLine(s: string, max = 180): string {
@@ -115,6 +126,136 @@ function summarizeProjectLivingState(messages: ConversationMessage[]): LivingSta
     current_focus: currentFocus,
     next_steps: nextSteps,
   };
+}
+
+const SHORT_TERM_TTL_MS = 48 * 3600 * 1000;
+const MID_TERM_TTL_MS = 30 * 24 * 3600 * 1000;
+const ONE_DAY_MS = 24 * 3600 * 1000;
+
+function toExpiryIso(msFromNow: number): string {
+  return new Date(Date.now() + msFromNow).toISOString();
+}
+
+function getDateKey(date: Date = new Date()): string {
+  return date.toISOString().split("T")[0];
+}
+
+function getYesterdayDateKey(): string {
+  return getDateKey(new Date(Date.now() - ONE_DAY_MS));
+}
+
+function isExpired(value: any): boolean {
+  if (!value || typeof value !== "object") return true;
+  const ts = typeof value.timestamp === "number" ? value.timestamp : 0;
+  const ttl = typeof value.ttl === "number" ? value.ttl : 0;
+  if (!ts || !ttl) return true;
+  return Date.now() > ts + ttl;
+}
+
+function detectImportantPattern(text: string): boolean {
+  const normalized = String(text || "").toLowerCase();
+  const keywords = [
+    "hack",
+    "exploit",
+    "drawdown",
+    "root cause",
+    "regulation",
+    "sec",
+    "etf",
+    "delist",
+    "breakout",
+    "black swan",
+    "critical",
+    "incident",
+  ];
+  return keywords.some((k) => normalized.includes(k));
+}
+
+function extractDecisions(messages: ConversationMessage[]): string[] {
+  return messages
+    .map((m) => extractMessageText(m.content))
+    .flatMap((txt) => txt.split("\n"))
+    .map((line) => trimLine(line))
+    .filter((line) => /(quyết định|chốt|decide|approved|approve|selected)/i.test(line))
+    .slice(-5);
+}
+
+function extractOutcomes(messages: ConversationMessage[]): string[] {
+  return messages
+    .map((m) => extractMessageText(m.content))
+    .flatMap((txt) => txt.split("\n"))
+    .map((line) => trimLine(line))
+    .filter((line) => /(done|xong|completed|passed|failed|deployed|delivered)/i.test(line))
+    .slice(-5);
+}
+
+function buildDaySummary(messages: ConversationMessage[]): string {
+  const lines = messages
+    .map((m) => extractMessageText(m.content))
+    .flatMap((txt) => txt.split("\n"))
+    .map((line) => trimLine(line, 220))
+    .filter((line) => line.length > 0)
+    .slice(-12);
+
+  return lines.join("\n");
+}
+
+function formatMemoryContext(livingState: any, recentSummary: any, vectorResults: Array<{ text: string }> = []): string {
+  const blocks: string[] = [];
+
+  if (livingState) {
+    blocks.push(`SHORT_TERM: ${JSON.stringify(livingState)}`);
+  }
+
+  if (recentSummary) {
+    blocks.push(`MID_TERM: ${JSON.stringify(recentSummary)}`);
+  }
+
+  if (vectorResults.length > 0) {
+    blocks.push(`LONG_TERM: ${vectorResults.map((v) => v.text).join(" | ")}`);
+  }
+
+  return blocks.join("\n");
+}
+
+/**
+ * Auto-recall helper: short-term -> mid-term -> long-term fallback
+ */
+export async function injectMemoryContext(
+  agentId: string,
+  deps: { db: SlotDB; qdrant: QdrantClient; embedding: EmbeddingClient; userId: string; query?: string }
+): Promise<string> {
+  const { db, qdrant, embedding, userId, query } = deps;
+
+  const living = db.get(userId, agentId, { key: "project_living_state" });
+  const livingState = living && !Array.isArray(living) ? living.value : null;
+
+  let recentSummary: any = null;
+  const vectorResults: Array<{ text: string }> = [];
+
+  if (!livingState || isExpired(livingState)) {
+    const yesterday = getYesterdayDateKey();
+    const mid = db.get(userId, agentId, { key: `session.${yesterday}.summary` });
+    recentSummary = mid && !Array.isArray(mid) ? mid.value : null;
+
+    if (!recentSummary && query && query.trim().length > 0) {
+      try {
+        const vector = await embedding.embed(query);
+        const results = await qdrant.search(vector, 5, {
+          must: [{ key: "namespace", match: { value: "session_summaries" } }],
+        });
+        for (const r of results) {
+          if (r.payload?.text) {
+            vectorResults.push({ text: String(r.payload.text) });
+          }
+        }
+      } catch (error: any) {
+        console.error("[AutoCapture] injectMemoryContext semantic fallback error:", error.message);
+      }
+    }
+  }
+
+  return formatMemoryContext(livingState, recentSummary, vectorResults);
 }
 
 /**
@@ -447,6 +588,138 @@ function extractWithPatterns(text: string): { slot_updates: any[]; slot_removals
   return result;
 }
 
+
+
+async function storeSemanticMemory(
+  qdrant: QdrantClient,
+  embedding: EmbeddingClient,
+  text: string,
+  namespace: string,
+  payloadExtras: Record<string, unknown> = {},
+): Promise<void> {
+  const vector = await embedding.embed(text);
+  await qdrant.upsert([
+    {
+      id: crypto.randomUUID(),
+      vector,
+      payload: {
+        text,
+        namespace,
+        timestamp: Date.now(),
+        ...payloadExtras,
+      },
+    },
+  ]);
+}
+
+export function captureShortTermState(
+  db: SlotDB,
+  userId: string,
+  agentId: string,
+  messages: ConversationMessage[],
+  activeContext: string,
+  actionsSinceLastCapture: number,
+): boolean {
+  if (actionsSinceLastCapture < 3) return false;
+
+  const summary = summarizeProjectLivingState(messages);
+  const shortTermValue: LivingStateSummary = {
+    last_actions: summary.last_actions.slice(-5),
+    current_focus: summary.current_focus,
+    next_steps: summary.next_steps.slice(0, 3),
+    active_context: activeContext,
+    timestamp: Date.now(),
+    ttl: SHORT_TERM_TTL_MS,
+  };
+
+  db.set(userId, agentId, {
+    key: "project_living_state",
+    value: shortTermValue,
+    category: "project",
+    source: "auto_capture",
+    confidence: 0.85,
+    expires_at: toExpiryIso(SHORT_TERM_TTL_MS),
+  });
+
+  return true;
+}
+
+export async function captureMidTermSummary(
+  db: SlotDB,
+  qdrant: QdrantClient,
+  embedding: EmbeddingClient,
+  input: {
+    userId: string;
+    agentId: string;
+    sessionKey: string;
+    messages: ConversationMessage[];
+    sessionEnding?: boolean;
+    lastMidTermCaptureAt?: number;
+    now?: number;
+  }
+): Promise<{ stored: boolean; capturedAt: number }> {
+  const now = input.now ?? Date.now();
+  const lastCaptured = input.lastMidTermCaptureAt ?? 0;
+  const shouldCreateMidTermSummary = Boolean(input.sessionEnding) || now - lastCaptured >= ONE_DAY_MS;
+
+  if (!shouldCreateMidTermSummary) {
+    return { stored: false, capturedAt: lastCaptured };
+  }
+
+  const dateKey = getDateKey(new Date(now));
+  const daySummary = buildDaySummary(input.messages);
+  const extractedDecisions = extractDecisions(input.messages);
+  const trackedOutcomes = extractOutcomes(input.messages);
+  const sessionSummary: SessionSummaryValue = {
+    summary: daySummary,
+    key_decisions: extractedDecisions,
+    outcomes: trackedOutcomes,
+    ttl: MID_TERM_TTL_MS,
+    timestamp: now,
+  };
+
+  db.set(input.userId, input.agentId, {
+    key: `session.${dateKey}.summary`,
+    value: sessionSummary,
+    category: "custom",
+    source: "auto_capture",
+    confidence: 0.9,
+    expires_at: new Date(now + MID_TERM_TTL_MS).toISOString(),
+  });
+
+  await storeSemanticMemory(qdrant, embedding, daySummary, "session_summaries", {
+    date: dateKey,
+    session_id: input.sessionKey,
+    source_agent: input.agentId,
+    source_type: "auto_capture",
+    userId: input.userId,
+    metadata: {
+      date: dateKey,
+      session_id: input.sessionKey,
+    },
+  });
+
+  return { stored: true, capturedAt: now };
+}
+
+export async function captureLongTermPattern(
+  qdrant: QdrantClient,
+  embedding: EmbeddingClient,
+  input: { text: string; agentId: string; userId: string }
+): Promise<boolean> {
+  if (!detectImportantPattern(input.text)) {
+    return false;
+  }
+
+  await storeSemanticMemory(qdrant, embedding, input.text, "market_patterns", {
+    entity_type: "principle",
+    source_agent: input.agentId,
+    source_type: "auto_capture",
+    userId: input.userId,
+  });
+
+  return true;
+}
 /**
  * Register auto-capture
  */
@@ -472,6 +745,8 @@ export function registerAutoCapture(
 
   // Auto-summarize counters (per process lifecycle)
   let actionCounter = 0;
+  let actionsSinceLastCapture = 0;
+  let lastMidTermCaptureAt = Date.now();
   const summarizeEvery = Math.max(1, cfg.summarizeEveryActions ?? 6);
 
 
@@ -823,6 +1098,7 @@ export function registerAutoCapture(
       
       // Auto-summarize project living state after every N actions OR task transition
       actionCounter += 1;
+      actionsSinceLastCapture += 1;
       const transitionKeys = new Set([
         "project.current",
         "project.current_task",
@@ -835,22 +1111,59 @@ export function registerAutoCapture(
         extracted.slot_removals.some((s: any) => transitionKeys.has(s.key));
       const shouldSummarize = actionCounter % summarizeEvery === 0 || hasTaskTransition;
 
-      if (shouldSummarize) {
+      if (shouldSummarize || actionsSinceLastCapture >= 3) {
         try {
-          const summary = summarizeProjectLivingState(captureWindowMessages);
-          db.set(userId, agentId, {
-            key: "project_living_state",
-            value: summary,
-            category: "project",
-            source: "auto_capture",
-            confidence: 0.85,
-          });
-          console.log(
-            `[AutoCapture] Updated slot: project_living_state (${hasTaskTransition ? "task transition" : `every ${summarizeEvery} actions`})`
+          const stored = captureShortTermState(
+            db,
+            userId,
+            agentId,
+            captureWindowMessages,
+            fullText,
+            actionsSinceLastCapture,
           );
+          if (stored) {
+            actionsSinceLastCapture = 0;
+            console.log(
+              `[AutoCapture] Updated slot: project_living_state (${hasTaskTransition ? "task transition" : `every ${summarizeEvery} actions`})`
+            );
+          }
         } catch (summaryError) {
           console.error("[AutoCapture] Failed to update project_living_state:", summaryError);
         }
+      }
+
+      const now = Date.now();
+      const sessionEnding = Boolean((typedEvent?.metadata as any)?.sessionEnding);
+
+      try {
+        const midTerm = await captureMidTermSummary(db, qdrant, embedding, {
+          userId,
+          agentId,
+          sessionKey,
+          messages,
+          sessionEnding,
+          lastMidTermCaptureAt,
+          now,
+        });
+        if (midTerm.stored) {
+          lastMidTermCaptureAt = midTerm.capturedAt;
+          console.log(`[AutoCapture] Stored mid-term session summary for ${getDateKey(new Date(midTerm.capturedAt))}`);
+        }
+      } catch (midTermError) {
+        console.error("[AutoCapture] Failed to create mid-term session summary:", midTermError);
+      }
+
+      try {
+        const storedPattern = await captureLongTermPattern(qdrant, embedding, {
+          text: fullText,
+          agentId,
+          userId,
+        });
+        if (storedPattern) {
+          console.log("[AutoCapture] Stored long-term market pattern");
+        }
+      } catch (patternError) {
+        console.error("[AutoCapture] Failed to store long-term pattern:", patternError);
       }
 
       if (slotsStored > 0 || memoriesStored > 0 || slotsRemoved > 0) {
