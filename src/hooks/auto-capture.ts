@@ -840,11 +840,18 @@ export function registerAutoCapture(
       
       // Type-safe casting for runtime values
       const typedEvent = event as { messages?: unknown[]; response?: string; metadata?: Record<string, unknown> };
-      const typedCtx = ctx as { sessionKey?: string };
+      const typedCtx = ctx as { sessionKey?: string; channel?: string; messageChannel?: string };
       
       const sessionKey = typedCtx?.sessionKey ?? "agent:main:default";
       const agentId = sessionKey.split(":")[1] || "main";
       const userId = normalizeUserId(sessionKey.split(":").slice(2).join(":") || "default");
+      
+      // HEARTBEAT SKIP: heartbeat triggers agent_end but re-scans same old messages → wastes LLM tokens
+      const messageChannel = (typedCtx as any)?.messageChannel || (typedEvent?.metadata as any)?.messageChannel || "";
+      if (messageChannel === "heartbeat") {
+        console.log(`[AutoCapture] Skipping: heartbeat channel (no new user content to capture)`);
+        return;
+      }
       
       // Initialize noise filter for this agent
       const noiseFilter = new NoiseFilter(agentId);
