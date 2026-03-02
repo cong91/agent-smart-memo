@@ -50,7 +50,7 @@
       },
       "embedModel": {
         "type": "string",
-        "description": "Embedding model for vectorization (default: mxbai-embed-large)"
+        "description": "Embedding model for vectorization (default: qwen3-embedding:0.6b)"
       },
       "embedDimensions": {
         "type": "number",
@@ -117,7 +117,7 @@
     },
     "embedModel": {
       "label": "Embedding Model",
-      "placeholder": "mxbai-embed-large"
+      "placeholder": "qwen3-embedding:0.6b"
     },
     "embedDimensions": {
       "label": "Embedding Dimensions",
