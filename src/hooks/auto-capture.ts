@@ -847,8 +847,9 @@ export function registerAutoCapture(
       const userId = normalizeUserId(sessionKey.split(":").slice(2).join(":") || "default");
       
       // HEARTBEAT SKIP: heartbeat triggers agent_end but re-scans same old messages → wastes LLM tokens
-      const messageChannel = (typedCtx as any)?.messageChannel || (typedEvent?.metadata as any)?.messageChannel || "";
-      if (messageChannel === "heartbeat") {
+      // agent_end ctx passes messageProvider (not messageChannel) — for heartbeat runs it equals "heartbeat"
+      const messageProvider = (typedCtx as any)?.messageProvider || "";
+      if (messageProvider === "heartbeat") {
         console.log(`[AutoCapture] Skipping: heartbeat channel (no new user content to capture)`);
         return;
       }
