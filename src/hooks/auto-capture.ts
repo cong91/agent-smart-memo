@@ -597,13 +597,19 @@ async function storeSemanticMemory(
   namespace: string,
   payloadExtras: Record<string, unknown> = {},
 ): Promise<void> {
-  const vector = await embedding.embed(text);
+  const normalizedText = typeof text === "string" ? text.trim() : "";
+  if (!normalizedText) {
+    console.warn(`[AutoCapture] Skip semantic memory upsert: empty text (namespace=${namespace})`);
+    return;
+  }
+
+  const vector = await embedding.embed(normalizedText);
   await qdrant.upsert([
     {
       id: crypto.randomUUID(),
       vector,
       payload: {
-        text,
+        text: normalizedText,
         namespace,
         timestamp: Date.now(),
         ...payloadExtras,
