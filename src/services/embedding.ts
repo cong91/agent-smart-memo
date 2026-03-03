@@ -36,25 +36,47 @@ export class EmbeddingClient {
   private isOpenAIEmbeddingEndpoint(url: string): boolean {
     return /\/v1\/embeddings\/?$/i.test(url);
   }
+
+  private normalizeInput(input: string | string[]): string[] {
+    if (Array.isArray(input)) {
+      return input
+        .map((v) => (typeof v === "string" ? v.trim() : ""))
+        .filter((v) => v.length > 0);
+    }
+
+    if (typeof input === "string") {
+      const trimmed = input.trim();
+      return trimmed ? [trimmed] : [];
+    }
+
+    return [];
+  }
   
   /**
    * Get embedding vector for text
    * Fallback to hash-based embedding if API unavailable
    */
-  async embed(text: string): Promise<number[]> {
+  async embed(text: string | string[]): Promise<number[]> {
+    const normalizedInput = this.normalizeInput(text);
+
+    if (normalizedInput.length === 0) {
+      this.logger.warn("[Embedding] Skip embedding: empty input after trim/normalize");
+      return this.embedFromHash("");
+    }
+
     // Try API first
     try {
-      return await this.embedFromApi(text);
+      return await this.embedFromApi(normalizedInput);
     } catch (error) {
       // Fallback to deterministic hash-based embedding
-      return this.embedFromHash(text);
+      return this.embedFromHash(normalizedInput[0]);
     }
   }
   
   /**
    * Get embedding from API
    */
-  private async embedFromApi(text: string): Promise<number[]> {
+  private async embedFromApi(input: string[]): Promise<number[]> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
 
@@ -74,11 +96,11 @@ export class EmbeddingClient {
             useOpenAiFormat
               ? {
                   model: this.config.model,
-                  input: text,
+                  input,
                 }
               : {
                   model: this.config.model,
-                  prompt: text,
+                  prompt: input[0],
                 }
           ),
           signal: controller.signal,
@@ -87,6 +109,17 @@ export class EmbeddingClient {
         if (!response.ok) {
           const errorText = await response.text().catch(() => "Unknown error");
           this.logger.error(`[Embedding] HTTP ${response.status} @ ${url}: ${errorText.substring(0, 200)}`);
+
+          if (response.status === 400) {
+            this.logger.error(
+              `[Embedding] 400 schema debug @ ${url}: ${JSON.stringify({
+                model: this.config.model,
+                inputType: Array.isArray(input) ? "array" : typeof input,
+                inputLength: Array.isArray(input) ? input.length : 0,
+                firstItemLength: input[0]?.length || 0,
+              })}`
+            );
+          }
 
           // If this endpoint not found and we still have fallback endpoint, continue.
           if (response.status === 404 && endpoints.length > 1 && url !== endpoints[endpoints.length - 1]) {
