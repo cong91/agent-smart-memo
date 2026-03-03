@@ -56,7 +56,7 @@ interface AgentMemoConfig {
 const DEFAULT_CATEGORIES = ["profile", "preferences", "project", "environment", "custom"];
 
 const agentMemoPlugin = {
-  id: "agent-memo",
+  id: "agent-smart-memo",
   name: "Agent Memo (Slot Memory + Graph)",
   description: "Structured slot memory, graph relationships, and semantic search for OpenClaw",
   kind: "memory" as const,
