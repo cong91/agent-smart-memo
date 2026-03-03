@@ -49,6 +49,105 @@ interface AgentMemoConfig {
   summarizeEveryActions?: number;
 }
 
+const CONFIG_KEY_CANDIDATES: (keyof AgentMemoConfig)[] = [
+  "slotCategories",
+  "qdrantHost",
+  "qdrantPort",
+  "qdrantCollection",
+  "llmBaseUrl",
+  "llmApiKey",
+  "llmModel",
+  "embedBaseUrl",
+  "embedModel",
+  "embedDimensions",
+  "autoCaptureEnabled",
+  "autoCaptureMinConfidence",
+  "contextWindowMaxTokens",
+  "summarizeEveryActions",
+];
+
+function asObject(value: unknown): Record<string, any> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, any>)
+    : null;
+}
+
+function hasAnyConfigKey(obj: Record<string, any> | null): boolean {
+  if (!obj) return false;
+  return CONFIG_KEY_CANDIDATES.some((key) => key in obj);
+}
+
+function firstNonEmptyString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function findNestedStringKey(
+  input: unknown,
+  key: string,
+  maxDepth = 5
+): string | undefined {
+  const visited = new Set<unknown>();
+
+  function walk(node: unknown, depth: number): string | undefined {
+    if (!node || typeof node !== "object" || depth > maxDepth || visited.has(node)) {
+      return undefined;
+    }
+
+    visited.add(node);
+    const obj = node as Record<string, unknown>;
+
+    if (typeof obj[key] === "string" && (obj[key] as string).trim().length > 0) {
+      return (obj[key] as string).trim();
+    }
+
+    for (const value of Object.values(obj)) {
+      const found = walk(value, depth + 1);
+      if (found) return found;
+    }
+
+    return undefined;
+  }
+
+  return walk(input, 0);
+}
+
+function resolvePluginConfig(rawConfig: unknown): {
+  config: AgentMemoConfig;
+  shape: string;
+} {
+  const root = asObject(rawConfig);
+
+  const candidates: Array<{ shape: string; value: Record<string, any> | null }> = [
+    { shape: "api.config", value: root },
+    { shape: "api.config.config", value: asObject(root?.config) },
+    { shape: "api.config.entry.config", value: asObject(root?.entry?.config) },
+    { shape: "api.config.plugin.config", value: asObject(root?.plugin?.config) },
+    { shape: "api.config.value.config", value: asObject(root?.value?.config) },
+    { shape: "api.config.settings.config", value: asObject(root?.settings?.config) },
+  ];
+
+  for (const candidate of candidates) {
+    if (hasAnyConfigKey(candidate.value)) {
+      return { config: candidate.value as AgentMemoConfig, shape: candidate.shape };
+    }
+  }
+
+  // Backward compatibility for wrapper style { enabled, config }
+  if (asObject(root?.config)) {
+    return {
+      config: asObject(root?.config) as AgentMemoConfig,
+      shape: "api.config.config (wrapper-fallback)",
+    };
+  }
+
+  return { config: (root || {}) as AgentMemoConfig, shape: "api.config (empty/fallback)" };
+}
+
 // ============================================================================
 // Plugin Definition
 // ============================================================================
@@ -139,11 +238,11 @@ const agentMemoPlugin = {
   register(api: OpenClawPluginApi) {
     // ----------------------------------------------------------------
     // Get configuration from api.config with defaults
-    // Handle both wrapped config ({ enabled, config }) and unwrapped config
+    // Handle wrapped/unwrapped/nested config objects robustly
     // ----------------------------------------------------------------
     const rawConfig = api.config as any;
-    const config: AgentMemoConfig = rawConfig?.config || rawConfig || {};
-    
+    const { config, shape } = resolvePluginConfig(rawConfig);
+
     const slotCategories = config.slotCategories || DEFAULT_CATEGORIES;
     const qdrantHost = config.qdrantHost || "localhost";
     const qdrantPort = config.qdrantPort || 6333;
@@ -151,7 +250,12 @@ const agentMemoPlugin = {
     const qdrantVectorSize = config.qdrantVectorSize || 1024;
     const llmBaseUrl = config.llmBaseUrl || "http://localhost:8317/v1";
     const llmApiKey = config.llmApiKey || "proxypal-local";
-    const llmModel = config.llmModel || "gemini-2.5-flash";
+    const resolvedLlmModel = firstNonEmptyString(
+      config.llmModel,
+      findNestedStringKey(rawConfig, "llmModel")
+    );
+    const llmModel = resolvedLlmModel || "gemini-2.5-flash";
+    const llmModelFallbackUsed = !resolvedLlmModel;
     const embedBaseUrl = config.embedBaseUrl || "http://localhost:11434";
     const embedModel = config.embedModel || "qwen3-embedding:0.6b";
     const embedDimensions = config.embedDimensions || 1024;
@@ -163,6 +267,9 @@ const agentMemoPlugin = {
     // State directory from env or default
     const stateDir = process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
 
+    console.log(
+      `[AgentMemo] Configuration resolved (shape: ${shape}, llmModel: ${llmModel}, fallbackUsed: ${llmModelFallbackUsed})`
+    );
     console.log("[AgentMemo] Configuration:");
     console.log(`  Slot categories: ${slotCategories.join(", ")}`);
     console.log(`  Qdrant: ${qdrantHost}:${qdrantPort}/${qdrantCollection}`);
