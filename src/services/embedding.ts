@@ -7,7 +7,7 @@ export class EmbeddingClient {
   private config: Pick<MemoryConfig, "embeddingApiUrl" | "timeout"> & { model: string };
   private logger: any;
   private dimensions: number;
-  
+
   constructor(config: { embeddingApiUrl?: string; timeout?: number; dimensions?: number; model?: string }, logger?: any) {
     this.config = {
       embeddingApiUrl: config.embeddingApiUrl || "http://localhost:11434",
@@ -16,6 +16,25 @@ export class EmbeddingClient {
     };
     this.logger = logger || console;
     this.dimensions = config.dimensions || 1024;
+  }
+
+  private resolveEmbeddingEndpoints(rawBaseUrl: string): string[] {
+    const base = (rawBaseUrl || "").trim();
+    const normalizedBase = (base || "http://localhost:11434").replace(/\/+$/, "");
+
+    // If already a full embeddings path, use directly.
+    if (/(\/v1\/embeddings|\/api\/embeddings)\/?$/i.test(normalizedBase)) {
+      return [normalizedBase];
+    }
+
+    // Smart handling for base URL only:
+    // 1) Prefer OpenAI-compatible /v1/embeddings (for proxypal/openai-like services)
+    // 2) Fallback to Ollama /api/embeddings (for backward compatibility)
+    return [`${normalizedBase}/v1/embeddings`, `${normalizedBase}/api/embeddings`];
+  }
+
+  private isOpenAIEmbeddingEndpoint(url: string): boolean {
+    return /\/v1\/embeddings\/?$/i.test(url);
   }
   
   /**
@@ -38,40 +57,67 @@ export class EmbeddingClient {
   private async embedFromApi(text: string): Promise<number[]> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
-    
+
     try {
-      // Ollama API endpoint for embeddings
-      const url = `${this.config.embeddingApiUrl}/api/embeddings`;
-      
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: this.config.model,
-          prompt: text,
-        }),
-        signal: controller.signal,
-      });
-      
+      const endpoints = this.resolveEmbeddingEndpoints(this.config.embeddingApiUrl);
+      let lastError: Error | null = null;
+
+      for (const url of endpoints) {
+        const useOpenAiFormat = this.isOpenAIEmbeddingEndpoint(url);
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(
+            useOpenAiFormat
+              ? {
+                  model: this.config.model,
+                  input: text,
+                }
+              : {
+                  model: this.config.model,
+                  prompt: text,
+                }
+          ),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => "Unknown error");
+          this.logger.error(`[Embedding] HTTP ${response.status} @ ${url}: ${errorText.substring(0, 200)}`);
+
+          // If this endpoint not found and we still have fallback endpoint, continue.
+          if (response.status === 404 && endpoints.length > 1 && url !== endpoints[endpoints.length - 1]) {
+            continue;
+          }
+
+          lastError = new Error(`Embedding API error: ${response.status}`);
+          break;
+        }
+
+        const data = await response.json();
+
+        // Ollama API format: { embedding: [...] }
+        if (data.embedding && Array.isArray(data.embedding)) {
+          clearTimeout(timeoutId);
+          return data.embedding;
+        }
+
+        // OpenAI-compatible format: { data: [{ embedding: [...] }] }
+        if (Array.isArray(data.data) && data.data[0]?.embedding && Array.isArray(data.data[0].embedding)) {
+          clearTimeout(timeoutId);
+          return data.data[0].embedding;
+        }
+
+        this.logger.error(`[Embedding] Unexpected response format: ${JSON.stringify(data).substring(0, 200)}`);
+        lastError = new Error("Invalid embedding response format");
+        break;
+      }
+
       clearTimeout(timeoutId);
-      
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => "Unknown error");
-        this.logger.error(`[Embedding] HTTP ${response.status}: ${errorText.substring(0, 200)}`);
-        throw new Error(`Embedding API error: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      
-      // Ollama API format: { embedding: [0.1, 0.2, ...] }
-      if (data.embedding && Array.isArray(data.embedding)) {
-        return data.embedding;
-      }
-      
-      this.logger.error(`[Embedding] Unexpected response format: ${JSON.stringify(data).substring(0, 200)}`);
-      throw new Error("Invalid embedding response format");
+      throw lastError || new Error("Embedding API error: no endpoint succeeded");
       
     } catch (error: any) {
       if (error.name === "AbortError") {
