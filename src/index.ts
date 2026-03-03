@@ -116,24 +116,24 @@ function findNestedStringKey(
   return walk(input, 0);
 }
 
-function resolvePluginConfig(rawConfig: unknown): {
+function resolveLegacyConfig(rawConfig: unknown): {
   config: AgentMemoConfig;
-  shape: string;
+  source: string;
 } {
   const root = asObject(rawConfig);
 
-  const candidates: Array<{ shape: string; value: Record<string, any> | null }> = [
-    { shape: "api.config", value: root },
-    { shape: "api.config.config", value: asObject(root?.config) },
-    { shape: "api.config.entry.config", value: asObject(root?.entry?.config) },
-    { shape: "api.config.plugin.config", value: asObject(root?.plugin?.config) },
-    { shape: "api.config.value.config", value: asObject(root?.value?.config) },
-    { shape: "api.config.settings.config", value: asObject(root?.settings?.config) },
+  const candidates: Array<{ source: string; value: Record<string, any> | null }> = [
+    { source: "api.config", value: root },
+    { source: "api.config.config", value: asObject(root?.config) },
+    { source: "api.config.entry.config", value: asObject(root?.entry?.config) },
+    { source: "api.config.plugin.config", value: asObject(root?.plugin?.config) },
+    { source: "api.config.value.config", value: asObject(root?.value?.config) },
+    { source: "api.config.settings.config", value: asObject(root?.settings?.config) },
   ];
 
   for (const candidate of candidates) {
     if (hasAnyConfigKey(candidate.value)) {
-      return { config: candidate.value as AgentMemoConfig, shape: candidate.shape };
+      return { config: candidate.value as AgentMemoConfig, source: candidate.source };
     }
   }
 
@@ -141,11 +141,31 @@ function resolvePluginConfig(rawConfig: unknown): {
   if (asObject(root?.config)) {
     return {
       config: asObject(root?.config) as AgentMemoConfig,
-      shape: "api.config.config (wrapper-fallback)",
+      source: "api.config.config (wrapper-fallback)",
     };
   }
 
-  return { config: (root || {}) as AgentMemoConfig, shape: "api.config (empty/fallback)" };
+  return { config: {}, source: "default" };
+}
+
+function resolvePluginConfig(
+  api: OpenClawPluginApi,
+  pluginId: string
+): { config: AgentMemoConfig; source: string } {
+  const pluginConfig = asObject((api as any).pluginConfig);
+  if (hasAnyConfigKey(pluginConfig)) {
+    return { config: pluginConfig as AgentMemoConfig, source: "pluginConfig" };
+  }
+
+  const legacyEntryConfig = asObject((api as any)?.config?.plugins?.entries?.[pluginId]?.config);
+  if (hasAnyConfigKey(legacyEntryConfig)) {
+    return {
+      config: legacyEntryConfig as AgentMemoConfig,
+      source: "api.config.plugins.entries[pluginId].config",
+    };
+  }
+
+  return resolveLegacyConfig((api as any).config);
 }
 
 // ============================================================================
@@ -237,11 +257,13 @@ const agentMemoPlugin = {
 
   register(api: OpenClawPluginApi) {
     // ----------------------------------------------------------------
-    // Get configuration from api.config with defaults
-    // Handle wrapped/unwrapped/nested config objects robustly
+    // Resolve config with priority:
+    // 1) api.pluginConfig
+    // 2) api.config.plugins.entries[pluginId].config (compat)
+    // 3) legacy api.config shapes
     // ----------------------------------------------------------------
-    const rawConfig = api.config as any;
-    const { config, shape } = resolvePluginConfig(rawConfig);
+    const rawConfig = (api as any).config;
+    const { config, source } = resolvePluginConfig(api, "agent-smart-memo");
 
     const slotCategories = config.slotCategories || DEFAULT_CATEGORIES;
     const qdrantHost = config.qdrantHost || "localhost";
@@ -268,7 +290,7 @@ const agentMemoPlugin = {
     const stateDir = process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
 
     console.log(
-      `[AgentMemo] Configuration resolved (shape: ${shape}, llmModel: ${llmModel}, fallbackUsed: ${llmModelFallbackUsed})`
+      `[AgentMemo] Startup config: source=${source}, resolved llmModel: ${llmModel}, fallbackUsed=${llmModelFallbackUsed}`
     );
     console.log("[AgentMemo] Configuration:");
     console.log(`  Slot categories: ${slotCategories.join(", ")}`);
