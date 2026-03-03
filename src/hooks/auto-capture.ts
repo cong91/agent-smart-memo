@@ -590,6 +590,28 @@ function extractWithPatterns(text: string): { slot_updates: any[]; slot_removals
 
 
 
+async function embedWithMetadataCompat(
+  embedding: any,
+  text: string,
+): Promise<{ vector: number[]; metadata: Record<string, any> }> {
+  if (embedding && typeof embedding.embedDetailed === "function") {
+    return embedding.embedDetailed(text);
+  }
+
+  const vector = await embedding.embed(text);
+  return {
+    vector,
+    metadata: {
+      embedding_chunked: false,
+      embedding_chunks_count: 1,
+      embedding_chunking_strategy: "array_batch_weighted_avg",
+      embedding_model: "unknown",
+      embedding_max_tokens: 0,
+      embedding_safe_chunk_tokens: 0,
+    },
+  };
+}
+
 async function storeSemanticMemory(
   qdrant: QdrantClient,
   embedding: EmbeddingClient,
@@ -603,7 +625,8 @@ async function storeSemanticMemory(
     return;
   }
 
-  const vector = await embedding.embed(normalizedText);
+  const embeddingResult = await embedWithMetadataCompat(embedding as any, normalizedText);
+  const vector = embeddingResult.vector;
   await qdrant.upsert([
     {
       id: crypto.randomUUID(),
@@ -611,6 +634,11 @@ async function storeSemanticMemory(
       payload: {
         text: normalizedText,
         namespace,
+        ...embeddingResult.metadata,
+        metadata: {
+          ...((payloadExtras as any)?.metadata || {}),
+          ...embeddingResult.metadata,
+        },
         timestamp: Date.now(),
         ...payloadExtras,
       },
@@ -1031,9 +1059,12 @@ export function registerAutoCapture(
             
             console.log(`[AutoCapture] Generating embedding for: "${text.substring(0, 60)}..."`);
             let vector: number[];
+            let embeddingMeta: Record<string, any> = {};
             try {
-              vector = await embedding.embed(text);
-              console.log(`[AutoCapture] Embedding generated, vector length: ${vector.length}`);
+              const embeddingResult = await embedWithMetadataCompat(embedding as any, text);
+              vector = embeddingResult.vector;
+              embeddingMeta = embeddingResult.metadata;
+              console.log(`[AutoCapture] Embedding generated, vector length: ${vector.length}, chunks=${embeddingResult.metadata.embedding_chunks_count}`);
             } catch (embedError: any) {
               console.error(`[AutoCapture] Embedding failed for memory ${i + 1}:`, embedError.message);
               continue;
@@ -1068,6 +1099,10 @@ export function registerAutoCapture(
                     source_agent: agentId,
                     source_type: "auto_capture",
                     userId: userId,
+                    ...embeddingMeta,
+                    metadata: {
+                      ...embeddingMeta,
+                    },
                     timestamp: Date.now(),
                     updatedAt: Date.now(),
                   },
@@ -1091,6 +1126,10 @@ export function registerAutoCapture(
                     source_agent: agentId,
                     source_type: "auto_capture",
                     userId: userId,
+                    ...embeddingMeta,
+                    metadata: {
+                      ...embeddingMeta,
+                    },
                     timestamp: Date.now(),
                   },
                 }]);

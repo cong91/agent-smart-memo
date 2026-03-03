@@ -77,8 +77,21 @@ export function createMemoryStoreTool(
         // Use provided namespace or default
         const namespace = (params.namespace as MemoryNamespace) || defaultNamespace;
         
-        // Generate embedding
-        const vector = await embedding.embed(text);
+        // Generate embedding (chunking + weighted average)
+        const embeddingResult = typeof (embedding as any).embedDetailed === "function"
+          ? await (embedding as any).embedDetailed(text)
+          : {
+              vector: await embedding.embed(text),
+              metadata: {
+                embedding_chunked: false,
+                embedding_chunks_count: 1,
+                embedding_chunking_strategy: "array_batch_weighted_avg",
+                embedding_model: "unknown",
+                embedding_max_tokens: 0,
+                embedding_safe_chunk_tokens: 0,
+              },
+            };
+        const vector = embeddingResult.vector;
         
         // Check for duplicates
         const candidates = await qdrant.search(vector, 5, {
@@ -101,7 +114,11 @@ export function createMemoryStoreTool(
               source_type: "tool_call" as const,
               sessionId: params.sessionId || null,
               userId: params.userId || null,
-              metadata: params.metadata || {},
+              metadata: {
+                ...(params.metadata || {}),
+                ...embeddingResult.metadata,
+              },
+              ...embeddingResult.metadata,
               timestamp: Date.now(),
               updatedAt: Date.now(),
             },
@@ -128,7 +145,11 @@ export function createMemoryStoreTool(
             source_type: "tool_call" as const,
             sessionId: params.sessionId || null,
             userId: params.userId || null,
-            metadata: params.metadata || {},
+            metadata: {
+              ...(params.metadata || {}),
+              ...embeddingResult.metadata,
+            },
+            ...embeddingResult.metadata,
             timestamp: Date.now(),
           },
         };
