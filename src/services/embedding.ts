@@ -71,12 +71,14 @@ export class EmbeddingClient {
   }
 
   private getSafeChunkTokens(maxTokens: number): number {
-    return Math.max(256, Math.floor(maxTokens * 0.95));
+    return Math.max(256, Math.min(6000, Math.floor(maxTokens * 0.73)));
   }
 
-  // Approximation: ~4 chars/token for multilingual text (safe-enough fallback)
+  // Conservative estimate: use the higher of whitespace token count and char-based heuristic
   private estimateTokens(text: string): number {
-    return Math.max(1, Math.ceil(text.length / 4));
+    const whitespaceTokens = text.trim() ? text.trim().split(/\s+/).length : 0;
+    const charTokens = Math.ceil(text.length / 4);
+    return Math.max(1, Math.max(whitespaceTokens, charTokens));
   }
 
   private normalizeInput(input: string | string[]): string[] {
@@ -184,10 +186,11 @@ export class EmbeddingClient {
     const maxTokens = this.getModelMaxTokens();
 
     // Retry by shrinking chunk size for 400 context-length failures
-    const safetyMultipliers = [0.95, 0.85, 0.75, 0.6];
+    const baseSafeChunkTokens = this.getSafeChunkTokens(maxTokens);
+    const safetyMultipliers = [1, 0.8, 0.65, 0.5, 0.4, 0.3];
 
     for (const mul of safetyMultipliers) {
-      const safeChunkTokens = Math.max(256, Math.floor(maxTokens * mul));
+      const safeChunkTokens = Math.max(256, Math.floor(baseSafeChunkTokens * mul));
       const chunks = this.chunkTextBySafeTokens(mergedText, safeChunkTokens);
       const chunkWeights = chunks.map((c) => this.estimateTokens(c));
 
@@ -293,6 +296,19 @@ export class EmbeddingClient {
         return vectors;
       } catch (error: any) {
         lastError = error;
+
+        const isContextLength400 =
+          error instanceof EmbeddingHttpError &&
+          error.status === 400 &&
+          /context length|maximum context|too many tokens|exceed|8192|token/i.test(
+            error.bodyPreview || ""
+          );
+
+        if (isContextLength400) {
+          // Let outer adaptive-shrink retry handle this immediately.
+          throw error;
+        }
+
         if (
           error instanceof EmbeddingHttpError &&
           error.status === 404 &&
