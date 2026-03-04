@@ -87,8 +87,12 @@ export function createMemoryStoreTool(
                 embedding_chunks_count: 1,
                 embedding_chunking_strategy: "array_batch_weighted_avg",
                 embedding_model: "unknown",
+                embedding_model_key: "unknown",
+                embedding_provider: "auto",
                 embedding_max_tokens: 0,
                 embedding_safe_chunk_tokens: 0,
+                embedding_source: "docs",
+                embedding_fallback_hash: false,
               },
             };
         const vector = embeddingResult.vector;

@@ -8,6 +8,7 @@ interface QdrantConfig {
   timeout?: number;
   maxRetries?: number;
   retryDelay?: number;
+  dimensionRouteMap?: Record<number, string>;
 }
 
 type QdrantPointId = string | number | Record<string, unknown>;
@@ -20,11 +21,12 @@ interface ScrollResponse {
 }
 
 /**
- * Qdrant client with retry logic
+ * Qdrant client with retry + dimension fail-fast
  */
 export class QdrantClient {
-  private config: Required<QdrantConfig>;
+  private config: Required<Omit<QdrantConfig, "dimensionRouteMap">> & { dimensionRouteMap: Record<number, string> };
   private logger: any;
+  private cachedCollectionVectorSize: number | null = null;
 
   constructor(config: QdrantConfig, logger?: any) {
     this.config = {
@@ -35,6 +37,7 @@ export class QdrantClient {
       timeout: config.timeout || 30000,
       maxRetries: config.maxRetries || 3,
       retryDelay: config.retryDelay || 1000,
+      dimensionRouteMap: config.dimensionRouteMap || {},
     };
     this.logger = logger || console;
   }
@@ -47,14 +50,7 @@ export class QdrantClient {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  /**
-   * Make request with retry
-   */
-  private async request(
-    path: string,
-    options: RequestInit,
-    attempt: number = 1
-  ): Promise<any> {
+  private async request(path: string, options: RequestInit, attempt: number = 1): Promise<any> {
     const url = `http://${this.config.host}:${this.config.port}${path}`;
 
     try {
@@ -113,6 +109,41 @@ export class QdrantClient {
     return this.request(`/collections/${this.config.collection}`, { method: "GET" });
   }
 
+  private extractCollectionVectorSize(info: any): number {
+    const vectors = info?.result?.config?.params?.vectors;
+    if (typeof vectors?.size === "number") return vectors.size;
+
+    if (vectors && typeof vectors === "object") {
+      const first = Object.values(vectors)[0] as any;
+      if (typeof first?.size === "number") return first.size;
+    }
+
+    return this.config.vectorSize;
+  }
+
+  async getCollectionVectorSize(forceRefresh = false): Promise<number> {
+    if (!forceRefresh && this.cachedCollectionVectorSize) return this.cachedCollectionVectorSize;
+
+    const info = await this.getCollectionInfo();
+    const size = this.extractCollectionVectorSize(info);
+    this.cachedCollectionVectorSize = size;
+    return size;
+  }
+
+  private async failFastOnDimensionMismatch(actualDim: number, operation: string): Promise<void> {
+    const expected = await this.getCollectionVectorSize();
+    if (actualDim === expected) return;
+
+    const routeCollection = this.config.dimensionRouteMap[actualDim];
+    const routeHint = routeCollection
+      ? `Route hint: use collection '${routeCollection}' for dim=${actualDim}.`
+      : "No safe route configured. Update collection/vector size or embedding model.";
+
+    throw new Error(
+      `[Qdrant][DIMENSION_MISMATCH] op=${operation} collection=${this.config.collection} expected=${expected} got=${actualDim}. ${routeHint}`
+    );
+  }
+
   async countPoints(exact = true): Promise<number> {
     const res = await this.request(`/collections/${this.config.collection}/points/count`, {
       method: "POST",
@@ -126,6 +157,7 @@ export class QdrantClient {
     const exists = await this.collectionExists();
     if (exists) {
       this.logger.info(`[Qdrant] Collection ${this.config.collection} already exists`);
+      this.cachedCollectionVectorSize = await this.getCollectionVectorSize(true);
       return;
     }
 
@@ -145,6 +177,7 @@ export class QdrantClient {
       }),
     });
 
+    this.cachedCollectionVectorSize = this.config.vectorSize;
     this.logger.info(`[Qdrant] Collection created successfully`);
 
     await this.createPayloadIndex("namespace", "keyword");
@@ -170,6 +203,10 @@ export class QdrantClient {
   }
 
   async upsert(points: Point[]): Promise<void> {
+    for (const point of points) {
+      await this.failFastOnDimensionMismatch(point.vector.length, "upsert");
+    }
+
     await this.request(`/collections/${this.config.collection}/points`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -180,8 +217,11 @@ export class QdrantClient {
   async updateVectors(points: Array<{ id: any; vector: number[] }>): Promise<void> {
     if (points.length === 0) return;
 
+    for (const point of points) {
+      await this.failFastOnDimensionMismatch(point.vector.length, "updateVectors");
+    }
+
     try {
-      // Preferred endpoint
       await this.request(`/collections/${this.config.collection}/points/vectors`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -192,15 +232,12 @@ export class QdrantClient {
       this.logger.warn(`[Qdrant] updateVectors endpoint failed, fallback to upsert /points: ${error.message}`);
     }
 
-    // Fallback (payload must be preserved by caller using upsert payload)
     throw new Error("updateVectors endpoint unsupported");
   }
 
   async setPayload(payloadById: Array<{ id: string; payload: Record<string, any> }>): Promise<void> {
     if (payloadById.length === 0) return;
 
-    // set_payload can set same payload for selected points; here we do per-point via upsert fallback pattern in caller.
-    // Keep method for future expansion.
     for (const row of payloadById) {
       await this.request(`/collections/${this.config.collection}/points/payload`, {
         method: "POST",
@@ -253,11 +290,9 @@ export class QdrantClient {
     };
   }
 
-  async search(
-    vector: number[],
-    limit: number = 5,
-    filter?: Record<string, any>
-  ): Promise<ScoredPoint[]> {
+  async search(vector: number[], limit: number = 5, filter?: Record<string, any>): Promise<ScoredPoint[]> {
+    await this.failFastOnDimensionMismatch(vector.length, "search");
+
     const body: any = {
       vector,
       limit,

@@ -1,12 +1,16 @@
-import { MemoryConfig } from "../types.js";
+import { EmbeddingCapabilityRegistry, type EmbeddingModelCapability, type CapabilitySource } from "./embedding-capability-registry.js";
 
 export interface EmbeddingMetadata {
   embedding_chunked: boolean;
   embedding_chunks_count: number;
   embedding_chunking_strategy: "array_batch_weighted_avg";
   embedding_model: string;
+  embedding_model_key: string;
+  embedding_provider: "openai" | "ollama" | "auto";
   embedding_max_tokens: number;
   embedding_safe_chunk_tokens: number;
+  embedding_source: CapabilitySource;
+  embedding_fallback_hash: boolean;
 }
 
 export interface EmbeddingResult {
@@ -26,29 +30,54 @@ class EmbeddingHttpError extends Error {
   }
 }
 
+interface EmbeddingDefaults {
+  seedMaxTokens: number;
+  safeRatio: number;
+  reserveTokens: number;
+  vectorDim: number;
+}
+
+const MODEL_DEFAULTS: Record<string, EmbeddingDefaults> = {
+  "text-embedding-3-small": { seedMaxTokens: 8192, safeRatio: 0.82, reserveTokens: 64, vectorDim: 1536 },
+  "text-embedding-3-large": { seedMaxTokens: 8192, safeRatio: 0.82, reserveTokens: 64, vectorDim: 3072 },
+  "qwen3-embedding:0.6b": { seedMaxTokens: 8192, safeRatio: 0.76, reserveTokens: 80, vectorDim: 1024 },
+  "qwen3-embedding:4b": { seedMaxTokens: 8192, safeRatio: 0.72, reserveTokens: 128, vectorDim: 2560 },
+};
+
 /**
- * Embedding service client
+ * Embedding service client with runtime capability calibration + persistence
  */
 export class EmbeddingClient {
-  private config: Pick<MemoryConfig, "embeddingApiUrl" | "timeout"> & { model: string };
-  private logger: any;
-  private dimensions: number;
-
-  // conservative model context windows
-  private readonly modelMaxTokens: Record<string, number> = {
-    "text-embedding-3-small": 8192,
-    "text-embedding-3-large": 8192,
-    "qwen3-embedding:0.6b": 8192,
+  private config: {
+    embeddingApiUrl: string;
+    timeout: number;
+    model: string;
+    dimensions: number;
+    stateDir: string;
   };
+  private logger: any;
 
-  constructor(config: { embeddingApiUrl?: string; timeout?: number; dimensions?: number; model?: string }, logger?: any) {
+  private registry: EmbeddingCapabilityRegistry;
+  private capability!: EmbeddingModelCapability;
+  private activeEndpoint = "";
+  private provider: "openai" | "ollama" | "auto" = "auto";
+  private modelKey = "";
+  private readonly ready: Promise<void>;
+
+  constructor(config: { embeddingApiUrl?: string; timeout?: number; dimensions?: number; model?: string; stateDir?: string }, logger?: any) {
+    const model = config.model || "qwen3-embedding:0.6b";
+    const defaults = MODEL_DEFAULTS[model] || { seedMaxTokens: 4096, safeRatio: 0.72, reserveTokens: 96, vectorDim: config.dimensions || 1024 };
+
     this.config = {
       embeddingApiUrl: config.embeddingApiUrl || "http://localhost:11434",
       timeout: config.timeout || 30000,
-      model: config.model || "qwen3-embedding:0.6b",
+      model,
+      dimensions: config.dimensions || defaults.vectorDim,
+      stateDir: config.stateDir || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`,
     };
     this.logger = logger || console;
-    this.dimensions = config.dimensions || 1024;
+    this.registry = new EmbeddingCapabilityRegistry(this.config.stateDir, this.logger);
+    this.ready = this.initializeCapabilities();
   }
 
   private resolveEmbeddingEndpoints(rawBaseUrl: string): string[] {
@@ -62,19 +91,32 @@ export class EmbeddingClient {
     return [`${normalizedBase}/v1/embeddings`, `${normalizedBase}/api/embeddings`];
   }
 
-  private isOpenAIEmbeddingEndpoint(url: string): boolean {
-    return /\/v1\/embeddings\/?$/i.test(url);
+  private detectProvider(endpoint: string): "openai" | "ollama" | "auto" {
+    if (/\/v1\/embeddings\/?$/i.test(endpoint)) return "openai";
+    if (/\/api\/embeddings\/?$/i.test(endpoint)) return "ollama";
+    return "auto";
   }
 
-  private getModelMaxTokens(): number {
-    return this.modelMaxTokens[this.config.model] || 4096;
+  private getDefaults(): EmbeddingDefaults {
+    return MODEL_DEFAULTS[this.config.model] || {
+      seedMaxTokens: 4096,
+      safeRatio: 0.72,
+      reserveTokens: 96,
+      vectorDim: this.config.dimensions,
+    };
   }
 
-  private getSafeChunkTokens(maxTokens: number): number {
-    return Math.max(256, Math.min(6000, Math.floor(maxTokens * 0.73)));
+  private buildModelKey(provider: string, endpoint: string): string {
+    return `${provider}::${endpoint}::${this.config.model}`;
   }
 
-  // Conservative estimate: use the higher of whitespace token count and char-based heuristic
+  private tokenBudget(): number {
+    const discovered = Math.max(256, this.capability.discoveredMaxTokens || this.capability.seedMaxTokens);
+    const rawBudget = Math.floor(discovered * this.capability.safeRatio) - this.capability.reserveTokens;
+    return Math.max(128, rawBudget);
+  }
+
+  // conservative estimator: whitespace tokens + char heuristic safeguard
   private estimateTokens(text: string): number {
     const whitespaceTokens = text.trim() ? text.trim().split(/\s+/).length : 0;
     const charTokens = Math.ceil(text.length / 4);
@@ -96,33 +138,59 @@ export class EmbeddingClient {
     return [];
   }
 
-  private chunkTextBySafeTokens(text: string, safeChunkTokens: number): string[] {
-    const maxChars = Math.max(1, safeChunkTokens * 4);
-    if (text.length <= maxChars) return [text];
+  private splitIntoSentences(text: string): string[] {
+    return text
+      .split(/(?<=[\n\.!?;])\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  private chunkTextByTokenBudget(text: string, tokenBudget: number): string[] {
+    if (this.estimateTokens(text) <= tokenBudget) return [text];
+
+    const sentences = this.splitIntoSentences(text);
+    if (sentences.length === 0) return [text.slice(0, Math.max(64, tokenBudget * 4))];
 
     const chunks: string[] = [];
-    let cursor = 0;
+    let current = "";
 
-    while (cursor < text.length) {
-      const remaining = text.length - cursor;
-      if (remaining <= maxChars) {
-        chunks.push(text.slice(cursor).trim());
-        break;
+    const pushCurrent = () => {
+      const trimmed = current.trim();
+      if (trimmed.length > 0) chunks.push(trimmed);
+      current = "";
+    };
+
+    for (const sentence of sentences) {
+      const next = current ? `${current} ${sentence}` : sentence;
+      if (this.estimateTokens(next) <= tokenBudget) {
+        current = next;
+        continue;
       }
 
-      let end = cursor + maxChars;
-      const window = text.slice(cursor, end);
-      const lastBreak = Math.max(window.lastIndexOf("\n"), window.lastIndexOf(" "));
-      if (lastBreak > Math.floor(maxChars * 0.5)) {
-        end = cursor + lastBreak;
+      if (current) pushCurrent();
+
+      if (this.estimateTokens(sentence) <= tokenBudget) {
+        current = sentence;
+        continue;
       }
 
-      const chunk = text.slice(cursor, end).trim();
-      if (chunk.length > 0) chunks.push(chunk);
-      cursor = Math.max(end, cursor + 1);
+      // ultra-long sentence fallback: split by words with hard guard
+      const words = sentence.split(/\s+/).filter(Boolean);
+      let wordChunk = "";
+      for (const word of words) {
+        const candidate = wordChunk ? `${wordChunk} ${word}` : word;
+        if (this.estimateTokens(candidate) <= tokenBudget) {
+          wordChunk = candidate;
+        } else {
+          if (wordChunk) chunks.push(wordChunk);
+          wordChunk = word;
+        }
+      }
+      if (wordChunk) chunks.push(wordChunk);
     }
 
-    return chunks.filter((c) => c.length > 0);
+    if (current) pushCurrent();
+    return chunks.filter((c) => this.estimateTokens(c) <= tokenBudget + 2);
   }
 
   private l2Normalize(vector: number[]): number[] {
@@ -153,6 +221,194 @@ export class EmbeddingClient {
     return this.l2Normalize(out);
   }
 
+  private isContextLengthError(error: unknown): error is EmbeddingHttpError {
+    if (!(error instanceof EmbeddingHttpError)) return false;
+    if (![400, 413, 422, 500].includes(error.status)) return false;
+    return /context length|maximum context|too many tokens|exceed|token limit|8192|input length/i.test(error.bodyPreview || "");
+  }
+
+  private extractTokenLimitFromError(errorText: string): number | null {
+    const normalized = errorText || "";
+    const patterns = [
+      /(?:context length|maximum context|token(?:s)? limit)[^\d]*(\d{3,6})/i,
+      /exceeds[^\d]*(\d{3,6})/i,
+      /max(?:imum)?[^\d]*(\d{3,6})\s*tokens?/i,
+    ];
+
+    for (const p of patterns) {
+      const m = normalized.match(p);
+      if (m?.[1]) {
+        const parsed = Number(m[1]);
+        if (Number.isFinite(parsed) && parsed >= 128) return parsed;
+      }
+    }
+
+    return null;
+  }
+
+  private async updateCapabilityFromContextError(error: EmbeddingHttpError): Promise<void> {
+    const parsed = this.extractTokenLimitFromError(error.bodyPreview || "");
+    const current = this.capability.discoveredMaxTokens || this.capability.seedMaxTokens;
+    const fallback = Math.floor(current * 0.85);
+    const discovered = Math.max(128, parsed ? Math.min(current, parsed) : fallback);
+
+    if (discovered < current) {
+      this.capability = {
+        ...this.capability,
+        discoveredMaxTokens: discovered,
+        updatedAt: new Date().toISOString(),
+        source: "error-feedback",
+      };
+      await this.registry.set(this.modelKey, this.capability);
+      this.logger.warn(`[Embedding] capability refined from error-feedback: ${current} -> ${discovered} (modelKey=${this.modelKey})`);
+    }
+  }
+
+  private async initializeCapabilities(): Promise<void> {
+    const endpoints = this.resolveEmbeddingEndpoints(this.config.embeddingApiUrl);
+    const endpoint = endpoints[0];
+    const provider = this.detectProvider(endpoint);
+    this.activeEndpoint = endpoint;
+    this.provider = provider;
+    this.modelKey = this.buildModelKey(provider, endpoint);
+
+    const defaults = this.getDefaults();
+    const existing = await this.registry.get(this.modelKey);
+
+    this.capability = existing || {
+      seedMaxTokens: defaults.seedMaxTokens,
+      discoveredMaxTokens: defaults.seedMaxTokens,
+      safeRatio: defaults.safeRatio,
+      reserveTokens: defaults.reserveTokens,
+      vectorDim: defaults.vectorDim,
+      updatedAt: new Date().toISOString(),
+      source: "docs",
+    };
+
+    if (!existing) {
+      await this.registry.set(this.modelKey, this.capability);
+    }
+
+    // light startup calibration (max 1/day)
+    const ageMs = Date.now() - new Date(this.capability.updatedAt).getTime();
+    if (!Number.isFinite(ageMs) || ageMs > 24 * 60 * 60 * 1000) {
+      await this.calibrateRuntimeCapability();
+    }
+  }
+
+  private async readEndpointMetadata(): Promise<Partial<EmbeddingModelCapability>> {
+    const endpoint = this.activeEndpoint;
+    const provider = this.detectProvider(endpoint);
+
+    try {
+      if (provider === "ollama") {
+        const base = endpoint.replace(/\/api\/embeddings\/?$/i, "");
+        const res = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(4000) });
+        if (!res.ok) return {};
+        const json = await res.json();
+        const models = Array.isArray(json?.models) ? json.models : [];
+        const modelInfo = models.find((m: any) => m?.model === this.config.model || m?.name === this.config.model);
+        const dimFromModel = Number(modelInfo?.details?.embedding_length || modelInfo?.details?.dimensions || 0);
+        return {
+          vectorDim: dimFromModel > 0 ? dimFromModel : undefined,
+        };
+      }
+    } catch {
+      // best effort metadata
+    }
+
+    return {};
+  }
+
+  private async probeWithinBudget(tokenTarget: number): Promise<boolean> {
+    const sample = Array(tokenTarget).fill("t").join(" ");
+    try {
+      await this.embedChunksFromApi([sample]);
+      return true;
+    } catch (error) {
+      if (this.isContextLengthError(error)) return false;
+      throw error;
+    }
+  }
+
+  private async probeContextWindow(seed: number): Promise<number> {
+    const clamp = (n: number) => Math.max(128, Math.floor(n));
+    let low = 256;
+    let high = clamp(seed);
+
+    // stepped exploration (safe / low spam)
+    const steps = [0.5, 0.75, 1, 1.1].map((x) => clamp(seed * x));
+    for (const s of steps) {
+      let ok = false;
+      try {
+        ok = await this.probeWithinBudget(s);
+      } catch {
+        continue;
+      }
+
+      if (ok) {
+        low = Math.max(low, s);
+        high = Math.max(high, s);
+      } else {
+        high = Math.min(high, s);
+        break;
+      }
+    }
+
+    // binary search refinement, max 5 probes
+    for (let i = 0; i < 5 && high - low > 96; i++) {
+      const mid = clamp((low + high) / 2);
+      const ok = await this.probeWithinBudget(mid);
+      if (ok) low = mid;
+      else high = mid;
+    }
+
+    return clamp(low);
+  }
+
+  async calibrateRuntimeCapability(force = false): Promise<void> {
+    await this.ready;
+
+    if (!force) {
+      const ageMs = Date.now() - new Date(this.capability.updatedAt).getTime();
+      if (Number.isFinite(ageMs) && ageMs < 30 * 60 * 1000) return;
+    }
+
+    const metadata = await this.readEndpointMetadata();
+    const seed = Math.max(256, metadata.discoveredMaxTokens || metadata.seedMaxTokens || this.capability.seedMaxTokens);
+
+    let discovered = this.capability.discoveredMaxTokens;
+    try {
+      discovered = await this.probeContextWindow(seed);
+    } catch (error: any) {
+      this.logger.warn(`[Embedding] calibration probe skipped: ${error.message}`);
+    }
+
+    this.capability = {
+      ...this.capability,
+      discoveredMaxTokens: Math.max(128, discovered || seed),
+      vectorDim: metadata.vectorDim || this.capability.vectorDim,
+      updatedAt: new Date().toISOString(),
+      source: "probe",
+    };
+
+    await this.registry.set(this.modelKey, this.capability);
+
+    this.logger.info(
+      `[Embedding] calibrated capability modelKey=${this.modelKey} maxTokens=${this.capability.discoveredMaxTokens} vectorDim=${this.capability.vectorDim}`
+    );
+  }
+
+  async getVectorDimensionHint(): Promise<number> {
+    await this.ready;
+    return this.capability.vectorDim || this.config.dimensions;
+  }
+
+  async getModelKey(): Promise<string> {
+    await this.ready;
+    return this.modelKey;
+  }
+
   /**
    * Backward-compatible method
    */
@@ -162,9 +418,11 @@ export class EmbeddingClient {
   }
 
   /**
-   * New method with chunking + metadata
+   * New method with calibration-aware adaptive chunking + metadata
    */
   async embedDetailed(text: string | string[]): Promise<EmbeddingResult> {
+    await this.ready;
+
     const normalizedInput = this.normalizeInput(text);
 
     if (normalizedInput.length === 0) {
@@ -176,26 +434,35 @@ export class EmbeddingClient {
           embedding_chunks_count: 0,
           embedding_chunking_strategy: "array_batch_weighted_avg",
           embedding_model: this.config.model,
-          embedding_max_tokens: this.getModelMaxTokens(),
-          embedding_safe_chunk_tokens: this.getSafeChunkTokens(this.getModelMaxTokens()),
+          embedding_model_key: this.modelKey,
+          embedding_provider: this.provider,
+          embedding_max_tokens: this.capability.discoveredMaxTokens,
+          embedding_safe_chunk_tokens: this.tokenBudget(),
+          embedding_source: this.capability.source,
+          embedding_fallback_hash: true,
         },
       };
     }
 
     const mergedText = normalizedInput.join("\n\n");
-    const maxTokens = this.getModelMaxTokens();
+    const baseBudget = this.tokenBudget();
 
-    // Retry by shrinking chunk size for 400 context-length failures
-    const baseSafeChunkTokens = this.getSafeChunkTokens(maxTokens);
+    // retry policy with progressive budget reduction
     const safetyMultipliers = [1, 0.8, 0.65, 0.5, 0.4, 0.3];
 
     for (const mul of safetyMultipliers) {
-      const safeChunkTokens = Math.max(256, Math.floor(baseSafeChunkTokens * mul));
-      const chunks = this.chunkTextBySafeTokens(mergedText, safeChunkTokens);
+      const safeChunkTokens = Math.max(128, Math.floor(baseBudget * mul));
+      const chunks = this.chunkTextByTokenBudget(mergedText, safeChunkTokens);
       const chunkWeights = chunks.map((c) => this.estimateTokens(c));
+
+      // hard guard: never send chunk above discovered budget
+      if (chunks.some((chunk) => this.estimateTokens(chunk) > safeChunkTokens + 2)) {
+        continue;
+      }
 
       try {
         const vectors = await this.embedChunksFromApi(chunks);
+
         const vector = vectors.length === 1
           ? this.l2Normalize(vectors[0])
           : this.weightedAverage(vectors, chunkWeights);
@@ -207,25 +474,25 @@ export class EmbeddingClient {
             embedding_chunks_count: chunks.length,
             embedding_chunking_strategy: "array_batch_weighted_avg",
             embedding_model: this.config.model,
-            embedding_max_tokens: maxTokens,
+            embedding_model_key: this.modelKey,
+            embedding_provider: this.provider,
+            embedding_max_tokens: this.capability.discoveredMaxTokens,
             embedding_safe_chunk_tokens: safeChunkTokens,
+            embedding_source: this.capability.source,
+            embedding_fallback_hash: false,
           },
         };
       } catch (error: any) {
-        const isContextLength400 =
-          error instanceof EmbeddingHttpError &&
-          error.status === 400 &&
-          /context length|maximum context|too many tokens|exceed/i.test(error.bodyPreview || "");
-
-        if (isContextLength400) {
+        if (this.isContextLengthError(error)) {
+          await this.updateCapabilityFromContextError(error);
           this.logger.warn(
-            `[Embedding] 400 context-length detected. Retry with smaller chunk size (safeChunkTokens=${safeChunkTokens})`
+            `[Embedding] context-length detected. retry with smaller chunk budget=${safeChunkTokens} modelKey=${this.modelKey}`
           );
           continue;
         }
 
         // non context-length error -> fallback hash immediately
-        this.logger.warn(`[Embedding] API failed, fallback to hash embedding: ${error.message}`);
+        this.logger.error(`[Embedding][HIGH] API failed; fallback to hash embedding. reason=${error.message} modelKey=${this.modelKey}`);
         return {
           vector: this.embedFromHash(mergedText),
           metadata: {
@@ -233,24 +500,32 @@ export class EmbeddingClient {
             embedding_chunks_count: chunks.length,
             embedding_chunking_strategy: "array_batch_weighted_avg",
             embedding_model: this.config.model,
-            embedding_max_tokens: maxTokens,
+            embedding_model_key: this.modelKey,
+            embedding_provider: this.provider,
+            embedding_max_tokens: this.capability.discoveredMaxTokens,
             embedding_safe_chunk_tokens: safeChunkTokens,
+            embedding_source: this.capability.source,
+            embedding_fallback_hash: true,
           },
         };
       }
     }
 
-    // Exhausted shrink retries -> fallback hash
-    this.logger.warn("[Embedding] Exhausted context-length retries, fallback to hash embedding");
+    // exhausted retries
+    this.logger.error(`[Embedding][CRITICAL] exhausted context retries; fallback hash modelKey=${this.modelKey}`);
     return {
       vector: this.embedFromHash(mergedText),
       metadata: {
         embedding_chunked: true,
-        embedding_chunks_count: Math.max(1, this.chunkTextBySafeTokens(mergedText, this.getSafeChunkTokens(maxTokens)).length),
+        embedding_chunks_count: Math.max(1, this.chunkTextByTokenBudget(mergedText, Math.max(128, Math.floor(baseBudget * 0.3))).length),
         embedding_chunking_strategy: "array_batch_weighted_avg",
         embedding_model: this.config.model,
-        embedding_max_tokens: maxTokens,
-        embedding_safe_chunk_tokens: this.getSafeChunkTokens(maxTokens),
+        embedding_model_key: this.modelKey,
+        embedding_provider: this.provider,
+        embedding_max_tokens: this.capability.discoveredMaxTokens,
+        embedding_safe_chunk_tokens: Math.max(128, Math.floor(baseBudget * 0.3)),
+        embedding_source: this.capability.source,
+        embedding_fallback_hash: true,
       },
     };
   }
@@ -264,24 +539,15 @@ export class EmbeddingClient {
     let lastError: Error | null = null;
 
     for (const url of endpoints) {
-      const useOpenAiFormat = this.isOpenAIEmbeddingEndpoint(url);
+      const useOpenAiFormat = /\/v1\/embeddings\/?$/i.test(url);
 
       try {
-        if (process.env.EMBEDDING_DEBUG === "1") {
-          this.logger.debug?.(
-            `[Embedding] API request schema: ${JSON.stringify({
-              endpoint: url,
-              model: this.config.model,
-              chunksCount: chunks.length,
-              firstChunkChars: chunks[0]?.length || 0,
-              firstChunkTokensEst: this.estimateTokens(chunks[0] || ""),
-              format: useOpenAiFormat ? "openai" : "ollama",
-            })}`
-          );
-        }
+        this.activeEndpoint = url;
+        this.provider = this.detectProvider(url);
+        this.modelKey = this.buildModelKey(this.provider, this.activeEndpoint);
 
         if (!useOpenAiFormat && chunks.length > 1) {
-          // Ollama /api/embeddings: no array batch support in one call (do sequential fallback)
+          // Ollama /api/embeddings: sequential requests
           const vectors: number[][] = [];
           for (const c of chunks) {
             vectors.push(await this.embedSingle(url, false, c));
@@ -297,34 +563,19 @@ export class EmbeddingClient {
       } catch (error: any) {
         lastError = error;
 
-        const isContextLength400 =
-          error instanceof EmbeddingHttpError &&
-          error.status === 400 &&
-          /context length|maximum context|too many tokens|exceed|8192|token/i.test(
-            error.bodyPreview || ""
-          );
-
-        if (isContextLength400) {
-          // Let outer adaptive-shrink retry handle this immediately.
+        if (this.isContextLengthError(error)) {
           throw error;
         }
 
         if (
           error instanceof EmbeddingHttpError &&
-          error.status === 404 &&
+          [404, 429].includes(error.status) &&
           endpoints.length > 1 &&
           url !== endpoints[endpoints.length - 1]
         ) {
           continue;
         }
-        if (
-          error instanceof EmbeddingHttpError &&
-          error.status === 429
-        ) {
-          // endpoint is rate-limited; try next endpoint if any
-          continue;
-        }
-        // for other errors we still may try next endpoint
+
         if (url !== endpoints[endpoints.length - 1]) {
           continue;
         }
@@ -339,8 +590,7 @@ export class EmbeddingClient {
     const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
 
     try {
-      // 429 retry/backoff
-      const max429Retries = 4;
+      const max429Retries = 3;
       for (let attempt = 0; attempt <= max429Retries; attempt++) {
         const response = await fetch(url, {
           method: "POST",
@@ -354,16 +604,15 @@ export class EmbeddingClient {
         });
 
         if (response.status === 429 && attempt < max429Retries) {
-          const backoffMs = Math.min(8000, 500 * Math.pow(2, attempt));
-          this.logger.warn(`[Embedding] 429 rate limit. Retry in ${backoffMs}ms (attempt ${attempt + 1}/${max429Retries})`);
+          const backoffMs = Math.min(4000, 300 * Math.pow(2, attempt));
+          this.logger.warn(`[Embedding] 429 rate limit. retry in ${backoffMs}ms (attempt ${attempt + 1}/${max429Retries})`);
           await new Promise((r) => setTimeout(r, backoffMs));
           continue;
         }
 
         if (!response.ok) {
           const errorText = await response.text().catch(() => "Unknown error");
-          const preview = errorText.substring(0, 300);
-          this.logger.error(`[Embedding] HTTP ${response.status} @ ${url}: ${preview}`);
+          const preview = errorText.substring(0, 500);
           throw new EmbeddingHttpError(response.status, preview);
         }
 
@@ -413,15 +662,12 @@ export class EmbeddingClient {
     }, 0);
 
     const embedding: number[] = [];
-    for (let i = 0; i < this.dimensions; i++) {
+    for (let i = 0; i < this.config.dimensions; i++) {
       embedding.push(Math.sin(hash + i) * 0.1);
     }
     return this.l2Normalize(embedding);
   }
 
-  /**
-   * Calculate cosine similarity
-   */
   cosineSimilarity(a: number[], b: number[]): number {
     if (a.length !== b.length) {
       throw new Error("Vector dimensions mismatch");

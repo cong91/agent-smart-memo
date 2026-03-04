@@ -14,6 +14,8 @@ import { SlotDB } from "./db/slot-db.js";
 import { QdrantClient } from "./services/qdrant.js";
 import { EmbeddingClient } from "./services/embedding.js";
 import { DeduplicationService } from "./services/dedupe.js";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 // Tool modules
 import { registerSlotTools } from "./tools/slot-tools.js";
@@ -307,18 +309,57 @@ const agentMemoPlugin = {
     const slotDB = new SlotDB(stateDir);
 
     // Single Qdrant collection for all agents - namespace isolation via payload
+    const routeMapRaw = process.env.EMBEDDING_DIM_ROUTE_MAP || "";
+    const routeMap = routeMapRaw
+      .split(",")
+      .map((pair) => pair.trim())
+      .filter(Boolean)
+      .reduce<Record<number, string>>((acc, pair) => {
+        const [dimText, collection] = pair.split(":").map((x) => x?.trim());
+        const dim = Number(dimText);
+        if (Number.isFinite(dim) && dim > 0 && collection) {
+          acc[dim] = collection;
+        }
+        return acc;
+      }, {});
+
     const qdrant = new QdrantClient({
       host: qdrantHost,
       port: qdrantPort,
       collection: qdrantCollection,
       vectorSize: qdrantVectorSize,
+      dimensionRouteMap: routeMap,
     });
 
     const embedding = new EmbeddingClient({
       embeddingApiUrl: embedBaseUrl,
       model: embedModel,
       dimensions: embedDimensions,
+      stateDir,
     });
+
+    embedding.calibrateRuntimeCapability(true).catch((error: any) => {
+      console.warn(`[AgentMemo] Embedding calibration skipped: ${error.message}`);
+    });
+
+    try {
+      mkdirSync(join(stateDir, "plugin-data", "agent-smart-memo"), { recursive: true });
+      writeFileSync(
+        join(stateDir, "plugin-data", "agent-smart-memo", "runtime-manifest.json"),
+        JSON.stringify({
+          pluginId: "agent-smart-memo",
+          distEntry: import.meta.url,
+          generatedAt: new Date().toISOString(),
+          embedModel,
+          embedBaseUrl,
+          embedDimensions,
+          qdrantCollection,
+        }, null, 2),
+        "utf8"
+      );
+    } catch (error: any) {
+      console.warn(`[AgentMemo] Failed to write runtime manifest: ${error.message}`);
+    }
 
     const dedupe = new DeduplicationService(0.95, console);
 

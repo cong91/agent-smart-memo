@@ -11,7 +11,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "node --experimental-sqlite tests/test.js",
+    "test": "npx tsx tests/test.ts",
     "clean": "rm -rf dist"
   },
   "dependencies": {
