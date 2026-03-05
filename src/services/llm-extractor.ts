@@ -44,6 +44,46 @@ interface OpenAIChatResponse {
 
 const EMPTY_RESULT: ExtractionResult = { slot_updates: [], slot_removals: [], memories: [] };
 
+function isVietnameseContext(text: string): boolean {
+  const lower = text.toLowerCase();
+  return /(\banh\b|\bem\b|\bđã\b|\bkhông\b|\bvì sao\b|\byêu cầu\b|\bsửa\b|\blỗi\b|\btriển khai\b|\bbáo cáo\b|\bduyệt\b)/i.test(lower)
+    || /[ăâđêôơưáàảãạắằẳẵặấầẩẫậéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]/i.test(text);
+}
+
+function looksLikeRawTranscript(text: string): boolean {
+  const t = text.trim();
+  if (!t) return true;
+  const hardPatterns = [
+    /^\(no output\)/i,
+    /"type"\s*:\s*"toolCall"/i,
+    /"name"\s*:\s*"exec"/i,
+    /"name"\s*:\s*"read"/i,
+    /```[\s\S]*```/,
+    /^\s*#\s+/m,
+    /^\s*\|.+\|\s*$/m,
+    /curl\s+-s\s+"http:\/\/localhost:3001/i,
+    /mapped \{\/trading\//i,
+  ];
+  if (hardPatterns.some((p) => p.test(t))) return true;
+  if (t.length > 1200) return true;
+  return false;
+}
+
+function englishHeavy(text: string): boolean {
+  const letters = (text.match(/[A-Za-z]/g) || []).length;
+  const viMarks = (text.match(/[ăâđêôơưáàảãạắằẳẵặấầẩẫậéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]/gi) || []).length;
+  return letters > 40 && viMarks === 0;
+}
+
+function sanitizeExtractedMemories(memories: ExtractionResult['memories'], vnContext: boolean): ExtractionResult['memories'] {
+  return memories
+    .map((m) => ({ ...m, text: String(m.text || "").replace(/\s+/g, " ").trim() }))
+    .filter((m) => m.text.length >= 20)
+    .filter((m) => !looksLikeRawTranscript(m.text))
+    .filter((m) => !(vnContext && englishHeavy(m.text)))
+    .slice(0, 12);
+}
+
 /**
  * Extract facts using LLM via OpenAI Completions API
  */
@@ -105,9 +145,11 @@ export async function extractWithLLM(
     
     const slotUpdates = (result.slot_updates || []).filter((s: any) => s.confidence >= 0.7);
     const slotRemovals = result.slot_removals || [];
-    const memories = (result.memories || []).filter((m: any) => m.confidence >= 0.7);
+    const vnContext = isVietnameseContext(conversation);
+    const rawMemories = (result.memories || []).filter((m: any) => m.confidence >= 0.7);
+    const memories = sanitizeExtractedMemories(rawMemories, vnContext);
     
-    console.log(`[LLMExtractor] Extracted ${slotUpdates.length} updates, ${slotRemovals.length} removals, ${memories.length} memories`);
+    console.log(`[LLMExtractor] Extracted ${slotUpdates.length} updates, ${slotRemovals.length} removals, ${memories.length}/${rawMemories.length} memories (sanitized)`);
     
     return { slot_updates: slotUpdates, slot_removals: slotRemovals, memories: memories };
   } catch (error) {
@@ -120,9 +162,9 @@ function buildSystemInstruction(distillMode: DistillMode = "general"): string {
   return `You are a memory extraction assistant. Analyze conversations and extract/update/invalidate facts.
 
 LANGUAGE RULE (PRIORITY):
-- Prefer Vietnamese output when conversation contains Vietnamese or Vietnam-context operational commands.
-- For mixed-language conversations, output memories/slot values in the dominant operational language; prioritize Vietnamese if ambiguous.
-- Keep original technical tokens (endpoints, code symbols, config keys) unchanged.
+- If conversation contains Vietnamese context, memories[].text and slot_updates[].value MUST be in Vietnamese.
+- Never output English narrative for VN context; only keep technical tokens unchanged (endpoint, symbol, config key).
+- For mixed-language conversations with VN context, prefer Vietnamese and translate narrative meaning into Vietnamese.
 - Do NOT normalize Vietnamese content into English.
 
 YOUR 3 JOBS:
