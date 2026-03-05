@@ -149,7 +149,23 @@ NAMESPACES: agent.<agent>.working_memory | agent.<agent>.lessons | agent.<agent>
 
 CONFIDENCE: 0.9-1.0 explicit, 0.8-0.9 strongly implied, 0.7-0.8 inferred. Below 0.7: skip.
 
-DO NOT extract: trading data, prices, indicators, routine greetings, empty content.
+DO NOT extract:
+- raw tool transcripts (exec/read/edit output), command logs, stack traces, file listings, HTTP payload dumps
+- routine greetings, insults, pure emotional reactions without decision impact
+- duplicate restatements of already-stored facts
+
+CONTEXT EXTRACTION PRIORITY (highest -> lowest):
+1) explicit decisions/approvals/rejections
+2) constraints/rules/non-negotiables
+3) configuration/runtime changes with concrete values
+4) task ownership, status transitions, blockers, ETAs
+5) risk/guard adjustments and rollout/rollback conditions
+
+CONTEXT QUALITY RULES:
+- If a statement only makes sense with nearby messages, rewrite as self-contained memory with the missing context included.
+- Prefer "because" clauses and trigger-condition clauses in memories (why + when it applies).
+- Keep causal links: "A changed -> B failed -> action C".
+- If conflicting statements exist in the same window, keep the latest and invalidate the stale slot.
 
 RESPONSE FORMAT (JSON only):
 {
@@ -159,11 +175,12 @@ RESPONSE FORMAT (JSON only):
 }
 
 DISTILL RULES (CRITICAL - apply to ALL outputs):
-- DISTILL, never summarize. Remove all decoration/noise; keep only decision-grade core.
-- memories[].text must be terse atomic fragments. No filler words, no transitions.
-- Ban phrases in output: 'in conclusion', 'moreover', 'therefore', 'overall', 'it seems', 'anh ấy nói rằng', 'đã thảo luận về'.
-- Preserve critical numbers, thresholds, symbols, time windows.
-- slot_updates[].value: concise, actionable. Not "anh Công muốn backup trước khi sửa" → "Rule: PHẢI backup config trước khi sửa openclaw.json"
+- DISTILL, never summarize. Remove decoration/noise; keep decision-grade core.
+- memories[].text MUST be self-contained and operationally useful in isolation.
+- memory format target: "Context -> Decision/Rule -> Condition/Scope" in 1-2 sentences.
+- Preserve critical numbers, thresholds, symbols, time windows, and environment scope (prod/staging, mode paper/live).
+- If content is mostly noise, return no memory instead of weak memory.
+- slot_updates[].value: concise, actionable. Not "anh Công muốn backup trước khi sửa" -> "Rule: PHẢI backup config trước khi sửa openclaw.json"
 
 MODE-SPECIFIC DISTILL:
 ${getDistillDirective(distillMode)}
@@ -227,11 +244,13 @@ ${conversation}
 ---
 
 Instructions:
-1. Extract NEW facts from conversation
-2. Check currentSlots - mark any OUTDATED/COMPLETED items in slot_removals
-3. Especially audit volatile project keys: project.current, project.current_task, project.current_epic, project.phase, project.status
-4. If a slot value should be UPDATED (not just removed), put new value in slot_updates
-5. Return JSON only`;
+1. Extract NEW facts from conversation with context preservation.
+2. Check currentSlots and mark any OUTDATED/COMPLETED items in slot_removals.
+3. Audit volatile project keys: project.current, project.current_task, project.current_epic, project.phase, project.status.
+4. If a slot value should be UPDATED (not just removed), put new value in slot_updates.
+5. For each memory, include WHY/CONDITION when available (not just WHAT).
+6. Reject noisy/tool-dump content aggressively; quality over quantity.
+7. Return JSON only.`;
 }
 
 /**
