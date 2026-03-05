@@ -13,7 +13,7 @@ import { QdrantClient } from "../services/qdrant.js";
 import { EmbeddingClient } from "../services/embedding.js";
 import { DeduplicationService } from "../services/dedupe.js";
 import { extractWithLLM, checkLLMHealth, DistillMode } from "../services/llm-extractor.js";
-import { NoiseFilter, getAutoCaptureNamespace, isTraderAgent, MemoryNamespace, normalizeUserId, isLearningContent } from "../shared/memory-config.js";
+import { getAutoCaptureNamespace, MemoryNamespace, normalizeUserId, isLearningContent, toCoreAgent, evaluateNoiseV2, normalizeNamespace } from "../shared/memory-config.js";
 
 // Event type constant for type-safe event handling
 const AGENT_END_EVENT = "agent_end" as const;
@@ -263,7 +263,7 @@ export async function injectMemoryContext(
  */
 function inferDistillMode(agentId: string, text: string): DistillMode {
   // Trader agent → market signals
-  if (isTraderAgent(agentId)) {
+  if (toCoreAgent(agentId) === "trader") {
     return "market_signal";
   }
 
@@ -627,12 +627,14 @@ async function storeSemanticMemory(
 
   const embeddingResult = await embedWithMetadataCompat(embedding as any, normalizedText);
   const vector = embeddingResult.vector;
+  const sourceAgent = String((payloadExtras as any)?.source_agent || "assistant");
   await qdrant.upsert([
     {
       id: crypto.randomUUID(),
       vector,
       payload: {
         text: normalizedText,
+        agent: toCoreAgent(sourceAgent),
         namespace,
         ...embeddingResult.metadata,
         metadata: {
@@ -721,7 +723,7 @@ export async function captureMidTermSummary(
     expires_at: new Date(now + MID_TERM_TTL_MS).toISOString(),
   });
 
-  await storeSemanticMemory(qdrant, embedding, daySummary, "session_summaries", {
+  await storeSemanticMemory(qdrant, embedding, daySummary, normalizeNamespace("shared.runbooks", input.agentId), {
     date: dateKey,
     session_id: input.sessionKey,
     source_agent: input.agentId,
@@ -745,7 +747,7 @@ export async function captureLongTermPattern(
     return false;
   }
 
-  await storeSemanticMemory(qdrant, embedding, input.text, "market_patterns", {
+  await storeSemanticMemory(qdrant, embedding, input.text, normalizeNamespace(`agent.${toCoreAgent(input.agentId)}.lessons`, input.agentId), {
     entity_type: "principle",
     source_agent: input.agentId,
     source_type: "auto_capture",
@@ -888,14 +890,7 @@ export function registerAutoCapture(
         return;
       }
       
-      // Initialize noise filter for this agent
-      const noiseFilter = new NoiseFilter(agentId);
-      
-      // Check if agent is blocked
-      if (noiseFilter.isBlocked()) {
-        console.log(`[AutoCapture] Skipping: agent "${agentId}" is in blocklist`);
-        return;
-      }
+      // 5-agent capture eligibility: no coarse blocklist applied by default
       
       // Get conversation messages from event with type-safe access
       const messages = (typedEvent?.messages ?? []) as ConversationMessage[];
@@ -964,28 +959,15 @@ export function registerAutoCapture(
         .map((m: any) => extractMessageText(m.content))
         .join(" ");
       
-      // V2 NAMESPACE ROUTING LOGIC
-      let targetNamespace: MemoryNamespace = getAutoCaptureNamespace(agentId, fullText);
-      
-      // PRIORITY 1: Learning content gets special routing - NEVER filtered as noise
-      if (isLearningContent(fullText)) {
-        targetNamespace = "agent_learnings" as MemoryNamespace;
-        console.log(`[AutoCapture] Learning content detected → routing to agent_learnings`);
-      }
-      // PRIORITY 2: Project context detection for scrum/fullstack/creator agents
-      else if (isProjectContextContent(fullText) && ["scrum", "fullstack", "creator"].includes(agentId)) {
-        targetNamespace = "project_context" as MemoryNamespace;
-        console.log(`[AutoCapture] Project context detected → routing to project_context`);
-      }
-      
-      // Check if content should be skipped (noise filter) - but learning content bypasses this
-      if (!isLearningContent(fullText) && noiseFilter.shouldSkip(fullText)) {
-        if (isTraderAgent(agentId)) {
-          console.log(`[AutoCapture] Skipping trading content for trader agent - use memory_store tool to save trading data`);
-        } else {
-          console.log(`[AutoCapture] Skipping: content matches noise patterns`);
-        }
-        return;
+      // Namespace router v2 (ASM-5)
+      const coreAgent = toCoreAgent(agentId);
+      let targetNamespace: MemoryNamespace = getAutoCaptureNamespace(coreAgent, fullText);
+
+      // Noise policy v2: quarantine into noise.filtered instead of skipping
+      const noiseEval = evaluateNoiseV2(fullText, "auto_capture");
+      if (!isLearningContent(fullText) && noiseEval.isNoise) {
+        targetNamespace = "noise.filtered" as MemoryNamespace;
+        console.log(`[AutoCapture] Noise detected (score=${noiseEval.score}) → quarantine namespace=noise.filtered`);
       }
       
       console.log(`[AutoCapture] Processing ${captureWindowMessages.length} recent messages for ${agentId} (namespace: ${targetNamespace})`);
@@ -1095,8 +1077,9 @@ export function registerAutoCapture(
                   vector,
                   payload: {
                     text,
+                    agent: coreAgent,
                     namespace: targetNamespace,
-                    source_agent: agentId,
+                    source_agent: coreAgent,
                     source_type: "auto_capture",
                     userId: userId,
                     ...embeddingMeta,
@@ -1122,8 +1105,9 @@ export function registerAutoCapture(
                   vector,
                   payload: {
                     text,
+                    agent: coreAgent,
                     namespace: targetNamespace,
-                    source_agent: agentId,
+                    source_agent: coreAgent,
                     source_type: "auto_capture",
                     userId: userId,
                     ...embeddingMeta,

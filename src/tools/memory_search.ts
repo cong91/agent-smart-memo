@@ -1,7 +1,7 @@
 import { QdrantClient } from "../services/qdrant.js";
 import { EmbeddingClient } from "../services/embedding.js";
 import { SearchParams, ToolResult, ScoredPoint, MemoryNamespace } from "../types.js";
-import { getAgentNamespaces } from "../shared/memory-config.js";
+import { getAgentNamespaces, getNamespaceWeight } from "../shared/memory-config.js";
 
 export const memorySearchSchema = {
   type: "object",
@@ -127,9 +127,23 @@ export function createMemorySearchTool(
         const vector = await embedding.embed(query);
         const results = await qdrant.search(vector, limit, filter);
         
-        // Filter by minScore
-        const filtered = results.filter((r: ScoredPoint) => r.score >= minScore);
-        
+        // Exclude quarantined noise and apply namespace-priority weighting
+        const weighted = results
+          .filter((r: ScoredPoint) => (r.payload?.namespace || "") !== "noise.filtered")
+          .map((r: ScoredPoint) => {
+            const ns = String(r.payload?.namespace || "");
+            const weight = getNamespaceWeight(agentId, ns);
+            return {
+              ...r,
+              _rawScore: r.score,
+              score: Math.min(1, r.score * weight),
+            } as ScoredPoint & { _rawScore: number };
+          })
+          .sort((a: any, b: any) => b.score - a.score);
+
+        // Filter by minScore on weighted score
+        const filtered = weighted.filter((r: ScoredPoint) => r.score >= minScore);
+
         if (filtered.length === 0) {
           return {
             content: [{ type: "text", text: "No relevant memories found." }],

@@ -181,8 +181,10 @@ export class QdrantClient {
     this.logger.info(`[Qdrant] Collection created successfully`);
 
     await this.createPayloadIndex("namespace", "keyword");
+    await this.createPayloadIndex("agent", "keyword");
     await this.createPayloadIndex("source_agent", "keyword");
     await this.createPayloadIndex("source_type", "keyword");
+    await this.createPayloadIndex("timestamp", "integer");
     await this.createPayloadIndex("userId", "keyword");
   }
 

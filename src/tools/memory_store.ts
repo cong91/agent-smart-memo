@@ -2,6 +2,7 @@ import { QdrantClient } from "../services/qdrant.js";
 import { EmbeddingClient } from "../services/embedding.js";
 import { DeduplicationService } from "../services/dedupe.js";
 import { StoreParams, ToolResult, Point, MemoryNamespace } from "../types.js";
+import { normalizeNamespace, toCoreAgent, evaluateNoiseV2 } from "../shared/memory-config.js";
 
 export const memoryStoreSchema = {
   type: "object",
@@ -12,7 +13,7 @@ export const memoryStoreSchema = {
     },
     namespace: {
       type: "string",
-      description: "Namespace for organization (default: 'agent_decisions')",
+      description: "Namespace for organization (default: 'shared.project_context')",
     },
     sessionId: {
       type: "string",
@@ -74,8 +75,17 @@ export function createMemoryStoreTool(
           };
         }
         
-        // Use provided namespace or default
-        const namespace = (params.namespace as MemoryNamespace) || defaultNamespace;
+        // Namespace router + normalization policy (ASM-5)
+        const agentId = params.agentId || "assistant";
+        const sourceAgent = toCoreAgent(agentId);
+        const requestedNamespace = (params.namespace as string) || defaultNamespace;
+        let namespace = normalizeNamespace(requestedNamespace, sourceAgent);
+
+        // Noise policy v2: quarantine noisy content into noise.filtered
+        const noise = evaluateNoiseV2(text, "tool_call");
+        if (noise.isNoise) {
+          namespace = "noise.filtered" as MemoryNamespace;
+        }
         
         // Generate embedding (chunking + weighted average)
         const embeddingResult = typeof (embedding as any).embedDetailed === "function"
@@ -114,16 +124,20 @@ export function createMemoryStoreTool(
             payload: {
               text,
               namespace,
-              source_agent: params.agentId || "unknown",
+              agent: sourceAgent,
+              source_agent: sourceAgent,
               source_type: "tool_call" as const,
               sessionId: params.sessionId || null,
               userId: params.userId || null,
               metadata: {
                 ...(params.metadata || {}),
                 ...embeddingResult.metadata,
+                noise_score: noise.score,
+                noise_matched_patterns: noise.matchedPatterns,
               },
               ...embeddingResult.metadata,
               timestamp: Date.now(),
+              noise_score: noise.score,
               updatedAt: Date.now(),
             },
           };
@@ -145,16 +159,20 @@ export function createMemoryStoreTool(
           payload: {
             text,
             namespace,
-            source_agent: params.agentId || "unknown",
+            agent: sourceAgent,
+            source_agent: sourceAgent,
             source_type: "tool_call" as const,
             sessionId: params.sessionId || null,
             userId: params.userId || null,
             metadata: {
               ...(params.metadata || {}),
               ...embeddingResult.metadata,
+              noise_score: noise.score,
+              noise_matched_patterns: noise.matchedPatterns,
             },
             ...embeddingResult.metadata,
             timestamp: Date.now(),
+            noise_score: noise.score,
           },
         };
         

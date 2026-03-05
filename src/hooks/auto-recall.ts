@@ -9,7 +9,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { SlotDB } from "../db/slot-db.js";
 import { QdrantClient } from "../services/qdrant.js";
 import { EmbeddingClient } from "../services/embedding.js";
-import { getAgentNamespaces, MemoryNamespace, normalizeUserId } from "../shared/memory-config.js";
+import { getAgentNamespaces, MemoryNamespace, normalizeUserId, getNamespaceWeight } from "../shared/memory-config.js";
 
 // Token budget for different context types
 const TOKEN_BUDGETS = {
@@ -156,7 +156,7 @@ function formatSemanticMemories(memories: Array<{ text: string; score: number; n
  */
 function buildNamespaceFilter(namespaces: MemoryNamespace[]): any {
   if (namespaces.length === 0) {
-    return { must: [{ key: "namespace", match: { value: "agent_decisions" } }] };
+    return { must: [{ key: "namespace", match: { value: "shared.project_context" } }] };
   }
   
   if (namespaces.length === 1) {
@@ -292,14 +292,22 @@ export async function gatherRecallContext(
       // Search for relevant memories
       const results = await qdrant.search(vector, 5, namespaceFilter);
       
-      // Filter by score and format
+      // Exclude quarantined noise + apply namespace priority weighting
       const relevantMemories = results
+        .filter((r: any) => (r.payload?.namespace || "") !== "noise.filtered")
+        .map((r: any) => {
+          const ns = String(r.payload?.namespace || "");
+          const weight = getNamespaceWeight(ctx.agentId, ns);
+          const weighted = Math.min(1, r.score * weight);
+          return {
+            text: r.payload?.text || "",
+            score: weighted,
+            namespace: ns,
+          };
+        })
         .filter((r: any) => r.score >= 0.7)
-        .map((r: any) => ({ 
-          text: r.payload?.text || "", 
-          score: r.score,
-          namespace: r.payload?.namespace,
-        }))
+        .sort((a: any, b: any) => b.score - a.score)
+        .slice(0, 5)
         .filter((m: any) => m.text.length > 0);
       
       semanticMemoriesXml = formatSemanticMemories(relevantMemories);

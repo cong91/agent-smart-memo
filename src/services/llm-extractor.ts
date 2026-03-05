@@ -119,7 +119,11 @@ export async function extractWithLLM(
 function buildSystemInstruction(distillMode: DistillMode = "general"): string {
   return `You are a memory extraction assistant. Analyze conversations and extract/update/invalidate facts.
 
-LANGUAGE RULE: Extract in the SAME language as the input. Do NOT translate.
+LANGUAGE RULE (PRIORITY):
+- Prefer Vietnamese output when conversation contains Vietnamese or Vietnam-context operational commands.
+- For mixed-language conversations, output memories/slot values in the dominant operational language; prioritize Vietnamese if ambiguous.
+- Keep original technical tokens (endpoints, code symbols, config keys) unchanged.
+- Do NOT normalize Vietnamese content into English.
 
 YOUR 3 JOBS:
 1. EXTRACT new facts → slot_updates
@@ -141,7 +145,7 @@ SLOT INVALIDATION (NEW - MOST IMPORTANT):
 - Be aggressive about removing outdated project/task status slots
 
 CATEGORIES: profile, preferences, project, environment, custom
-NAMESPACES: agent_decisions, user_profile, project_context, trading_signals
+NAMESPACES: agent.<agent>.working_memory | agent.<agent>.lessons | agent.<agent>.decisions | shared.project_context | shared.rules_slotdb | shared.runbooks | noise.filtered
 
 CONFIDENCE: 0.9-1.0 explicit, 0.8-0.9 strongly implied, 0.7-0.8 inferred. Below 0.7: skip.
 
@@ -151,7 +155,7 @@ RESPONSE FORMAT (JSON only):
 {
   "slot_updates": [{"key": "project.current_task", "value": "new task", "confidence": 0.9, "category": "project"}],
   "slot_removals": [{"key": "project.current_task", "reason": "Task completed per conversation"}],
-  "memories": [{"text": "fact description", "namespace": "project_context", "confidence": 0.85}]
+  "memories": [{"text": "fact description", "namespace": "shared.project_context", "confidence": 0.85}]
 }
 
 DISTILL RULES (CRITICAL - apply to ALL outputs):

@@ -208,7 +208,7 @@ const agentMemoPlugin = {
       },
       qdrantCollection: {
         type: "string",
-        description: "Qdrant collection name (default: mrc_bot_memory)",
+        description: "Qdrant collection name (default: mrc_bot)",
       },
       qdrantVectorSize: {
         type: "number",
@@ -270,7 +270,7 @@ const agentMemoPlugin = {
     const slotCategories = config.slotCategories || DEFAULT_CATEGORIES;
     const qdrantHost = config.qdrantHost || "localhost";
     const qdrantPort = config.qdrantPort || 6333;
-    const qdrantCollection = config.qdrantCollection || "mrc_bot_memory";
+    const qdrantCollection = config.qdrantCollection || "mrc_bot";
     const qdrantVectorSize = config.qdrantVectorSize || 1024;
     const llmBaseUrl = config.llmBaseUrl || "http://localhost:8317/v1";
     const llmApiKey = config.llmApiKey || "proxypal-local";
@@ -366,8 +366,8 @@ const agentMemoPlugin = {
     // ----------------------------------------------------------------
     // Register Qdrant tools from modules
     // ----------------------------------------------------------------
-    const memorySearchTool = createMemorySearchTool(qdrant, embedding, "agent_decisions");
-    const memoryStoreTool = createMemoryStoreTool(qdrant, embedding, dedupe, "agent_decisions");
+    const memorySearchTool = createMemorySearchTool(qdrant, embedding, "shared.project_context");
+    const memoryStoreTool = createMemoryStoreTool(qdrant, embedding, dedupe, "shared.project_context");
 
     api.registerTool(memorySearchTool);
     api.registerTool(memoryStoreTool);
