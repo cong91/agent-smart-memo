@@ -1,209 +1,222 @@
 /**
  * Shared Memory Configuration
- * Single source of truth for namespace routing and agent mapping
+ * Source of truth for namespace routing, noise policy v2, and recall weighting
  */
 
-/** Valid namespace types for memory organization */
+export const CORE_AGENTS = ["assistant", "scrum", "fullstack", "trader", "creator"] as const;
+export type CoreAgent = (typeof CORE_AGENTS)[number];
+
+/** New normalized namespace model (ASM-5) */
 export type MemoryNamespace =
+  | `agent.${CoreAgent}.working_memory`
+  | `agent.${CoreAgent}.lessons`
+  | `agent.${CoreAgent}.decisions`
+  | "shared.project_context"
+  | "shared.rules_slotdb"
+  | "shared.runbooks"
+  | "noise.filtered";
+
+/** Legacy namespaces kept for migration compatibility */
+export type LegacyNamespace =
   | "agent_decisions"
   | "user_profile"
   | "project_context"
   | "trading_signals"
   | "agent_learnings"
-  | "system_rules";
+  | "system_rules"
+  | "session_summaries"
+  | "market_patterns"
+  | "default";
 
-/**
- * Maps agent IDs to their allowed namespaces.
- * First namespace is the default storage target for auto-capture.
- * All listed namespaces are searchable by auto-recall.
- */
-export const AGENT_NAMESPACE_MAP: Record<string, MemoryNamespace[]> = {
-  assistant: ["agent_decisions", "user_profile", "agent_learnings"],
-  scrum: ["agent_decisions", "project_context", "agent_learnings"],
-  fullstack: ["agent_decisions", "project_context", "agent_learnings"],
-  creator: ["agent_decisions", "project_context", "agent_learnings"],
-  trader: ["trading_signals", "agent_decisions", "agent_learnings"],
+const LEGACY_TO_NEW_NAMESPACE: Partial<Record<LegacyNamespace, MemoryNamespace>> = {
+  agent_decisions: "agent.assistant.decisions",
+  user_profile: "shared.project_context",
+  project_context: "shared.project_context",
+  trading_signals: "agent.trader.decisions",
+  agent_learnings: "agent.assistant.lessons",
+  system_rules: "shared.rules_slotdb",
+  default: "agent.assistant.working_memory",
 };
 
-/** Default namespaces for agents not in the map */
-export const DEFAULT_NAMESPACES: MemoryNamespace[] = ["agent_decisions"];
+export function normalizeNamespace(value: string | null | undefined, fallbackAgent: string = "assistant"): MemoryNamespace {
+  const agent = toCoreAgent(fallbackAgent);
+  if (!value) return `agent.${agent}.working_memory`;
 
-/** Agents that should be completely blocked from auto-capture (empty - no agents blocked by default) */
-export const DEFAULT_AGENT_BLOCKLIST = new Set<string>([
-  // "trader" is NOT in this list - trader is allowed for auto-capture
-  // Add agent IDs here if they should never be auto-captured
-]);
+  if ((value as MemoryNamespace) === "shared.project_context"
+    || (value as MemoryNamespace) === "shared.rules_slotdb"
+    || (value as MemoryNamespace) === "shared.runbooks"
+    || (value as MemoryNamespace) === "noise.filtered"
+    || /^agent\.(assistant|scrum|fullstack|trader|creator)\.(working_memory|lessons|decisions)$/.test(value)
+  ) {
+    return value as MemoryNamespace;
+  }
 
-/** General noise patterns - applied to all agents */
-export const NOISE_PATTERNS: RegExp[] = [
-  /^\s*ok\s*$/i,
-  /^\s*yes\s*$/i,
-  /^\s*no\s*$/i,
-  /^\s*thanks?\s*$/i,
-  /^\s*\.\s*$/,
-  /^\s*\?\s*$/,
-  /^\/\w+/, // command-like messages
-];
+  const mapped = LEGACY_TO_NEW_NAMESPACE[value as LegacyNamespace];
+  if (mapped) return mapped;
 
-/** Trading-specific noise patterns - used to skip auto-capture for trading content */
-export const TRADING_NOISE_PATTERNS: RegExp[] = [
-  /\b(buy|sell|long|short|entry|exit|stop.?loss|take.?profit)\b/i,
-  /\b(BTC|ETH|SOL|DOGE|XRP|USDT|BNB|ADA|DOT|AVAX|LINK|UNI|AAVE|COMP|SUSHI|CRV)\b/,
-  /\b\d+(\.\d+)?%\b/, // percentage
-  /\b(signal|position|leverage|liquidation|margin|futures|perp)\b/i,
-  /\b(candle|support|resistance|breakout|pullback|rsi|macd|ema|sma|bollinger)\b/i,
-  /\b(breakout|consolidation|accumulation|distribution)\b/i,
-  /\b(tp|sl)\s*\d+/i, // TP/SL with numbers
-  /\b@\s*\d+[\d,.]*/i, // @ price format
-];
+  return `agent.${agent}.working_memory`;
+}
 
-/** Learning content detection patterns */
-export const LEARNING_PATTERNS: RegExp[] = [
-  /\b(learned|lesson|takeaway|kinh nghiệm|bài học|rút ra)\b/i,
-  /\b(fixed|resolved|root cause|nguyên nhân gốc|đã sửa)\b/i,
-  /\b(best practice|pattern|anti-pattern|gotcha)\b/i,
-  /\b(never|always|remember to|lưu ý|nhớ rằng)\b/i,
-];
-
-/**
- * Check if content contains learning patterns
- * Used to route valuable lessons to agent_learnings namespace
- */
-export function isLearningContent(text: string): boolean {
-  return LEARNING_PATTERNS.some(p => p.test(text));
+export function toCoreAgent(agentId: string): CoreAgent {
+  const normalized = (agentId || "").toLowerCase();
+  if ((CORE_AGENTS as readonly string[]).includes(normalized)) {
+    return normalized as CoreAgent;
+  }
+  return "assistant";
 }
 
 /**
- * Get namespaces for an agent.
- * Returns mapped namespaces or DEFAULT_NAMESPACES if agent not in map.
+ * Revert coarse blocklist change:
+ * keep all 5 core agents eligible for capture by default.
+ */
+export const DEFAULT_AGENT_BLOCKLIST = new Set<string>([]);
+
+/**
+ * Per-agent recall namespaces (noise.filtered is intentionally excluded)
  */
 export function getAgentNamespaces(agentId: string): MemoryNamespace[] {
-  return AGENT_NAMESPACE_MAP[agentId] || DEFAULT_NAMESPACES;
+  const agent = toCoreAgent(agentId);
+  return [
+    `agent.${agent}.working_memory`,
+    `agent.${agent}.lessons`,
+    `agent.${agent}.decisions`,
+    "shared.project_context",
+    "shared.rules_slotdb",
+    "shared.runbooks",
+  ];
 }
 
-/**
- * Get the default storage namespace for auto-capture.
- * For trader: always "agent_decisions" (trading data goes through memory_store)
- * For others: first namespace in their map
- * 
- * V2 UPDATE: Now accepts text parameter to detect learning content
- * Learning content is routed to "agent_learnings" namespace
- */
 export function getAutoCaptureNamespace(agentId: string, text?: string): MemoryNamespace {
-  // Learning content gets special routing - highest priority
-  if (text && isLearningContent(text)) {
-    return "agent_learnings";
+  const agent = toCoreAgent(agentId);
+  const content = String(text || "");
+
+  if (isLearningContent(content)) return `agent.${agent}.lessons`;
+  if (isDecisionContent(content)) return `agent.${agent}.decisions`;
+  if (isRunbookContent(content)) return "shared.runbooks";
+  if (isRuleContent(content)) return "shared.rules_slotdb";
+  if (isProjectContextContent(content)) return "shared.project_context";
+  return `agent.${agent}.working_memory`;
+}
+
+/** Recall priority weighting policy */
+const SHARED_NAMESPACE_WEIGHT: Record<"shared.project_context" | "shared.rules_slotdb" | "shared.runbooks", number> = {
+  "shared.project_context": 1.08,
+  "shared.rules_slotdb": 1.18,
+  "shared.runbooks": 1.12,
+};
+
+export function getNamespaceWeight(agentId: string, namespace: string): number {
+  const agent = toCoreAgent(agentId);
+  if (namespace === `agent.${agent}.decisions`) return 1.25;
+  if (namespace === `agent.${agent}.lessons`) return 1.2;
+  if (namespace === `agent.${agent}.working_memory`) return 1.1;
+
+  if (namespace in SHARED_NAMESPACE_WEIGHT) {
+    return SHARED_NAMESPACE_WEIGHT[namespace as keyof typeof SHARED_NAMESPACE_WEIGHT];
   }
-  
-  if (agentId === "trader") {
-    return "agent_decisions"; // Trading data goes through memory_store manually
-  }
-  const namespaces = getAgentNamespaces(agentId);
-  return namespaces[0] || "agent_decisions";
+
+  if (namespace === "noise.filtered") return 0.01;
+  return 1.0;
 }
 
-/**
- * Check if an agent is the trader agent.
- * Used by noise filter to apply trading-specific rules.
- */
-export function isTraderAgent(agentId: string): boolean {
-  return agentId === "trader";
+/** Noise policy v2 */
+export const NOISE_PATTERNS_V2: RegExp[] = [
+  /^\s*(ok|k|kk|yes|no|thanks?|tks|thx)\s*$/i,
+  /^\s*(no_reply|heartbeat_ok)\s*$/i,
+  /^\s*[.?]+\s*$/,
+  /^\s*\/\w+/,
+  /^\s*\[tool[:\]]/i,
+  /^\s*\{\s*"type"\s*:\s*"toolCall"/i,
+  /^\s*(ping|pong)\s*$/i,
+];
+
+const SOURCE_TYPE_NOISE_WEIGHT: Record<string, number> = {
+  auto_capture: 0.15,
+  tool_call: 0.2,
+  manual: 0.02,
+};
+
+export function evaluateNoiseV2(text: string, sourceType: "auto_capture" | "manual" | "tool_call" = "auto_capture"): {
+  score: number;
+  isNoise: boolean;
+  matchedPatterns: string[];
+} {
+  const content = String(text || "").trim();
+  const matchedPatterns = NOISE_PATTERNS_V2.filter((p) => p.test(content)).map((p) => p.toString());
+
+  const lengthPenalty = content.length < 8 ? 0.45 : content.length < 24 ? 0.15 : 0;
+  const patternScore = matchedPatterns.length > 0 ? Math.min(0.8, matchedPatterns.length * 0.4) : 0;
+  const sourceScore = SOURCE_TYPE_NOISE_WEIGHT[sourceType] ?? 0.1;
+
+  const score = Math.min(1, Number((patternScore + sourceScore + lengthPenalty).toFixed(3)));
+  return {
+    score,
+    isNoise: score >= 0.62,
+    matchedPatterns,
+  };
 }
 
-/**
- * Check if content matches any trading noise patterns
- */
-export function isTradingContent(text: string): boolean {
-  return TRADING_NOISE_PATTERNS.some((pattern) => pattern.test(text));
+export function isLearningContent(text: string): boolean {
+  return /\b(learned|lesson|takeaway|kinh nghiệm|bài học|rút ra|postmortem|root cause)\b/i.test(text);
 }
 
-/**
- * Check if content matches general noise patterns
- */
-export function isNoiseContent(text: string): boolean {
-  return NOISE_PATTERNS.some((pattern) => pattern.test(text));
+export function isDecisionContent(text: string): boolean {
+  return /\b(decision|approved|chốt|quyết định|ship|go with|reject|accept)\b/i.test(text);
 }
 
-/**
- * Check if agent is in the blocklist
- */
+export function isProjectContextContent(text: string): boolean {
+  return /\b(deploy|release|migration|rollback|staging|production|port|endpoint|schema|db|api key|config)\b/i.test(text);
+}
+
+export function isRuleContent(text: string): boolean {
+  return /\b(rule|policy|guardrail|must|never|always|slotdb|quy tắc|bắt buộc|không được)\b/i.test(text);
+}
+
+export function isRunbookContent(text: string): boolean {
+  return /\b(runbook|sop|playbook|incident response|checklist|triage|khắc phục|vận hành)\b/i.test(text);
+}
+
 export function isBlockedAgent(agentId: string): boolean {
   return DEFAULT_AGENT_BLOCKLIST.has(agentId);
 }
 
-/**
- * Normalize scope_user_id to prevent fragmentation.
- * Maps all session-based IDs (hook:*, cron:*, subagent:*) to 'default'.
- * Preserves __team__ and __public__ scopes.
- * 
- * ROOT CAUSE FIX: Each session generates a unique scope_user_id like
- * "hook:e0758a07-..." or "cron:5668fdad-...", causing massive duplication.
- * Since this is a single-user system, we normalize everything to 'default'.
- */
 export function normalizeUserId(rawUserId: string): string {
-  // Preserve special scopes
   if (rawUserId === '__team__' || rawUserId === '__public__') {
     return rawUserId;
   }
-  // Always normalize to 'default' for single-user system
   return 'default';
 }
 
-/** Slot TTL configuration by category (in days) */
 export const SLOT_TTL_DAYS: Record<string, number> = {
-  project: 7,        // Project/task slots: 7 days
-  environment: 3,    // Environment slots: 3 days  
-  custom: 14,        // Custom slots: 14 days
-  profile: 90,       // Profile slots: 90 days
-  preferences: 90,   // Preferences: 90 days
+  project: 7,
+  environment: 3,
+  custom: 14,
+  profile: 90,
+  preferences: 90,
 };
 
-/** Get TTL in days for a slot category */
 export function getSlotTTL(category: string): number {
-  return SLOT_TTL_DAYS[category] ?? 30; // default 30 days
+  return SLOT_TTL_DAYS[category] ?? 30;
 }
 
-/**
- * NoiseFilter class for auto-capture
- * Determines whether content should be captured or skipped
- */
 export class NoiseFilter {
   private agentId: string;
-
   constructor(agentId: string) {
     this.agentId = agentId;
   }
 
-  /**
-   * Check if this agent should be completely blocked from auto-capture
-   */
   isBlocked(): boolean {
     return isBlockedAgent(this.agentId);
   }
 
-  /**
-   * Check if content should be skipped for this agent
-   * - General noise patterns apply to all agents
-   * - Trading noise patterns only apply to trader agent (to skip auto-capture of trading data)
-   */
   shouldSkip(text: string): boolean {
-    // Check general noise patterns
-    if (isNoiseContent(text)) {
-      return true;
-    }
-
-    // For trader agent, skip trading content (trader should use memory_store manually)
-    if (isTraderAgent(this.agentId) && isTradingContent(text)) {
-      return true;
-    }
-
-    return false;
+    return evaluateNoiseV2(text, "auto_capture").isNoise;
   }
 
-  /**
-   * Get the target namespace for auto-capture for this agent
-   * V2 UPDATE: Now accepts optional text parameter for learning detection
-   */
+  classify(text: string, sourceType: "auto_capture" | "manual" | "tool_call" = "auto_capture") {
+    return evaluateNoiseV2(text, sourceType);
+  }
+
   getTargetNamespace(text?: string): MemoryNamespace {
     return getAutoCaptureNamespace(this.agentId, text);
   }

@@ -18,7 +18,7 @@ export const PluginConfig = {
   qdrant: {
     host: process.env.QDRANT_HOST || "localhost",
     port: parseInt(process.env.QDRANT_PORT || "6333"),
-    collection: process.env.QDRANT_COLLECTION || "mrc_bot_memory",
+    collection: process.env.QDRANT_COLLECTION || "mrc_bot",
     timeout: parseInt(process.env.QDRANT_TIMEOUT || "30000"),
   },
 
@@ -46,7 +46,7 @@ export const PluginConfig = {
     minConfidence: parseFloat(process.env.AUTO_CAPTURE_MIN_CONFIDENCE || "0.7"),
     useLLM: process.env.AUTO_CAPTURE_USE_LLM !== "false", // default true
     // RAG Memory Isolation - Noise Filter settings
-    agentBlocklist: (process.env.AUTO_CAPTURE_AGENT_BLOCKLIST || "trading-bot,scrum-agent").split(",").filter(Boolean),
+    agentBlocklist: (process.env.AUTO_CAPTURE_AGENT_BLOCKLIST || "").split(",").filter(Boolean),
     noisePatterns: (process.env.AUTO_CAPTURE_NOISE_PATTERNS || "").split(",").filter(Boolean).map((p) => new RegExp(p, "i")),
     maxMessagesPerCapture: parseInt(process.env.AUTO_CAPTURE_MAX_MESSAGES || "50"),
     minContentLength: parseInt(process.env.AUTO_CAPTURE_MIN_CONTENT_LENGTH || "20"),
