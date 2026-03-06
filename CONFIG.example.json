@@ -21,6 +21,7 @@
           "embedBaseUrl": "http://localhost:11434",
           "embedModel": "mxbai-embed-large",
           "embedDimensions": 1024,
+          "slotDbDir": "/Users/mrcagents/.openclaw/agent-memo",
 
           "autoCaptureEnabled": true,
           "autoCaptureMinConfidence": 0.7,

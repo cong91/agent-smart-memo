@@ -11,17 +11,43 @@
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { SlotDB } from "../db/slot-db.js";
+import { resolveSlotDbDir } from "../shared/slotdb-path.js";
 
-// Singleton DB instances
+// Singleton DB instances keyed by resolved slotDbDir
 const dbInstances = new Map<string, SlotDB>();
 
-function getSlotDB(stateDir: string): SlotDB {
-  let db = dbInstances.get(stateDir);
+interface GraphToolRuntimeConfig {
+  stateDir: string;
+  slotDbDir: string;
+}
+
+let runtimeConfig: GraphToolRuntimeConfig = {
+  stateDir: process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`,
+  slotDbDir: resolveSlotDbDir({
+    stateDir: process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`,
+    env: process.env,
+    homeDir: process.env.HOME,
+  }),
+};
+
+function getSlotDB(slotDbDir: string): SlotDB {
+  let db = dbInstances.get(slotDbDir);
   if (!db) {
-    db = new SlotDB(stateDir);
-    dbInstances.set(stateDir, db);
+    db = new SlotDB(runtimeConfig.stateDir, { slotDbDir });
+    dbInstances.set(slotDbDir, db);
   }
   return db;
+}
+
+function resolveSlotDbDirFromContext(ctx: any): string {
+  const stateDir = ctx?.stateDir || runtimeConfig.stateDir;
+  const configSlotDbDir = ctx?.pluginConfig?.slotDbDir || ctx?.config?.slotDbDir;
+  return resolveSlotDbDir({
+    stateDir,
+    slotDbDir: configSlotDbDir,
+    env: process.env,
+    homeDir: process.env.HOME,
+  });
 }
 
 function extractScope(sessionKey: string): { userId: string; agentId: string } {
@@ -39,7 +65,14 @@ function createResult(text: string, isError = false) {
   };
 }
 
-export function registerGraphTools(api: OpenClawPluginApi): void {
+export function registerGraphTools(
+  api: OpenClawPluginApi,
+  options?: { stateDir?: string; slotDbDir?: string },
+): void {
+  runtimeConfig = {
+    stateDir: options?.stateDir || runtimeConfig.stateDir,
+    slotDbDir: options?.slotDbDir || runtimeConfig.slotDbDir,
+  };
   // ===========================================================================
   // Tool 1: memory_graph_entity_get
   // ===========================================================================
@@ -61,10 +94,10 @@ export function registerGraphTools(api: OpenClawPluginApi): void {
       ctx: any,
     ) {
       try {
-        const stateDir = ctx?.stateDir || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
+        const slotDbDir = resolveSlotDbDirFromContext(ctx);
         const sessionKey = ctx?.sessionKey || "agent:main:default";
         const { userId, agentId } = extractScope(sessionKey);
-        const db = getSlotDB(stateDir);
+        const db = getSlotDB(slotDbDir);
 
         // If ID provided, get single entity
         if (params.id) {
@@ -143,10 +176,10 @@ export function registerGraphTools(api: OpenClawPluginApi): void {
       ctx: any,
     ) {
       try {
-        const stateDir = ctx?.stateDir || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
+        const slotDbDir = resolveSlotDbDirFromContext(ctx);
         const sessionKey = ctx?.sessionKey || "agent:main:default";
         const { userId, agentId } = extractScope(sessionKey);
-        const db = getSlotDB(stateDir);
+        const db = getSlotDB(slotDbDir);
 
         let entity;
         if (params.id) {
@@ -220,10 +253,10 @@ export function registerGraphTools(api: OpenClawPluginApi): void {
       ctx: any,
     ) {
       try {
-        const stateDir = ctx?.stateDir || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
+        const slotDbDir = resolveSlotDbDirFromContext(ctx);
         const sessionKey = ctx?.sessionKey || "agent:main:default";
         const { userId, agentId } = extractScope(sessionKey);
-        const db = getSlotDB(stateDir);
+        const db = getSlotDB(slotDbDir);
 
         // Verify entities exist
         const source = db.graph.getEntity(userId, agentId, params.source_id);
@@ -288,10 +321,10 @@ export function registerGraphTools(api: OpenClawPluginApi): void {
       ctx: any,
     ) {
       try {
-        const stateDir = ctx?.stateDir || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
+        const slotDbDir = resolveSlotDbDirFromContext(ctx);
         const sessionKey = ctx?.sessionKey || "agent:main:default";
         const { userId, agentId } = extractScope(sessionKey);
-        const db = getSlotDB(stateDir);
+        const db = getSlotDB(slotDbDir);
 
         if (params.id) {
           // Delete by ID
@@ -360,10 +393,10 @@ export function registerGraphTools(api: OpenClawPluginApi): void {
       ctx: any,
     ) {
       try {
-        const stateDir = ctx?.stateDir || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
+        const slotDbDir = resolveSlotDbDirFromContext(ctx);
         const sessionKey = ctx?.sessionKey || "agent:main:default";
         const { userId, agentId } = extractScope(sessionKey);
-        const db = getSlotDB(stateDir);
+        const db = getSlotDB(slotDbDir);
 
         // Get starting entity
         const startEntity = db.graph.getEntity(userId, agentId, params.entity_id);

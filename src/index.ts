@@ -9,13 +9,13 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import { SlotDB } from "./db/slot-db.js";
 import { QdrantClient } from "./services/qdrant.js";
 import { EmbeddingClient } from "./services/embedding.js";
 import { DeduplicationService } from "./services/dedupe.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { resolveSlotDbDir } from "./shared/slotdb-path.js";
 
 // Tool modules
 import { registerSlotTools } from "./tools/slot-tools.js";
@@ -49,6 +49,7 @@ interface AgentMemoConfig {
   autoCaptureMinConfidence?: number;
   contextWindowMaxTokens?: number;
   summarizeEveryActions?: number;
+  slotDbDir?: string;
 }
 
 const CONFIG_KEY_CANDIDATES: (keyof AgentMemoConfig)[] = [
@@ -62,6 +63,7 @@ const CONFIG_KEY_CANDIDATES: (keyof AgentMemoConfig)[] = [
   "embedBaseUrl",
   "embedModel",
   "embedDimensions",
+  "slotDbDir",
   "autoCaptureEnabled",
   "autoCaptureMinConfidence",
   "contextWindowMaxTokens",
@@ -238,6 +240,10 @@ const agentMemoPlugin = {
         type: "number",
         description: "Embedding dimensions (default: 1024)",
       },
+      slotDbDir: {
+        type: "string",
+        description: "Absolute path for SlotDB directory. Priority: OPENCLAW_SLOTDB_DIR > config.slotDbDir > ${OPENCLAW_STATE_DIR}/agent-memo",
+      },
       autoCaptureEnabled: {
         type: "boolean",
         description: "Enable auto-capture feature",
@@ -290,6 +296,12 @@ const agentMemoPlugin = {
 
     // State directory from env or default
     const stateDir = process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
+    const slotDbDir = resolveSlotDbDir({
+      stateDir,
+      slotDbDir: config.slotDbDir,
+      env: process.env,
+      homeDir: process.env.HOME,
+    });
 
     console.log(
       `[AgentMemo] Startup config: source=${source}, resolved llmModel: ${llmModel}, fallbackUsed=${llmModelFallbackUsed}`
@@ -302,11 +314,12 @@ const agentMemoPlugin = {
     console.log(`  AutoCapture: ${autoCaptureEnabled ? "enabled" : "disabled"}`);
     console.log(`  ContextWindow: ${contextWindowMaxTokens} tokens`);
     console.log(`  SummarizeEveryActions: ${summarizeEveryActions}`);
+    console.log(`  SlotDB dir: ${slotDbDir}`);
 
     // ----------------------------------------------------------------
     // Initialize services
     // ----------------------------------------------------------------
-    const slotDB = new SlotDB(stateDir);
+    const slotDB = new SlotDB(stateDir, { slotDbDir });
 
     // Single Qdrant collection for all agents - namespace isolation via payload
     const routeMapRaw = process.env.EMBEDDING_DIM_ROUTE_MAP || "";
@@ -375,8 +388,8 @@ const agentMemoPlugin = {
     // ----------------------------------------------------------------
     // Register Slot & Graph tools
     // ----------------------------------------------------------------
-    registerSlotTools(api, slotCategories);
-    registerGraphTools(api);
+    registerSlotTools(api, slotCategories, { stateDir, slotDbDir });
+    registerGraphTools(api, { stateDir, slotDbDir });
 
     // ----------------------------------------------------------------
     // Register lifecycle hooks

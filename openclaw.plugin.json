@@ -56,6 +56,10 @@
         "type": "number",
         "description": "Embedding dimensions (default: 1024)"
       },
+      "slotDbDir": {
+        "type": "string",
+        "description": "Absolute path for SlotDB directory. Priority: OPENCLAW_SLOTDB_DIR > config.slotDbDir > ${OPENCLAW_STATE_DIR}/agent-memo"
+      },
       "autoCaptureEnabled": {
         "type": "boolean",
         "description": "Enable auto-capture feature (default: true)"
@@ -122,6 +126,10 @@
     "embedDimensions": {
       "label": "Embedding Dimensions",
       "placeholder": "1024"
+    },
+    "slotDbDir": {
+      "label": "SlotDB Directory",
+      "placeholder": "/Users/you/.openclaw/agent-memo"
     },
     "autoCaptureEnabled": {
       "label": "Auto Capture Enabled"

@@ -58,7 +58,11 @@ Add to your `~/.openclaw/openclaw.json`:
           // Required: Ollama for embeddings
           embedBaseUrl: "http://localhost:11434",
           embedModel: "mxbai-embed-large",
-          embedDimensions: 1024
+          embedDimensions: 1024,
+
+          // Optional: explicit SlotDB target dir
+          // Priority: OPENCLAW_SLOTDB_DIR > config.slotDbDir > ${OPENCLAW_STATE_DIR}/agent-memo
+          slotDbDir: "/Users/mrcagents/.openclaw/agent-memo"
         }
       }
     }
@@ -83,6 +87,7 @@ Start chatting with your agent. Memories are captured automatically.
 | `embedBaseUrl` | string | `"http://localhost:11434"` | Ollama base URL |
 | `embedModel` | string | `"mxbai-embed-large"` | Embedding model name |
 | `embedDimensions` | number | `1024` | Embedding vector dimensions |
+| `slotDbDir` | string | `${OPENCLAW_STATE_DIR}/agent-memo` | Explicit SlotDB directory. Overridden by `OPENCLAW_SLOTDB_DIR` if set |
 | `autoCaptureEnabled` | boolean | `true` | Enable automatic fact extraction |
 | `autoCaptureMinConfidence` | number | `0.7` | Minimum confidence to store a fact (0-1) |
 | `contextWindowMaxTokens` | number | `12000` | Max tokens sent to LLM for extraction |
@@ -92,6 +97,21 @@ Start chatting with your agent. Memories are captured automatically.
 | `injectStateTokenBudget` | number | `500` | Max tokens for auto-recall context injection |
 
 See [CONFIG.example.json](./CONFIG.example.json) for a copy-paste template.
+
+### SlotDB Path Resolution
+
+`agent-smart-memo` now resolves the SQLite slot database directory in this order:
+
+1. `OPENCLAW_SLOTDB_DIR`
+2. Plugin config `slotDbDir`
+3. Legacy fallback `${OPENCLAW_STATE_DIR}/agent-memo`
+
+Examples:
+
+- `OPENCLAW_SLOTDB_DIR=/Users/mrcagents/.openclaw/agent-memo` → DB file becomes `/Users/mrcagents/.openclaw/agent-memo/slots.db`
+- Legacy `new SlotDB("/Users/mrcagents/.openclaw")` still resolves to `/Users/mrcagents/.openclaw/agent-memo/slots.db`
+- Passing `/Users/mrcagents/.openclaw/agent-memo` as the target dir will **not** create nested `/agent-memo/agent-memo`
+
 
 ## How It Works
 

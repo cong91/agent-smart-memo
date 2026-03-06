@@ -8,10 +8,12 @@
  */
 
 import { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { mkdirSync, existsSync } from "node:fs";
 import { GraphDB } from "./graph-db.js";
 import { getSlotTTL } from "../shared/memory-config.js";
+import { resolveLegacyStateDirInput, resolveSlotDbDir } from "../shared/slotdb-path.js";
 
 // Re-export GraphDB types
 export { GraphDB };
@@ -86,15 +88,26 @@ export interface SlotListInput {
 export class SlotDB {
   private db: DatabaseSync;
   private stateDir: string;
+  private slotDbDir: string;
   public graph: GraphDB;
 
-  constructor(stateDir: string) {
-    this.stateDir = stateDir;
-    const dbDir = join(stateDir, "agent-memo");
-    if (!existsSync(dbDir)) {
-      mkdirSync(dbDir, { recursive: true });
+  constructor(stateDirOrSlotDbDir: string, options?: { slotDbDir?: string }) {
+    this.stateDir = stateDirOrSlotDbDir;
+
+    // Priority resolver for new config/env flow.
+    // If explicit slotDbDir option is provided, it is treated as already-resolved target dir.
+    if (options?.slotDbDir) {
+      this.slotDbDir = resolveSlotDbDir({ slotDbDir: options.slotDbDir, stateDir: stateDirOrSlotDbDir });
+    } else {
+      // Backward compatibility for legacy constructor callsites that pass OPENCLAW_STATE_DIR.
+      this.slotDbDir = resolveLegacyStateDirInput(stateDirOrSlotDbDir);
     }
-    const dbPath = join(dbDir, "slots.db");
+
+    if (!existsSync(this.slotDbDir)) {
+      mkdirSync(this.slotDbDir, { recursive: true });
+    }
+
+    const dbPath = join(this.slotDbDir, "slots.db");
     this.db = new DatabaseSync(dbPath);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
@@ -200,7 +213,7 @@ export class SlotDB {
     }
 
     // Insert new slot
-    const id = `${category}:${input.key}:${Date.now()}`;
+    const id = randomUUID();
     const insertStmt = this.db.prepare(
       `INSERT INTO slots (id, scope_user_id, scope_agent_id, category, key, value, source, confidence, version, created_at, updated_at, expires_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,

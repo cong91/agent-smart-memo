@@ -12,17 +12,43 @@
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { SlotDB } from "../db/slot-db.js";
+import { resolveSlotDbDir } from "../shared/slotdb-path.js";
 
-// Singleton DB instances keyed by state dir
+// Singleton DB instances keyed by resolved slotDbDir
 const dbInstances = new Map<string, SlotDB>();
 
-function getSlotDB(stateDir: string): SlotDB {
-  let db = dbInstances.get(stateDir);
+interface SlotToolRuntimeConfig {
+  stateDir: string;
+  slotDbDir: string;
+}
+
+let runtimeConfig: SlotToolRuntimeConfig = {
+  stateDir: process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`,
+  slotDbDir: resolveSlotDbDir({
+    stateDir: process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`,
+    env: process.env,
+    homeDir: process.env.HOME,
+  }),
+};
+
+function getSlotDB(slotDbDir: string): SlotDB {
+  let db = dbInstances.get(slotDbDir);
   if (!db) {
-    db = new SlotDB(stateDir);
-    dbInstances.set(stateDir, db);
+    db = new SlotDB(runtimeConfig.stateDir, { slotDbDir });
+    dbInstances.set(slotDbDir, db);
   }
   return db;
+}
+
+function resolveSlotDbDirFromContext(ctx: any): string {
+  const stateDir = ctx?.stateDir || runtimeConfig.stateDir;
+  const configSlotDbDir = ctx?.pluginConfig?.slotDbDir || ctx?.config?.slotDbDir;
+  return resolveSlotDbDir({
+    stateDir,
+    slotDbDir: configSlotDbDir,
+    env: process.env,
+    homeDir: process.env.HOME,
+  });
 }
 
 /**
@@ -57,7 +83,15 @@ function createResult(text: string, isError = false) {
   };
 }
 
-export function registerSlotTools(api: OpenClawPluginApi, defaultCategories: string[]): void {
+export function registerSlotTools(
+  api: OpenClawPluginApi,
+  defaultCategories: string[],
+  options?: { stateDir?: string; slotDbDir?: string },
+): void {
+  runtimeConfig = {
+    stateDir: options?.stateDir || runtimeConfig.stateDir,
+    slotDbDir: options?.slotDbDir || runtimeConfig.slotDbDir,
+  };
   // Tool 1: memory_slot_get
   api.registerTool({
     name: "memory_slot_get",
@@ -73,9 +107,9 @@ export function registerSlotTools(api: OpenClawPluginApi, defaultCategories: str
     },
     async execute(_id: string, params: { key?: string; category?: string; scope?: string }, ctx: any) {
       try {
-        const stateDir = ctx?.stateDir || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
+        const slotDbDir = resolveSlotDbDirFromContext(ctx);
         const sessionKey = ctx?.sessionKey || "agent:main:default";
-        const db = getSlotDB(stateDir);
+        const db = getSlotDB(slotDbDir);
 
         // Determine which scopes to query
         const scopesToQuery: Array<{ userId: string; agentId: string; label: string }> = [];
@@ -163,10 +197,10 @@ export function registerSlotTools(api: OpenClawPluginApi, defaultCategories: str
     },
     async execute(_id: string, params: { key: string; value: unknown; category?: string; source?: string; scope?: string }, ctx: any) {
       try {
-        const stateDir = ctx?.stateDir || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
+        const slotDbDir = resolveSlotDbDirFromContext(ctx);
         const sessionKey = ctx?.sessionKey || "agent:main:default";
         const { userId, agentId } = extractScope(sessionKey, params.scope);
-        const db = getSlotDB(stateDir);
+        const db = getSlotDB(slotDbDir);
 
         const slot = db.set(userId, agentId, {
           key: params.key,
@@ -198,10 +232,10 @@ export function registerSlotTools(api: OpenClawPluginApi, defaultCategories: str
     },
     async execute(_id: string, params: { key: string; scope?: string }, ctx: any) {
       try {
-        const stateDir = ctx?.stateDir || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
+        const slotDbDir = resolveSlotDbDirFromContext(ctx);
         const sessionKey = ctx?.sessionKey || "agent:main:default";
         const { userId, agentId } = extractScope(sessionKey, params.scope || "private");
-        const db = getSlotDB(stateDir);
+        const db = getSlotDB(slotDbDir);
 
         const deleted = db.delete(userId, agentId, params.key);
         const scopeLabel = params.scope || "private";
@@ -232,9 +266,9 @@ export function registerSlotTools(api: OpenClawPluginApi, defaultCategories: str
     },
     async execute(_id: string, params: { category?: string; prefix?: string; scope?: string }, ctx: any) {
       try {
-        const stateDir = ctx?.stateDir || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
+        const slotDbDir = resolveSlotDbDirFromContext(ctx);
         const sessionKey = ctx?.sessionKey || "agent:main:default";
-        const db = getSlotDB(stateDir);
+        const db = getSlotDB(slotDbDir);
 
         // Determine scopes to query
         const scopesToQuery: Array<{ userId: string; agentId: string; label: string }> = [];

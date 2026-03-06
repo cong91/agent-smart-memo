@@ -67,7 +67,8 @@ export const PluginConfig = {
   },
 
   // State storage
-  stateDir: process.env.STATE_DIR || `${process.env.HOME}/.openclaw`,
+  stateDir: process.env.STATE_DIR || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`,
+  slotDbDir: process.env.OPENCLAW_SLOTDB_DIR || `${process.env.HOME}/.openclaw/agent-memo`,
 
   // Plugin defaults
   defaults: {
@@ -117,4 +118,5 @@ export function printConfig(): void {
   console.log(`  Embedding: ${PluginConfig.embedding.model} (${PluginConfig.embedding.dimensions}d)`);
   console.log(`  AutoCapture: ${PluginConfig.autoCapture.enabled ? "enabled" : "disabled"}`);
   console.log(`  StateDir: ${PluginConfig.stateDir}`);
+  console.log(`  SlotDbDir: ${PluginConfig.slotDbDir}`);
 }
