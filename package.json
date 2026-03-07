@@ -11,7 +11,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "npx tsx tests/test.ts",
+    "test": "npx tsx tests/test.ts && npx tsx tests/test-auto-recall.ts",
     "clean": "rm -rf dist",
     "migrate:namespaces": "npx tsx scripts/migrate-namespaces.ts",
     "distill:namespaces": "npx tsx scripts/distill-by-namespace.ts",

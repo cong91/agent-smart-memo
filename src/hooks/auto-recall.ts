@@ -26,6 +26,29 @@ interface RecallContext {
   agentId: string;
 }
 
+interface RecallHintSet {
+  sessionKeys: Set<string>;
+  topicTags: Set<string>;
+}
+
+interface SemanticMemoryCandidate {
+  text: string;
+  score: number;
+  namespace?: string;
+  payload?: Record<string, any>;
+  adjustedScore?: number;
+  sameSession?: boolean;
+  sameProject?: boolean;
+  crossProject?: boolean;
+}
+
+interface SemanticSelectionResult {
+  memories: Array<{ text: string; score: number; namespace?: string }>;
+  recallConfidence: "high" | "medium" | "low";
+  suppressed: boolean;
+  suppressionReason?: string;
+}
+
 /**
  * Format current state as XML for system prompt injection
  */
@@ -151,6 +174,223 @@ function formatSemanticMemories(memories: Array<{ text: string; score: number; n
   return xml;
 }
 
+function normalizeToken(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  const s = String(value).trim().toLowerCase();
+  return s;
+}
+
+function splitToTags(input: string): string[] {
+  return input
+    .split(/[\s,;|:/\\]+/g)
+    .map((x) => normalizeToken(x))
+    .filter((x) => x.length >= 3)
+    .slice(0, 12);
+}
+
+function collectRecallHints(
+  sessionKey: string,
+  projectLivingStateValue: unknown,
+  currentState: Record<string, Record<string, unknown>>,
+): RecallHintSet {
+  const hints: RecallHintSet = {
+    sessionKeys: new Set<string>(),
+    topicTags: new Set<string>(),
+  };
+
+  const normalizedSession = normalizeToken(sessionKey);
+  if (normalizedSession) hints.sessionKeys.add(normalizedSession);
+
+  const sessionTail = normalizeToken(sessionKey.split(":").slice(2).join(":"));
+  if (sessionTail) hints.sessionKeys.add(sessionTail);
+
+  const living = (projectLivingStateValue && typeof projectLivingStateValue === "object")
+    ? (projectLivingStateValue as Record<string, unknown>)
+    : null;
+
+  if (living) {
+    const activeContext = normalizeToken(living.active_context);
+    if (activeContext) {
+      hints.topicTags.add(activeContext);
+      splitToTags(activeContext).forEach((t) => hints.topicTags.add(t));
+    }
+
+    const currentFocus = normalizeToken(living.current_focus);
+    if (currentFocus) {
+      splitToTags(currentFocus).forEach((t) => hints.topicTags.add(t));
+    }
+  }
+
+  const projectState = currentState.project || {};
+  for (const key of ["project.current", "project.current_epic", "project.current_task", "project.phase", "project.status"]) {
+    const raw = projectState[key];
+    const normalized = normalizeToken(raw);
+    if (normalized) {
+      hints.topicTags.add(normalized);
+      splitToTags(normalized).forEach((t) => hints.topicTags.add(t));
+    }
+  }
+
+  return hints;
+}
+
+function getSessionTokenFromPayload(payload: Record<string, any>): string {
+  const direct = normalizeToken(payload.sessionId || payload.session_id || payload.thread_id || payload.threadId || payload.conversationId || payload.conversation_id);
+  if (direct) return direct;
+
+  const meta = payload.metadata && typeof payload.metadata === "object" ? payload.metadata as Record<string, any> : {};
+  return normalizeToken(meta.sessionId || meta.session_id || meta.thread_id || meta.threadId || meta.conversationId || meta.conversation_id);
+}
+
+function collectPayloadTopicTags(payload: Record<string, any>): Set<string> {
+  const tags = new Set<string>();
+  const meta = payload.metadata && typeof payload.metadata === "object" ? payload.metadata as Record<string, any> : {};
+
+  const rawCandidates: unknown[] = [
+    payload.project,
+    payload.projectTag,
+    payload.project_tag,
+    payload.topic,
+    payload.topicTag,
+    payload.topic_tag,
+    meta.project,
+    meta.projectTag,
+    meta.project_tag,
+    meta.topic,
+    meta.topicTag,
+    meta.topic_tag,
+    payload.namespace,
+  ];
+
+  for (const raw of rawCandidates) {
+    const v = normalizeToken(raw);
+    if (!v) continue;
+    tags.add(v);
+    splitToTags(v).forEach((x) => tags.add(x));
+  }
+
+  const listCandidates: unknown[] = [payload.tags, payload.topics, meta.tags, meta.topics];
+  for (const lc of listCandidates) {
+    if (Array.isArray(lc)) {
+      lc.forEach((item) => {
+        const v = normalizeToken(item);
+        if (v) {
+          tags.add(v);
+          splitToTags(v).forEach((x) => tags.add(x));
+        }
+      });
+    }
+  }
+
+  return tags;
+}
+
+function intersects(a: Set<string>, b: Set<string>): boolean {
+  if (a.size === 0 || b.size === 0) return false;
+  for (const x of a) {
+    if (b.has(x)) return true;
+  }
+  return false;
+}
+
+function applyRecencyBoost(baseScore: number, payload: Record<string, any>, sameSession: boolean): number {
+  const tsRaw = payload.updatedAt || payload.timestamp || payload.ts;
+  const ts = Number(tsRaw);
+  if (!Number.isFinite(ts) || ts <= 0) return baseScore;
+
+  const ageMs = Math.max(0, Date.now() - ts);
+  if (sameSession) {
+    if (ageMs <= 60 * 60 * 1000) return baseScore + 0.12;
+    if (ageMs <= 24 * 60 * 60 * 1000) return baseScore + 0.07;
+    if (ageMs <= 3 * 24 * 60 * 60 * 1000) return baseScore + 0.03;
+  }
+  if (ageMs <= 60 * 60 * 1000) return baseScore + 0.02;
+  return baseScore;
+}
+
+export function selectSemanticMemories(
+  results: Array<{ score: number; payload?: Record<string, any> }>,
+  ctx: RecallContext,
+  hints: RecallHintSet,
+): SemanticSelectionResult {
+  const weighted: SemanticMemoryCandidate[] = results
+    .filter((r: any) => (r.payload?.namespace || "") !== "noise.filtered")
+    .map((r: any) => {
+      const payload = (r.payload || {}) as Record<string, any>;
+      const ns = String(payload.namespace || "");
+      const baseWeighted = Math.min(1, r.score * getNamespaceWeight(ctx.agentId, ns));
+
+      const sessionToken = getSessionTokenFromPayload(payload);
+      const sameSession = sessionToken ? hints.sessionKeys.has(sessionToken) : false;
+
+      const memoryTags = collectPayloadTopicTags(payload);
+      const sameProject = intersects(hints.topicTags, memoryTags);
+      const crossProject = hints.topicTags.size > 0 && memoryTags.size > 0 && !sameProject;
+
+      let adjusted = baseWeighted;
+      if (sameSession) adjusted += 0.2;
+      if (sameProject) adjusted += 0.1;
+      if (crossProject) adjusted -= 0.18;
+      adjusted = applyRecencyBoost(adjusted, payload, sameSession);
+
+      return {
+        text: payload.text || "",
+        score: baseWeighted,
+        namespace: ns,
+        payload,
+        adjustedScore: Math.max(0, Math.min(1, adjusted)),
+        sameSession,
+        sameProject,
+        crossProject,
+      };
+    })
+    .filter((m) => m.text.length > 0)
+    .sort((a, b) => (b.adjustedScore || 0) - (a.adjustedScore || 0));
+
+  const kept = weighted.filter((m) => (m.adjustedScore || 0) >= 0.7).slice(0, 5);
+
+  if (kept.length === 0) {
+    return {
+      memories: [],
+      recallConfidence: "low",
+      suppressed: true,
+      suppressionReason: "no_high_relevance",
+    };
+  }
+
+  const top3 = kept.slice(0, 3);
+  const crossCount = top3.filter((m) => m.crossProject).length;
+  const sessionCount = top3.filter((m) => m.sameSession).length;
+  const projectCount = top3.filter((m) => m.sameProject).length;
+
+  if (crossCount >= 2 && sessionCount === 0 && projectCount === 0) {
+    return {
+      memories: [],
+      recallConfidence: "low",
+      suppressed: true,
+      suppressionReason: "mixed_or_cross_topic_top_hits",
+    };
+  }
+
+  const recallConfidence: "high" | "medium" | "low" =
+    sessionCount >= 1 || projectCount >= 2
+      ? "high"
+      : crossCount >= 1
+        ? "medium"
+        : "high";
+
+  const cap = recallConfidence === "medium" ? 2 : 5;
+  return {
+    memories: kept.slice(0, cap).map((m) => ({
+      text: m.text,
+      score: m.adjustedScore || m.score,
+      namespace: m.namespace,
+    })),
+    recallConfidence,
+    suppressed: false,
+  };
+}
+
 /**
  * Build multi-namespace filter for Qdrant search
  */
@@ -189,6 +429,11 @@ export async function gatherRecallContext(
   graphContext: string;
   recentUpdates: string;
   semanticMemories: string;
+  recallMeta: {
+    recall_confidence: "high" | "medium" | "low";
+    recall_suppressed: boolean;
+    suppression_reason?: string;
+  };
 }> {
   // 1. Get Current State from slots (all scopes)
   const scopes = [
@@ -237,12 +482,16 @@ export async function gatherRecallContext(
     db.get("__public__", "__public__", { key: "project_living_state" }),
   ];
   let projectLivingStateXml = "";
+  let projectLivingStateValue: unknown = null;
   for (const c of projectLivingCandidates) {
     if (c && !Array.isArray(c)) {
+      projectLivingStateValue = c.value;
       projectLivingStateXml = formatProjectLivingState(c.value);
       if (projectLivingStateXml) break;
     }
   }
+
+  const recallHints = collectRecallHints(ctx.sessionKey, projectLivingStateValue, mergedState);
   
   // 2. Get Graph Context (from private scope only for privacy)
   const allEntities = db.graph.listEntities(ctx.userId, ctx.agentId);
@@ -278,6 +527,11 @@ export async function gatherRecallContext(
   
   // 4. Semantic Memories from Qdrant (NEW)
   let semanticMemoriesXml = "";
+  let recallMeta: { recall_confidence: "high" | "medium" | "low"; recall_suppressed: boolean; suppression_reason?: string } = {
+    recall_confidence: "medium",
+    recall_suppressed: false,
+  };
+
   if (userQuery && userQuery.trim().length > 0) {
     try {
       // Get agent's namespaces
@@ -290,34 +544,29 @@ export async function gatherRecallContext(
       const namespaceFilter = buildNamespaceFilter(namespaces);
       
       // Search for relevant memories
-      const results = await qdrant.search(vector, 5, namespaceFilter);
+      const results = await qdrant.search(vector, 8, namespaceFilter);
+
+      const selection = selectSemanticMemories(results, ctx, recallHints);
+      recallMeta = {
+        recall_confidence: selection.recallConfidence,
+        recall_suppressed: selection.suppressed,
+        suppression_reason: selection.suppressionReason,
+      };
+      semanticMemoriesXml = formatSemanticMemories(selection.memories);
       
-      // Exclude quarantined noise + apply namespace priority weighting
-      const relevantMemories = results
-        .filter((r: any) => (r.payload?.namespace || "") !== "noise.filtered")
-        .map((r: any) => {
-          const ns = String(r.payload?.namespace || "");
-          const weight = getNamespaceWeight(ctx.agentId, ns);
-          const weighted = Math.min(1, r.score * weight);
-          return {
-            text: r.payload?.text || "",
-            score: weighted,
-            namespace: ns,
-          };
-        })
-        .filter((r: any) => r.score >= 0.7)
-        .sort((a: any, b: any) => b.score - a.score)
-        .slice(0, 5)
-        .filter((m: any) => m.text.length > 0);
-      
-      semanticMemoriesXml = formatSemanticMemories(relevantMemories);
-      
-      if (relevantMemories.length > 0) {
-        console.log(`[AutoRecall] Found ${relevantMemories.length} relevant semantic memories for query (namespaces: ${namespaces.join(", ")})`);
+      if (selection.memories.length > 0) {
+        console.log(`[AutoRecall] Found ${selection.memories.length} relevant semantic memories for query (confidence=${selection.recallConfidence}, namespaces: ${namespaces.join(", ")})`);
+      } else if (selection.suppressed) {
+        console.warn(`[AutoRecall] Semantic recall suppressed due to low confidence: ${selection.suppressionReason || "unknown"}`);
       }
     } catch (error: any) {
       console.error("[AutoRecall] Error querying semantic memories:", error.message);
       semanticMemoriesXml = "";
+      recallMeta = {
+        recall_confidence: "low",
+        recall_suppressed: true,
+        suppression_reason: "semantic_search_error",
+      };
     }
   }
   
@@ -327,6 +576,7 @@ export async function gatherRecallContext(
     graphContext: graphContextXml,
     recentUpdates,
     semanticMemories: semanticMemoriesXml,
+    recallMeta,
   };
 }
 
@@ -339,6 +589,11 @@ export function injectRecallContext(systemPrompt: string, context: {
   graphContext: string;
   recentUpdates: string;
   semanticMemories: string;
+  recallMeta?: {
+    recall_confidence: "high" | "medium" | "low";
+    recall_suppressed: boolean;
+    suppression_reason?: string;
+  };
 }): string {
   // Build injection block
   const injectionParts: string[] = [];
@@ -361,6 +616,11 @@ export function injectRecallContext(systemPrompt: string, context: {
   
   if (context.semanticMemories) {
     injectionParts.push(context.semanticMemories);
+  }
+
+  if (context.recallMeta) {
+    const confidenceBlock = `<recall-meta>\n  <recall_confidence>${context.recallMeta.recall_confidence}</recall_confidence>\n  <recall_suppressed>${String(context.recallMeta.recall_suppressed)}</recall_suppressed>${context.recallMeta.suppression_reason ? `\n  <suppression_reason>${context.recallMeta.suppression_reason}</suppression_reason>` : ""}\n</recall-meta>`;
+    injectionParts.push(confidenceBlock);
   }
   
   if (injectionParts.length === 0) {
