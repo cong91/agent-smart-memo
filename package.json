@@ -1,6 +1,6 @@
 {
   "name": "@mrc2204/agent-smart-memo",
-  "version": "4.0.13",
+  "version": "4.1.0",
   "description": "Smart Memory Plugin for OpenClaw — structured slot memory with auto-capture, auto-recall, essence distillation, and Qdrant vector search",
   "type": "module",
   "main": "dist/index.js",
@@ -11,7 +11,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "npx tsx tests/test.ts && npx tsx tests/test-auto-recall.ts && npx tsx tests/test-memory-config.ts", 
+    "test": "npx tsx tests/test.ts && npx tsx tests/test-auto-recall.ts && npx tsx tests/test-memory-config.ts",
     "clean": "rm -rf dist",
     "migrate:namespaces": "npx tsx scripts/migrate-namespaces.ts",
     "distill:namespaces": "npx tsx scripts/distill-by-namespace.ts",
