@@ -55,8 +55,9 @@ Add to your `~/.openclaw/openclaw.json`:
           llmApiKey: "sk-...",
           llmModel: "gpt-4o-mini",
 
-          // Required: Ollama for embeddings
+          // Required: Embedding backend (additive, backward-compatible)
           embedBaseUrl: "http://localhost:11434",
+          embedBackend: "ollama", // optional: ollama | openai | docker
           embedModel: "mxbai-embed-large",
           embedDimensions: 1024,
 
@@ -74,6 +75,16 @@ Add to your `~/.openclaw/openclaw.json`:
 
 Start chatting with your agent. Memories are captured automatically.
 
+### Embedding backend mapping (internal)
+
+When `embedBackend` is set, runtime maps requests internally (no user-facing `embedPath` config):
+
+- `ollama` → `/api/embeddings` body `{ model, prompt }` (legacy path/payload)
+- `docker` → `/engines/llama.cpp/v1/embeddings` body `{ model, input }`
+- `openai` → `/v1/embeddings` body `{ model, input }`
+
+If `embedBackend` is omitted, plugin preserves legacy auto behavior.
+
 ## Configuration Options
 
 | Option | Type | Default | Description |
@@ -84,7 +95,8 @@ Start chatting with your agent. Memories are captured automatically.
 | `llmBaseUrl` | string | — | OpenAI-compatible API base URL |
 | `llmApiKey` | string | — | API key for the LLM |
 | `llmModel` | string | `"gpt-4o-mini"` | Model for fact extraction |
-| `embedBaseUrl` | string | `"http://localhost:11434"` | Ollama base URL |
+| `embedBaseUrl` | string | `"http://localhost:11434"` | Embedding service base URL |
+| `embedBackend` | string | _unset_ | Optional backend selector: `ollama` \| `openai` \| `docker` (unset = legacy auto behavior) |
 | `embedModel` | string | `"mxbai-embed-large"` | Embedding model name |
 | `embedDimensions` | number | `1024` | Embedding vector dimensions |
 | `slotDbDir` | string | `${OPENCLAW_STATE_DIR}/agent-memo` | Explicit SlotDB directory. Overridden by `OPENCLAW_SLOTDB_DIR` if set |

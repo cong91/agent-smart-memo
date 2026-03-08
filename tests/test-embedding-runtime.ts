@@ -37,12 +37,34 @@ async function testModelSwitchOpenAIvsOllama() {
       } as any;
     }
 
+    if (String(url).endsWith("/engines/llama.cpp/v1/embeddings")) {
+      const input = Array.isArray(body.input) ? body.input : [body.input || "x"];
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { data: input.map(() => ({ embedding: [0.3, 0.4, 0.5, 0.6] })) };
+        },
+      } as any;
+    }
+
     if (String(url).endsWith("/api/embeddings")) {
       return {
         ok: true,
         status: 200,
         async json() {
           return { embedding: [0.2, 0.3, 0.4, 0.5] };
+        },
+      } as any;
+    }
+
+    if (String(url).endsWith("/engines/llama.cpp/v1/embeddings")) {
+      const input = Array.isArray(body.input) ? body.input : [body.input || "x"];
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { data: input.map(() => ({ embedding: [0.31, 0.41, 0.51, 0.61] })) };
         },
       } as any;
     }
@@ -66,6 +88,7 @@ async function testModelSwitchOpenAIvsOllama() {
 
     const ollamaClient = new EmbeddingClient({
       embeddingApiUrl: "http://localhost:11434/api/embeddings",
+      backend: "ollama",
       model: "qwen3-embedding:4b",
       dimensions: 4,
       stateDir: makeStateDir("memo-ollama-"),
@@ -76,10 +99,38 @@ async function testModelSwitchOpenAIvsOllama() {
 
     assert(k2.includes("ollama::http://localhost:11434/api/embeddings::qwen3-embedding:4b"), "ollama model key mismatch");
     assert(r2.vector.length === 4, "ollama vector length mismatch");
-    assert(k1 !== k2, "model switch must create different model keys");
+
+    const dockerClient = new EmbeddingClient({
+      embeddingApiUrl: "http://localhost:12434",
+      backend: "docker",
+      model: "text-embedding-nomic-embed-text-v1.5",
+      dimensions: 4,
+      stateDir: makeStateDir("memo-docker-"),
+    });
+
+    const r3 = await dockerClient.embedDetailed("hello docker");
+    const k3 = await dockerClient.getModelKey();
+
+    assert(
+      k3.includes("docker::http://localhost:12434/engines/llama.cpp/v1/embeddings::text-embedding-nomic-embed-text-v1.5"),
+      "docker model key mismatch"
+    );
+    assert(r3.vector.length === 4, "docker vector length mismatch");
+
+    assert(k1 !== k2 && k2 !== k3 && k1 !== k3, "backend switch must create different model keys");
 
     assert(calls.some((c) => c.url.endsWith("/v1/embeddings")), "missing openai embedding call");
     assert(calls.some((c) => c.url.endsWith("/api/embeddings")), "missing ollama embedding call");
+    assert(
+      calls.some(
+        (c) =>
+          c.url.endsWith("/engines/llama.cpp/v1/embeddings") &&
+          Array.isArray(c.body.input) &&
+          c.body.input.length >= 1 &&
+          typeof c.body.model === "string"
+      ),
+      "missing docker embedding call with {model,input}"
+    );
   } finally {
     (global as any).fetch = originalFetch;
   }

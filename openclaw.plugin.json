@@ -46,7 +46,12 @@
       },
       "embedBaseUrl": {
         "type": "string",
-        "description": "Embedding service base URL for Ollama (default: http://localhost:11434)"
+        "description": "Embedding service base URL (default: http://localhost:11434)"
+      },
+      "embedBackend": {
+        "type": "string",
+        "enum": ["ollama", "openai", "docker"],
+        "description": "Embedding backend selector (optional). If omitted, legacy auto behavior is preserved"
       },
       "embedModel": {
         "type": "string",
@@ -118,6 +123,10 @@
     "embedBaseUrl": {
       "label": "Embedding Base URL",
       "placeholder": "http://localhost:11434"
+    },
+    "embedBackend": {
+      "label": "Embedding Backend",
+      "placeholder": "ollama"
     },
     "embedModel": {
       "label": "Embedding Model",

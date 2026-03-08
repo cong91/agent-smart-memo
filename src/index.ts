@@ -11,7 +11,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { SlotDB } from "./db/slot-db.js";
 import { QdrantClient } from "./services/qdrant.js";
-import { EmbeddingClient } from "./services/embedding.js";
+import { EmbeddingClient, type EmbedBackend } from "./services/embedding.js";
 import { DeduplicationService } from "./services/dedupe.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -43,6 +43,7 @@ interface AgentMemoConfig {
   llmApiKey?: string;
   llmModel?: string;
   embedBaseUrl?: string;
+  embedBackend?: EmbedBackend;
   embedModel?: string;
   embedDimensions?: number;
   autoCaptureEnabled?: boolean;
@@ -61,6 +62,7 @@ const CONFIG_KEY_CANDIDATES: (keyof AgentMemoConfig)[] = [
   "llmApiKey",
   "llmModel",
   "embedBaseUrl",
+  "embedBackend",
   "embedModel",
   "embedDimensions",
   "slotDbDir",
@@ -232,6 +234,11 @@ const agentMemoPlugin = {
         type: "string",
         description: "Embedding service base URL (default: http://localhost:11434)",
       },
+      embedBackend: {
+        type: "string",
+        enum: ["ollama", "openai", "docker"],
+        description: "Embedding backend selector (optional). If omitted, keeps legacy auto behavior.",
+      },
       embedModel: {
         type: "string",
         description: "Embedding model for vectorization (default: qwen3-embedding:0.6b)",
@@ -287,6 +294,12 @@ const agentMemoPlugin = {
     const llmModel = resolvedLlmModel || "gemini-2.5-flash";
     const llmModelFallbackUsed = !resolvedLlmModel;
     const embedBaseUrl = config.embedBaseUrl || "http://localhost:11434";
+    const embedBackend =
+      config.embedBackend === "ollama" ||
+      config.embedBackend === "openai" ||
+      config.embedBackend === "docker"
+        ? config.embedBackend
+        : undefined;
     const embedModel = config.embedModel || "qwen3-embedding:0.6b";
     const embedDimensions = config.embedDimensions || 1024;
     const autoCaptureEnabled = config.autoCaptureEnabled !== false; // default true
@@ -310,7 +323,7 @@ const agentMemoPlugin = {
     console.log(`  Slot categories: ${slotCategories.join(", ")}`);
     console.log(`  Qdrant: ${qdrantHost}:${qdrantPort}/${qdrantCollection}`);
     console.log(`  LLM: ${llmBaseUrl} (model: ${llmModel})`);
-    console.log(`  Embedding: ${embedBaseUrl} (model: ${embedModel}, ${embedDimensions}d)`);
+    console.log(`  Embedding: ${embedBaseUrl} (backend: ${embedBackend || "auto"}, model: ${embedModel}, ${embedDimensions}d)`);
     console.log(`  AutoCapture: ${autoCaptureEnabled ? "enabled" : "disabled"}`);
     console.log(`  ContextWindow: ${contextWindowMaxTokens} tokens`);
     console.log(`  SummarizeEveryActions: ${summarizeEveryActions}`);
@@ -346,6 +359,7 @@ const agentMemoPlugin = {
 
     const embedding = new EmbeddingClient({
       embeddingApiUrl: embedBaseUrl,
+      backend: embedBackend,
       model: embedModel,
       dimensions: embedDimensions,
       stateDir,
@@ -365,6 +379,7 @@ const agentMemoPlugin = {
           generatedAt: new Date().toISOString(),
           embedModel,
           embedBaseUrl,
+          embedBackend: embedBackend || "auto",
           embedDimensions,
           qdrantCollection,
         }, null, 2),

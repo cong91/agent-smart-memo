@@ -1,12 +1,15 @@
 import { EmbeddingCapabilityRegistry, type EmbeddingModelCapability, type CapabilitySource } from "./embedding-capability-registry.js";
 
+export type EmbedBackend = "ollama" | "openai" | "docker";
+export type EmbeddingProvider = EmbedBackend | "auto";
+
 export interface EmbeddingMetadata {
   embedding_chunked: boolean;
   embedding_chunks_count: number;
   embedding_chunking_strategy: "array_batch_weighted_avg";
   embedding_model: string;
   embedding_model_key: string;
-  embedding_provider: "openai" | "ollama" | "auto";
+  embedding_provider: EmbeddingProvider;
   embedding_max_tokens: number;
   embedding_safe_chunk_tokens: number;
   embedding_source: CapabilitySource;
@@ -60,11 +63,12 @@ export class EmbeddingClient {
   private registry: EmbeddingCapabilityRegistry;
   private capability!: EmbeddingModelCapability;
   private activeEndpoint = "";
-  private provider: "openai" | "ollama" | "auto" = "auto";
+  private backend: EmbedBackend | undefined;
+  private provider: EmbeddingProvider = "auto";
   private modelKey = "";
   private readonly ready: Promise<void>;
 
-  constructor(config: { embeddingApiUrl?: string; timeout?: number; dimensions?: number; model?: string; stateDir?: string }, logger?: any) {
+  constructor(config: { embeddingApiUrl?: string; timeout?: number; dimensions?: number; model?: string; stateDir?: string; backend?: EmbedBackend }, logger?: any) {
     const model = config.model || "qwen3-embedding:0.6b";
     const defaults = MODEL_DEFAULTS[model] || { seedMaxTokens: 4096, safeRatio: 0.72, reserveTokens: 96, vectorDim: config.dimensions || 1024 };
 
@@ -75,6 +79,11 @@ export class EmbeddingClient {
       dimensions: config.dimensions || defaults.vectorDim,
       stateDir: config.stateDir || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`,
     };
+
+    if (config.backend === "ollama" || config.backend === "openai" || config.backend === "docker") {
+      this.backend = config.backend;
+    }
+
     this.logger = logger || console;
     this.registry = new EmbeddingCapabilityRegistry(this.config.stateDir, this.logger);
     this.ready = this.initializeCapabilities();
@@ -84,14 +93,32 @@ export class EmbeddingClient {
     const base = (rawBaseUrl || "").trim();
     const normalizedBase = (base || "http://localhost:11434").replace(/\/+$/, "");
 
-    if (/(\/v1\/embeddings|\/api\/embeddings)\/?$/i.test(normalizedBase)) {
+    // explicit backend mapping (additive config)
+    if (this.backend === "ollama") {
+      if (/\/api\/embeddings\/?$/i.test(normalizedBase)) return [normalizedBase];
+      return [`${normalizedBase}/api/embeddings`];
+    }
+
+    if (this.backend === "docker") {
+      if (/\/engines\/llama\.cpp\/v1\/embeddings\/?$/i.test(normalizedBase)) return [normalizedBase];
+      return [`${normalizedBase}/engines/llama.cpp/v1/embeddings`];
+    }
+
+    if (this.backend === "openai") {
+      if (/\/v1\/embeddings\/?$/i.test(normalizedBase)) return [normalizedBase];
+      return [`${normalizedBase}/v1/embeddings`];
+    }
+
+    // backward compatible autodetect (legacy behavior)
+    if (/(\/v1\/embeddings|\/api\/embeddings|\/engines\/llama\.cpp\/v1\/embeddings)\/?$/i.test(normalizedBase)) {
       return [normalizedBase];
     }
 
     return [`${normalizedBase}/v1/embeddings`, `${normalizedBase}/api/embeddings`];
   }
 
-  private detectProvider(endpoint: string): "openai" | "ollama" | "auto" {
+  private detectProvider(endpoint: string): EmbeddingProvider {
+    if (/\/engines\/llama\.cpp\/v1\/embeddings\/?$/i.test(endpoint)) return "docker";
     if (/\/v1\/embeddings\/?$/i.test(endpoint)) return "openai";
     if (/\/api\/embeddings\/?$/i.test(endpoint)) return "ollama";
     return "auto";
@@ -539,23 +566,24 @@ export class EmbeddingClient {
     let lastError: Error | null = null;
 
     for (const url of endpoints) {
-      const useOpenAiFormat = /\/v1\/embeddings\/?$/i.test(url);
+      const provider = this.detectProvider(url);
+      const useArrayInputBody = provider === "openai" || provider === "docker";
 
       try {
         this.activeEndpoint = url;
-        this.provider = this.detectProvider(url);
+        this.provider = provider;
         this.modelKey = this.buildModelKey(this.provider, this.activeEndpoint);
 
-        if (!useOpenAiFormat && chunks.length > 1) {
+        if (!useArrayInputBody && chunks.length > 1) {
           // Ollama /api/embeddings: sequential requests
           const vectors: number[][] = [];
           for (const c of chunks) {
-            vectors.push(await this.embedSingle(url, false, c));
+            vectors.push(await this.embedSingle(url, provider, c));
           }
           return vectors;
         }
 
-        const vectors = await this.embedBatch(url, useOpenAiFormat, chunks);
+        const vectors = await this.embedBatch(url, provider, chunks);
         if (vectors.length !== chunks.length) {
           throw new Error(`Embedding vector count mismatch: expected=${chunks.length}, got=${vectors.length}`);
         }
@@ -585,7 +613,7 @@ export class EmbeddingClient {
     throw lastError || new Error("Embedding API error: no endpoint succeeded");
   }
 
-  private async embedBatch(url: string, useOpenAiFormat: boolean, chunks: string[]): Promise<number[][]> {
+  private async embedBatch(url: string, provider: EmbeddingProvider, chunks: string[]): Promise<number[][]> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
 
@@ -596,7 +624,7 @@ export class EmbeddingClient {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(
-            useOpenAiFormat
+            provider === "openai" || provider === "docker"
               ? { model: this.config.model, input: chunks }
               : { model: this.config.model, prompt: chunks[0] }
           ),
@@ -618,21 +646,25 @@ export class EmbeddingClient {
 
         const data = await response.json();
 
-        if (!useOpenAiFormat) {
+        if (provider === "ollama") {
           if (data.embedding && Array.isArray(data.embedding)) {
             return [data.embedding];
           }
           throw new Error("Invalid Ollama embedding response format");
         }
 
-        if (Array.isArray(data.data)) {
-          const vectors = data.data
-            .map((d: any) => d?.embedding)
-            .filter((v: any) => Array.isArray(v));
-          if (vectors.length > 0) return vectors;
+        if (provider === "openai" || provider === "docker") {
+          if (Array.isArray(data.data)) {
+            const vectors = data.data
+              .map((d: any) => d?.embedding)
+              .filter((v: any) => Array.isArray(v));
+            if (vectors.length > 0) return vectors;
+          }
+
+          throw new Error(`Invalid ${provider} embedding response format`);
         }
 
-        throw new Error("Invalid OpenAI embedding response format");
+        throw new Error("Invalid embedding response format");
       }
 
       throw new Error("Embedding API 429 retries exhausted");
@@ -646,8 +678,8 @@ export class EmbeddingClient {
     }
   }
 
-  private async embedSingle(url: string, useOpenAiFormat: boolean, chunk: string): Promise<number[]> {
-    const vectors = await this.embedBatch(url, useOpenAiFormat, [chunk]);
+  private async embedSingle(url: string, provider: EmbeddingProvider, chunk: string): Promise<number[]> {
+    const vectors = await this.embedBatch(url, provider, [chunk]);
     if (!vectors[0]) throw new Error("No embedding vector returned");
     return vectors[0];
   }

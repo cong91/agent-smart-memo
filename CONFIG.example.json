@@ -19,6 +19,7 @@
           "llmModel": "gpt-4o-mini",
 
           "embedBaseUrl": "http://localhost:11434",
+          "embedBackend": "ollama",
           "embedModel": "mxbai-embed-large",
           "embedDimensions": 1024,
           "slotDbDir": "/Users/mrcagents/.openclaw/agent-memo",
