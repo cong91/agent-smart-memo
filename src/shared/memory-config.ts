@@ -3,14 +3,20 @@
  * Source of truth for namespace routing, noise policy v2, and recall weighting
  */
 
-export const CORE_AGENTS = ["assistant", "scrum", "fullstack", "trader", "creator"] as const;
-export type CoreAgent = (typeof CORE_AGENTS)[number];
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 
-/** New normalized namespace model (ASM-5) */
+export const DEFAULT_CORE_AGENTS = ["assistant", "scrum", "fullstack", "trader", "creator"] as const;
+export type DefaultCoreAgent = (typeof DEFAULT_CORE_AGENTS)[number];
+
+export type AgentNamespace =
+  | `agent.${string}.working_memory`
+  | `agent.${string}.lessons`
+  | `agent.${string}.decisions`;
+
+/** New normalized namespace model (ASM-5, dynamic agent registry aware) */
 export type MemoryNamespace =
-  | `agent.${CoreAgent}.working_memory`
-  | `agent.${CoreAgent}.lessons`
-  | `agent.${CoreAgent}.decisions`
+  | AgentNamespace
   | "shared.project_context"
   | "shared.rules_slotdb"
   | "shared.runbooks"
@@ -28,6 +34,97 @@ export type LegacyNamespace =
   | "market_patterns"
   | "default";
 
+interface OpenClawAgentListEntry {
+  id?: unknown;
+}
+
+interface OpenClawRuntimeConfig {
+  agents?: {
+    list?: OpenClawAgentListEntry[];
+  };
+}
+
+const STATIC_FALLBACK_AGENT_SET = new Set<string>(DEFAULT_CORE_AGENTS);
+const AGENT_NAMESPACE_RE = /^agent\.([a-z0-9][a-z0-9_-]*)\.(working_memory|lessons|decisions)$/i;
+
+let cachedRegistry: {
+  configPath: string;
+  mtimeMs: number;
+  agentIds: string[];
+} | null = null;
+
+function normalizeAgentId(agentId: string | null | undefined): string {
+  return String(agentId || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function getStateDir(): string {
+  return process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
+}
+
+export function resolveOpenClawConfigPath(): string {
+  const explicit = process.env.OPENCLAW_CONFIG_PATH || process.env.OPENCLAW_RUNTIME_CONFIG;
+  if (explicit && explicit.trim()) {
+    return explicit.trim();
+  }
+  return join(getStateDir(), "openclaw.json");
+}
+
+function readRuntimeAgentIdsFromConfig(configPath: string): string[] {
+  if (!existsSync(configPath)) {
+    return [...DEFAULT_CORE_AGENTS];
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(configPath, "utf8")) as OpenClawRuntimeConfig;
+    const listed = Array.isArray(parsed?.agents?.list) ? parsed.agents.list : [];
+    const dynamicIds = listed
+      .map((entry) => normalizeAgentId(String(entry?.id || "")))
+      .filter(Boolean);
+
+    const merged = new Set<string>([...DEFAULT_CORE_AGENTS, ...dynamicIds]);
+    return [...merged];
+  } catch {
+    return [...DEFAULT_CORE_AGENTS];
+  }
+}
+
+export function getRegisteredAgentIds(): string[] {
+  const configPath = resolveOpenClawConfigPath();
+
+  try {
+    const mtimeMs = existsSync(configPath) ? statSync(configPath).mtimeMs : -1;
+    if (cachedRegistry && cachedRegistry.configPath === configPath && cachedRegistry.mtimeMs === mtimeMs) {
+      return [...cachedRegistry.agentIds];
+    }
+
+    const agentIds = readRuntimeAgentIdsFromConfig(configPath);
+    cachedRegistry = { configPath, mtimeMs, agentIds };
+    return [...agentIds];
+  } catch {
+    return [...DEFAULT_CORE_AGENTS];
+  }
+}
+
+export function isRegisteredAgent(agentId: string): boolean {
+  const normalized = normalizeAgentId(agentId);
+  if (!normalized) return false;
+  return getRegisteredAgentIds().includes(normalized);
+}
+
+export function resolveAgentId(agentId: string | null | undefined, fallbackAgent: string = "assistant"): string {
+  const normalized = normalizeAgentId(agentId);
+  if (normalized) {
+    return normalized;
+  }
+
+  const fallback = normalizeAgentId(fallbackAgent);
+  return fallback || "assistant";
+}
+
 const LEGACY_TO_NEW_NAMESPACE: Partial<Record<LegacyNamespace, MemoryNamespace>> = {
   agent_decisions: "agent.assistant.decisions",
   user_profile: "shared.project_context",
@@ -38,36 +135,43 @@ const LEGACY_TO_NEW_NAMESPACE: Partial<Record<LegacyNamespace, MemoryNamespace>>
   default: "agent.assistant.working_memory",
 };
 
+export function isAgentNamespace(value: string | null | undefined): value is AgentNamespace {
+  return typeof value === "string" && AGENT_NAMESPACE_RE.test(value.trim());
+}
+
 export function normalizeNamespace(value: string | null | undefined, fallbackAgent: string = "assistant"): MemoryNamespace {
-  const agent = toCoreAgent(fallbackAgent);
+  const agent = resolveAgentId(fallbackAgent);
   if (!value) return `agent.${agent}.working_memory`;
 
-  if ((value as MemoryNamespace) === "shared.project_context"
-    || (value as MemoryNamespace) === "shared.rules_slotdb"
-    || (value as MemoryNamespace) === "shared.runbooks"
-    || (value as MemoryNamespace) === "noise.filtered"
-    || /^agent\.(assistant|scrum|fullstack|trader|creator)\.(working_memory|lessons|decisions)$/.test(value)
+  const trimmed = value.trim();
+  if (
+    trimmed === "shared.project_context"
+    || trimmed === "shared.rules_slotdb"
+    || trimmed === "shared.runbooks"
+    || trimmed === "noise.filtered"
+    || isAgentNamespace(trimmed)
   ) {
-    return value as MemoryNamespace;
+    return trimmed as MemoryNamespace;
   }
 
-  const mapped = LEGACY_TO_NEW_NAMESPACE[value as LegacyNamespace];
+  const mapped = LEGACY_TO_NEW_NAMESPACE[trimmed as LegacyNamespace];
   if (mapped) return mapped;
 
   return `agent.${agent}.working_memory`;
 }
 
-export function toCoreAgent(agentId: string): CoreAgent {
-  const normalized = (agentId || "").toLowerCase();
-  if ((CORE_AGENTS as readonly string[]).includes(normalized)) {
-    return normalized as CoreAgent;
-  }
-  return "assistant";
+/**
+ * Backward-compatible alias.
+ * Historically this returned only a hardcoded core agent and defaulted unknowns to assistant.
+ * New behavior keeps unknown/extra registry agents as themselves.
+ */
+export function toCoreAgent(agentId: string): string {
+  return resolveAgentId(agentId);
 }
 
 /**
  * Revert coarse blocklist change:
- * keep all 5 core agents eligible for capture by default.
+ * keep all agents eligible for capture by default.
  */
 export const DEFAULT_AGENT_BLOCKLIST = new Set<string>([]);
 
@@ -75,7 +179,7 @@ export const DEFAULT_AGENT_BLOCKLIST = new Set<string>([]);
  * Per-agent recall namespaces (noise.filtered is intentionally excluded)
  */
 export function getAgentNamespaces(agentId: string): MemoryNamespace[] {
-  const agent = toCoreAgent(agentId);
+  const agent = resolveAgentId(agentId);
   return [
     `agent.${agent}.working_memory`,
     `agent.${agent}.lessons`,
@@ -87,7 +191,7 @@ export function getAgentNamespaces(agentId: string): MemoryNamespace[] {
 }
 
 export function getAutoCaptureNamespace(agentId: string, text?: string): MemoryNamespace {
-  const agent = toCoreAgent(agentId);
+  const agent = resolveAgentId(agentId);
   const content = String(text || "");
 
   if (isLearningContent(content)) return `agent.${agent}.lessons`;
@@ -106,7 +210,7 @@ const SHARED_NAMESPACE_WEIGHT: Record<"shared.project_context" | "shared.rules_s
 };
 
 export function getNamespaceWeight(agentId: string, namespace: string): number {
-  const agent = toCoreAgent(agentId);
+  const agent = resolveAgentId(agentId);
   if (namespace === `agent.${agent}.decisions`) return 1.25;
   if (namespace === `agent.${agent}.lessons`) return 1.2;
   if (namespace === `agent.${agent}.working_memory`) return 1.1;
@@ -221,3 +325,6 @@ export class NoiseFilter {
     return getAutoCaptureNamespace(this.agentId, text);
   }
 }
+
+export const CORE_AGENTS = DEFAULT_CORE_AGENTS;
+export const DEFAULT_AGENT_SET = STATIC_FALLBACK_AGENT_SET;
