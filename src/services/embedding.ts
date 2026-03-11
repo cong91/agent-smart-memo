@@ -67,6 +67,7 @@ export class EmbeddingClient {
   private provider: EmbeddingProvider = "auto";
   private modelKey = "";
   private readonly ready: Promise<void>;
+  private calibrationPromise: Promise<void> | null = null;
 
   constructor(config: { embeddingApiUrl?: string; timeout?: number; dimensions?: number; model?: string; stateDir?: string; backend?: EmbedBackend }, logger?: any) {
     const model = config.model || "qwen3-embedding:0.6b";
@@ -316,10 +317,10 @@ export class EmbeddingClient {
       await this.registry.set(this.modelKey, this.capability);
     }
 
-    // light startup calibration (max 1/day)
+    // Background best-effort calibration (do not block ready)
     const ageMs = Date.now() - new Date(this.capability.updatedAt).getTime();
     if (!Number.isFinite(ageMs) || ageMs > 24 * 60 * 60 * 1000) {
-      await this.calibrateRuntimeCapability();
+      this.scheduleBackgroundCalibration(false);
     }
   }
 
@@ -393,8 +394,21 @@ export class EmbeddingClient {
     return clamp(low);
   }
 
-  async calibrateRuntimeCapability(force = false): Promise<void> {
-    await this.ready;
+  private scheduleBackgroundCalibration(force = false): void {
+    if (this.calibrationPromise) return;
+
+    this.calibrationPromise = this.ready
+      .then(() => this.calibrateRuntimeCapabilityInternal(force))
+      .catch((error: any) => {
+        this.logger.warn?.(`[Embedding] background calibration skipped: ${error?.message || error}`);
+      })
+      .finally(() => {
+        this.calibrationPromise = null;
+      });
+  }
+
+  private async calibrateRuntimeCapabilityInternal(force = false): Promise<void> {
+    if (!this.capability || !this.modelKey) return;
 
     if (!force) {
       const ageMs = Date.now() - new Date(this.capability.updatedAt).getTime();
@@ -424,6 +438,17 @@ export class EmbeddingClient {
     this.logger.info(
       `[Embedding] calibrated capability modelKey=${this.modelKey} maxTokens=${this.capability.discoveredMaxTokens} vectorDim=${this.capability.vectorDim}`
     );
+  }
+
+  async calibrateRuntimeCapability(force = false): Promise<void> {
+    await this.ready;
+
+    if (this.calibrationPromise) {
+      await this.calibrationPromise;
+      if (!force) return;
+    }
+
+    await this.calibrateRuntimeCapabilityInternal(force);
   }
 
   async getVectorDimensionHint(): Promise<number> {
