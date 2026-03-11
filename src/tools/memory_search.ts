@@ -1,7 +1,7 @@
 import { QdrantClient } from "../services/qdrant.js";
 import { EmbeddingClient } from "../services/embedding.js";
 import { SearchParams, ToolResult, ScoredPoint, MemoryNamespace } from "../types.js";
-import { getAgentNamespaces, getNamespaceWeight } from "../shared/memory-config.js";
+import { getAgentNamespaces, getNamespaceWeight, normalizeNamespace, toCoreAgent } from "../shared/memory-config.js";
 
 export const memorySearchSchema = {
   type: "object",
@@ -47,6 +47,11 @@ export function createMemorySearchTool(
   embedding: EmbeddingClient,
   defaultNamespace: MemoryNamespace
 ) {
+  const createDetails = (text: string, extra: Record<string, unknown> = {}) => ({
+    ...extra,
+    toolResult: { text },
+  });
+
   return {
     name: "memory_search",
     label: "Memory Search",
@@ -64,7 +69,7 @@ export function createMemorySearchTool(
           return {
             content: [{ type: "text", text: "Error: query is required" }],
             isError: true,
-            details: { error: "Missing query parameter" },
+            details: createDetails("Error: query is required", { error: "Missing query parameter" }),
           };
         }
         
@@ -73,18 +78,18 @@ export function createMemorySearchTool(
           return {
             content: [{ type: "text", text: "Error: query cannot be empty" }],
             isError: true,
-            details: { error: "Empty query" },
+            details: createDetails("Error: query cannot be empty", { error: "Empty query" }),
           };
         }
         
         const limit = Math.min(Math.max(params.limit || 5, 1), 20);
         const minScore = params.minScore ?? 0.7;
         
-        // Determine namespaces to search
-        const agentId = params.agentId || "";
-        const namespaces: MemoryNamespace[] = params.namespace 
-          ? [params.namespace as MemoryNamespace]
-          : getAgentNamespaces(agentId);
+        // Determine namespaces to search (normalize user-facing aliases to canonical namespaces)
+        const sourceAgent = toCoreAgent(params.agentId || "assistant");
+        const namespaces: MemoryNamespace[] = params.namespace
+          ? [normalizeNamespace(params.namespace as string, sourceAgent)]
+          : getAgentNamespaces(sourceAgent);
         
         // Build namespace filter (OR if multiple namespaces)
         const namespaceConditions = namespaces.map(ns => ({
@@ -132,7 +137,7 @@ export function createMemorySearchTool(
           .filter((r: ScoredPoint) => (r.payload?.namespace || "") !== "noise.filtered")
           .map((r: ScoredPoint) => {
             const ns = String(r.payload?.namespace || "");
-            const weight = getNamespaceWeight(agentId, ns);
+            const weight = getNamespaceWeight(sourceAgent, ns);
             return {
               ...r,
               _rawScore: r.score,
@@ -145,9 +150,10 @@ export function createMemorySearchTool(
         const filtered = weighted.filter((r: ScoredPoint) => r.score >= minScore);
 
         if (filtered.length === 0) {
+          const textOut = "No relevant memories found.";
           return {
-            content: [{ type: "text", text: "No relevant memories found." }],
-            details: { count: 0, query },
+            content: [{ type: "text", text: textOut }],
+            details: createDetails(textOut, { count: 0, query }),
           };
         }
         
@@ -172,19 +178,21 @@ export function createMemorySearchTool(
           return lines.join("\n");
         }).join("\n\n---\n\n");
         
+        const textOut = `Found ${filtered.length} relevant memories for "${query}":\n\n${formatted}`;
         return {
           content: [{
             type: "text",
-            text: `Found ${filtered.length} relevant memories for "${query}":\n\n${formatted}`,
+            text: textOut,
           }],
-          details: { count: filtered.length, query, results: filtered },
+          details: createDetails(textOut, { count: filtered.length, query, results: filtered }),
         };
         
       } catch (error: any) {
+        const textOut = `Error searching memories: ${error.message}`;
         return {
-          content: [{ type: "text", text: `Error searching memories: ${error.message}` }],
+          content: [{ type: "text", text: textOut }],
           isError: true,
-          details: { error: error.message },
+          details: createDetails(textOut, { error: error.message }),
         };
       }
     },

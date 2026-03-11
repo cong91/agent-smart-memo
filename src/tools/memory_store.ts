@@ -37,6 +37,11 @@ export function createMemoryStoreTool(
   dedupe: DeduplicationService,
   defaultNamespace: MemoryNamespace
 ) {
+  const createDetails = (text: string, extra: Record<string, unknown> = {}) => ({
+    ...extra,
+    toolResult: { text },
+  });
+
   return {
     name: "memory_store",
     label: "Memory Store",
@@ -54,7 +59,7 @@ export function createMemoryStoreTool(
           return {
             content: [{ type: "text", text: "Error: text is required" }],
             isError: true,
-            details: { error: "Missing text parameter" },
+            details: createDetails("Error: text is required", { error: "Missing text parameter" }),
           };
         }
         
@@ -63,7 +68,7 @@ export function createMemoryStoreTool(
           return {
             content: [{ type: "text", text: "Error: text cannot be empty" }],
             isError: true,
-            details: { error: "Empty text" },
+            details: createDetails("Error: text cannot be empty", { error: "Empty text" }),
           };
         }
         
@@ -71,7 +76,7 @@ export function createMemoryStoreTool(
           return {
             content: [{ type: "text", text: "Error: text exceeds 10000 character limit" }],
             isError: true,
-            details: { error: "Text too long", length: text.length },
+            details: createDetails("Error: text exceeds 10000 character limit", { error: "Text too long", length: text.length }),
           };
         }
         
@@ -144,9 +149,10 @@ export function createMemoryStoreTool(
           
           await qdrant.upsert([point]);
           
+          const textOut = `Memory updated (duplicate detected, ID: ${duplicateId})`;
           return {
-            content: [{ type: "text", text: `Memory updated (duplicate detected, ID: ${duplicateId})` }],
-            details: { id: duplicateId, updated: true },
+            content: [{ type: "text", text: textOut }],
+            details: createDetails(textOut, { id: duplicateId, updated: true }),
           };
         }
         
@@ -178,16 +184,18 @@ export function createMemoryStoreTool(
         
         await qdrant.upsert([point]);
         
+        const textOut = `Memory stored successfully (ID: ${id})`;
         return {
-          content: [{ type: "text", text: `Memory stored successfully (ID: ${id})` }],
-          details: { id, created: true },
+          content: [{ type: "text", text: textOut }],
+          details: createDetails(textOut, { id, created: true }),
         };
         
       } catch (error: any) {
+        const textOut = `Error storing memory: ${error.message}`;
         return {
-          content: [{ type: "text", text: `Error storing memory: ${error.message}` }],
+          content: [{ type: "text", text: textOut }],
           isError: true,
-          details: { error: error.message },
+          details: createDetails(textOut, { error: error.message }),
         };
       }
     },
