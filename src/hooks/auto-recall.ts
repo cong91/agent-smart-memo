@@ -363,6 +363,18 @@ export function selectSemanticMemories(
   const sessionCount = top3.filter((m) => m.sameSession).length;
   const projectCount = top3.filter((m) => m.sameProject).length;
 
+  // ASM-42 hardening:
+  // Require at least one same-session or same-project anchor in top hits.
+  // This avoids injecting seemingly relevant but cross-scope memories.
+  if (sessionCount === 0 && projectCount === 0) {
+    return {
+      memories: [],
+      recallConfidence: "low",
+      suppressed: true,
+      suppressionReason: "missing_scope_anchor",
+    };
+  }
+
   if (crossCount >= 2 && sessionCount === 0 && projectCount === 0) {
     return {
       memories: [],
