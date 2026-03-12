@@ -13,14 +13,10 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import {
   configureOpenClawRuntime,
   createOpenClawResult,
+  getMemoryUseCasePortForContext,
   getSessionKey,
-  getSlotDBForContext,
   parseOpenClawSessionIdentity,
 } from "../adapters/openclaw/tool-runtime.js";
-
-function extractScope(sessionKey: string): { userId: string; agentId: string } {
-  return parseOpenClawSessionIdentity(sessionKey);
-}
 
 function createResult(text: string, isError = false) {
   return createOpenClawResult(text, isError);
@@ -31,9 +27,10 @@ export function registerGraphTools(
   options?: { stateDir?: string; slotDbDir?: string },
 ): void {
   configureOpenClawRuntime(options);
-  // ===========================================================================
+
+  // ==========================================================================
   // Tool 1: memory_graph_entity_get
-  // ===========================================================================
+  // ==========================================================================
   api.registerTool({
     name: "memory_graph_entity_get",
     label: "Graph Entity Get",
@@ -53,39 +50,20 @@ export function registerGraphTools(
     ) {
       try {
         const sessionKey = getSessionKey(ctx);
-        const { userId, agentId } = extractScope(sessionKey);
-        const db = getSlotDBForContext(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
 
-        // If ID provided, get single entity
-        if (params.id) {
-          const entity = db.graph.getEntity(userId, agentId, params.id);
-          if (!entity) {
-            return createResult(`Entity with ID "${params.id}" not found.`);
-          }
-          return createResult(
-            JSON.stringify(
-              {
-                id: entity.id,
-                name: entity.name,
-                type: entity.type,
-                properties: entity.properties,
-                created_at: entity.created_at,
-                updated_at: entity.updated_at,
-              },
-              null,
-              2,
-            ),
-          );
-        }
+        const data = await useCasePort.run<typeof params, any>("graph.entity.get", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "memory_graph_entity_get",
+            requestId: _id,
+          },
+        });
 
-        // Otherwise list with filters
-        const filter: { type?: string; name?: string } = {};
-        if (params.type) filter.type = params.type;
-        if (params.name) filter.name = params.name;
-
-        const entities = db.graph.listEntities(userId, agentId, Object.keys(filter).length > 0 ? filter : undefined);
-
-        if (entities.length === 0) {
+        if (!data || (Array.isArray(data) && data.length === 0)) {
           return createResult(
             params.type || params.name
               ? `No entities found${params.type ? ` with type "${params.type}"` : ""}${params.name ? ` matching name "${params.name}"` : ""}.`
@@ -93,23 +71,40 @@ export function registerGraphTools(
           );
         }
 
-        const summary = entities.map((e) => ({
+        if (!Array.isArray(data)) {
+          return createResult(
+            JSON.stringify(
+              {
+                id: data.id,
+                name: data.name,
+                type: data.type,
+                properties: data.properties,
+                created_at: data.created_at,
+                updated_at: data.updated_at,
+              },
+              null,
+              2,
+            ),
+          );
+        }
+
+        const summary = data.map((e: any) => ({
           id: e.id,
           name: e.name,
           type: e.type,
-          properties: Object.keys(e.properties).length > 0 ? e.properties : undefined,
+          properties: Object.keys(e.properties || {}).length > 0 ? e.properties : undefined,
         }));
 
-        return createResult(`📦 Found ${entities.length} entity(s):\n\n${JSON.stringify(summary, null, 2)}`);
+        return createResult(`📦 Found ${data.length} entity(s):\n\n${JSON.stringify(summary, null, 2)}`);
       } catch (error) {
         return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
       }
     },
   });
 
-  // ===========================================================================
+  // ==========================================================================
   // Tool 2: memory_graph_entity_set
-  // ===========================================================================
+  // ==========================================================================
   api.registerTool({
     name: "memory_graph_entity_set",
     label: "Graph Entity Set",
@@ -134,20 +129,20 @@ export function registerGraphTools(
     ) {
       try {
         const sessionKey = getSessionKey(ctx);
-        const { userId, agentId } = extractScope(sessionKey);
-        const db = getSlotDBForContext(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
 
-        let entity;
+        const entity = await useCasePort.run<typeof params, any>("graph.entity.set", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "memory_graph_entity_set",
+            requestId: _id,
+          },
+        });
+
         if (params.id) {
-          // Update existing
-          entity = db.graph.updateEntity(userId, agentId, params.id, {
-            name: params.name,
-            type: params.type,
-            properties: params.properties,
-          });
-          if (!entity) {
-            return createResult(`Entity with ID "${params.id}" not found.`, true);
-          }
           return createResult(
             `✏️ Entity updated:\n${JSON.stringify(
               { id: entity.id, name: entity.name, type: entity.type, properties: entity.properties },
@@ -155,30 +150,24 @@ export function registerGraphTools(
               2,
             )}`,
           );
-        } else {
-          // Create new
-          entity = db.graph.createEntity(userId, agentId, {
-            name: params.name,
-            type: params.type,
-            properties: params.properties,
-          });
-          return createResult(
-            `✅ Entity created:\n${JSON.stringify(
-              { id: entity.id, name: entity.name, type: entity.type, properties: entity.properties },
-              null,
-              2,
-            )}`,
-          );
         }
+
+        return createResult(
+          `✅ Entity created:\n${JSON.stringify(
+            { id: entity.id, name: entity.name, type: entity.type, properties: entity.properties },
+            null,
+            2,
+          )}`,
+        );
       } catch (error) {
         return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
       }
     },
   });
 
-  // ===========================================================================
+  // ==========================================================================
   // Tool 3: memory_graph_rel_add
-  // ===========================================================================
+  // ==========================================================================
   api.registerTool({
     name: "memory_graph_rel_add",
     label: "Graph Relationship Add",
@@ -210,36 +199,39 @@ export function registerGraphTools(
     ) {
       try {
         const sessionKey = getSessionKey(ctx);
-        const { userId, agentId } = extractScope(sessionKey);
-        const db = getSlotDBForContext(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
 
-        // Verify entities exist
-        const source = db.graph.getEntity(userId, agentId, params.source_id);
-        const target = db.graph.getEntity(userId, agentId, params.target_id);
+        const rel = await useCasePort.run<typeof params, any>("graph.rel.add", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "memory_graph_rel_add",
+            requestId: _id,
+          },
+        });
 
-        if (!source) {
-          return createResult(`Source entity "${params.source_id}" not found.`, true);
-        }
-        if (!target) {
-          return createResult(`Target entity "${params.target_id}" not found.`, true);
-        }
+        const source = await useCasePort.run<{ id: string }, any>("graph.entity.get", {
+          context: { userId, agentId },
+          payload: { id: params.source_id },
+          meta: { source: "openclaw", toolName: "memory_graph_rel_add", requestId: _id },
+        });
 
-        const rel = db.graph.createRelationship(userId, agentId, {
-          source_entity_id: params.source_id,
-          target_entity_id: params.target_id,
-          relation_type: params.relation_type,
-          weight: params.weight,
-          properties: params.properties,
+        const target = await useCasePort.run<{ id: string }, any>("graph.entity.get", {
+          context: { userId, agentId },
+          payload: { id: params.target_id },
+          meta: { source: "openclaw", toolName: "memory_graph_rel_add", requestId: _id },
         });
 
         return createResult(
           `🔗 Relationship created:\n` +
-            `${source.name} --[${params.relation_type}]--> ${target.name}\n\n` +
+            `${source?.name || params.source_id} --[${params.relation_type}]--> ${target?.name || params.target_id}\n\n` +
             JSON.stringify(
               {
                 id: rel.id,
-                source: source.name,
-                target: target.name,
+                source: source?.name || params.source_id,
+                target: target?.name || params.target_id,
                 relation_type: rel.relation_type,
                 weight: rel.weight,
                 properties: rel.properties,
@@ -254,9 +246,9 @@ export function registerGraphTools(
     },
   });
 
-  // ===========================================================================
+  // ==========================================================================
   // Tool 4: memory_graph_rel_remove
-  // ===========================================================================
+  // ==========================================================================
   api.registerTool({
     name: "memory_graph_rel_remove",
     label: "Graph Relationship Remove",
@@ -277,20 +269,27 @@ export function registerGraphTools(
     ) {
       try {
         const sessionKey = getSessionKey(ctx);
-        const { userId, agentId } = extractScope(sessionKey);
-        const db = getSlotDBForContext(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const result = await useCasePort.run<typeof params, { deleted: boolean }>("graph.rel.remove", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "memory_graph_rel_remove",
+            requestId: _id,
+          },
+        });
 
         if (params.id) {
-          // Delete by ID
-          const deleted = db.graph.deleteRelationship(userId, agentId, params.id);
-          if (deleted) {
-            return createResult(`✅ Relationship "${params.id}" deleted.`);
-          } else {
-            return createResult(`Relationship "${params.id}" not found.`);
-          }
+          return createResult(
+            result.deleted
+              ? `✅ Relationship "${params.id}" deleted.`
+              : `Relationship "${params.id}" not found.`,
+          );
         }
 
-        // Need source + target + relation_type
         if (!params.source_id || !params.target_id || !params.relation_type) {
           return createResult(
             "Error: Either provide 'id' or provide 'source_id', 'target_id', and 'relation_type'.",
@@ -298,36 +297,20 @@ export function registerGraphTools(
           );
         }
 
-        // Find relationship by source/target/type
-        const rels = db.graph.getRelationships(userId, agentId, params.source_id, "outgoing");
-        const rel = rels.find(
-          (r) =>
-            r.target_entity_id === params.target_id && r.relation_type === params.relation_type,
+        return createResult(
+          result.deleted
+            ? `✅ Relationship deleted: ${params.source_id} --[${params.relation_type}]--> ${params.target_id}`
+            : `Relationship not found: ${params.source_id} --[${params.relation_type}]--> ${params.target_id}`,
         );
-
-        if (!rel) {
-          return createResult(
-            `Relationship not found: ${params.source_id} --[${params.relation_type}]--> ${params.target_id}`,
-          );
-        }
-
-        const deleted = db.graph.deleteRelationship(userId, agentId, rel.id);
-        if (deleted) {
-          return createResult(
-            `✅ Relationship deleted: ${params.source_id} --[${params.relation_type}]--> ${params.target_id}`,
-          );
-        } else {
-          return createResult("Failed to delete relationship.");
-        }
       } catch (error) {
         return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
       }
     },
   });
 
-  // ===========================================================================
+  // ==========================================================================
   // Tool 5: memory_graph_search
-  // ===========================================================================
+  // ==========================================================================
   api.registerTool({
     name: "memory_graph_search",
     label: "Graph Search",
@@ -348,38 +331,49 @@ export function registerGraphTools(
     ) {
       try {
         const sessionKey = getSessionKey(ctx);
-        const { userId, agentId } = extractScope(sessionKey);
-        const db = getSlotDBForContext(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
 
-        // Get starting entity
-        const startEntity = db.graph.getEntity(userId, agentId, params.entity_id);
+        const startEntity = await useCasePort.run<{ id: string }, any>("graph.entity.get", {
+          context: { userId, agentId },
+          payload: { id: params.entity_id },
+          meta: {
+            source: "openclaw",
+            toolName: "memory_graph_search",
+            requestId: _id,
+          },
+        });
+
         if (!startEntity) {
           return createResult(`Entity "${params.entity_id}" not found.`, true);
         }
 
-        const depth = Math.min(Math.max(params.depth || 2, 1), 3); // Clamp 1-3
+        const depth = Math.min(Math.max(params.depth || 2, 1), 3);
+        const traversed = await useCasePort.run<typeof params, { entities: any[]; relationships: any[] }>("graph.search", {
+          context: { userId, agentId },
+          payload: {
+            entity_id: params.entity_id,
+            depth,
+            relation_type: params.relation_type,
+          },
+          meta: {
+            source: "openclaw",
+            toolName: "memory_graph_search",
+            requestId: _id,
+          },
+        });
 
-        // Traverse graph
-        const result = db.graph.traverseGraph(userId, agentId, params.entity_id, depth);
-
-        // Filter by relation type if specified
-        let relationships = result.relationships;
-        if (params.relation_type) {
-          relationships = relationships.filter((r) => r.relation_type === params.relation_type);
-        }
-
-        // Build readable output
         let output = `🕸️ Graph Traversal from "${startEntity.name}" (depth: ${depth})\n\n`;
 
-        output += `📦 Entities (${result.entities.length}):\n`;
-        result.entities.forEach((e) => {
+        output += `📦 Entities (${traversed.entities.length}):\n`;
+        traversed.entities.forEach((e) => {
           output += `  • ${e.name} (${e.type})${e.id === params.entity_id ? " [START]" : ""}\n`;
         });
 
-        output += `\n🔗 Relationships (${relationships.length}):\n`;
-        relationships.forEach((r) => {
-          const source = result.entities.find((e) => e.id === r.source_entity_id);
-          const target = result.entities.find((e) => e.id === r.target_entity_id);
+        output += `\n🔗 Relationships (${traversed.relationships.length}):\n`;
+        traversed.relationships.forEach((r) => {
+          const source = traversed.entities.find((e) => e.id === r.source_entity_id);
+          const target = traversed.entities.find((e) => e.id === r.target_entity_id);
           output += `  ${source?.name || "?"} --[${r.relation_type}]--> ${target?.name || "?"}`;
           if (r.weight !== 1.0) output += ` (weight: ${r.weight})`;
           output += `\n`;

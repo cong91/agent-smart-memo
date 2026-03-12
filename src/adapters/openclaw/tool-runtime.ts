@@ -1,4 +1,6 @@
 import { SlotDB } from "../../db/slot-db.js";
+import { DefaultMemoryUseCasePort } from "../../core/usecases/default-memory-usecase-port.js";
+import type { MemoryUseCasePort } from "../../core/contracts/adapter-contracts.js";
 import {
   createInitialRuntimeConfig,
   createToolTextResult,
@@ -10,6 +12,7 @@ import {
 // OpenClaw runtime adapter state
 let runtimeConfig: MemoryRuntimeConfig = createInitialRuntimeConfig();
 const dbInstances = new Map<string, SlotDB>();
+const useCasePortInstances = new Map<string, MemoryUseCasePort>();
 
 export function configureOpenClawRuntime(options?: {
   stateDir?: string;
@@ -41,6 +44,17 @@ export function getSlotDBForContext(ctx: any): SlotDB {
     dbInstances.set(slotDbDir, db);
   }
   return db;
+}
+
+export function getMemoryUseCasePortForContext(ctx: any): MemoryUseCasePort {
+  const slotDbDir = resolveSlotDbDirForContext(ctx, runtimeConfig);
+  let port = useCasePortInstances.get(slotDbDir);
+  if (!port) {
+    const db = getSlotDBForContext(ctx);
+    port = new DefaultMemoryUseCasePort(db);
+    useCasePortInstances.set(slotDbDir, port);
+  }
+  return port;
 }
 
 export function createOpenClawResult(text: string, isError = false) {
