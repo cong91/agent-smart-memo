@@ -1,38 +1,116 @@
-# @mrc2204/agent-smart-memo
+# Agent Smart Memo
 
-🧠 **Smart Memory Plugin for [OpenClaw](https://openclaw.ai)** — Give your AI agents persistent, intelligent memory.
+> **Shared Agent Memory Platform** with runtime adapters for **OpenClaw**, **Paperclip**, and future agent systems.
 
-Your agents forget everything after each conversation. This plugin fixes that.
+`agent-smart-memo` started as an OpenClaw memory plugin. It is now evolving into a **moduleized memory platform**:
 
-## What it does
+- **core** → contracts, use-cases, namespace policy, error model
+- **adapter-openclaw** → plugin entry, tool registration, hook wiring, runtime bridge
+- **adapter-paperclip** → runtime wrapper, caller integration, compatibility mapping
+- **shared infra** → Qdrant, embeddings, SlotDB, GraphDB, packaging scripts
 
-- **Auto-Capture** — Automatically extracts important facts from every conversation (names, preferences, decisions, project status, etc.)
-- **Auto-Recall** — Injects relevant memories into agent context before each response — agents "remember" without being told
-- **Essence Distillation** — Filters noise, keeps only decision-grade facts. Your agent's memory stays clean and useful
-- **Slot Memory** — Structured key-value storage organized by categories (profile, preferences, project, environment)
-- **Vector Search** — Find semantically similar memories using Qdrant
-- **Multi-Agent Support** — Each agent maintains its own memory scope, no cross-contamination
+That means this repository should no longer be understood as *only* an OpenClaw plugin repo.
+It is a **shared memory engine with target-specific artifacts**.
 
-## Installation
+---
+
+## 1) What this project does
+
+Agent Smart Memo provides a unified memory stack for AI agents:
+
+- **Semantic memory** via Qdrant (`memory_search`, `memory_store`)
+- **Structured slot memory** via SQLite (`memory_slot_*`)
+- **Graph memory** for entity/relationship retrieval (`memory_graph_*`)
+- **Auto-capture / auto-recall** for OpenClaw runtime
+- **Shared runtime contracts** for multi-system memory callers
+- **Target-based packaging** so each runtime only consumes the artifact it needs
+
+---
+
+## 2) Runtime targets
+
+### OpenClaw target
+Use this when you want Agent Smart Memo as an OpenClaw memory plugin.
+
+Contains:
+- core
+- required infra
+- OpenClaw adapter
+- plugin entry / hooks / tool registration
+
+Artifact intent:
+- **OpenClaw plugin artifact**
+
+### Paperclip target
+Use this when you want a Paperclip runtime caller over the same memory core.
+
+Contains:
+- core
+- required infra
+- Paperclip adapter
+- runtime wrapper / compatibility mapper
+
+Artifact intent:
+- **Paperclip runtime package**
+
+### Core target
+Use this when you only want shared contracts/use-cases for future systems.
+
+Contains:
+- core contracts
+- use-case abstractions
+- shared platform rules
+
+Artifact intent:
+- **runtime-agnostic shared memory core**
+
+---
+
+## 3) Architecture principles
+
+### Compatibility-first
+Current OpenClaw behavior must not break while module boundaries are extracted.
+
+### Target-based packaging
+Do **not** treat the whole repository output as one OpenClaw-only artifact.
+
+- OpenClaw artifact should contain only what OpenClaw needs
+- Paperclip artifact should contain only what Paperclip needs
+- Core artifact should stay reusable for future systems
+
+### Shared contracts
+The following should be shared across runtimes:
+- namespace policy
+- actor context contract
+- error model
+- use-case interfaces
+- rollout guardrails
+
+---
+
+## 4) Quick start for OpenClaw
+
+If your current goal is still **“install the memory plugin into OpenClaw”**, use this section.
+
+### Install
 
 ```bash
 openclaw plugins install @mrc2204/agent-smart-memo
 ```
 
-## Quick Start
+### Prerequisites
 
-### 1. Prerequisites
+You need these services running:
 
-You need two services running:
+| Service | Purpose | Example |
+|---|---|---|
+| Qdrant | Semantic vector memory | `docker run -d -p 6333:6333 qdrant/qdrant` |
+| Embedding backend | Embeddings for semantic memory | Ollama / OpenAI-compatible / docker adapter |
+| LLM endpoint | Fact extraction / auto-capture | Any OpenAI-compatible API |
 
-| Service | What for | Install |
-|---------|----------|---------|
-| [Qdrant](https://qdrant.tech/documentation/quick-start/) | Stores memory vectors | `docker run -d -p 6333:6333 qdrant/qdrant` |
-| [Ollama](https://ollama.ai) | Generates text embeddings | [Download](https://ollama.ai/download) then `ollama pull mxbai-embed-large` |
+### OpenClaw config example
 
-### 2. Configure
-
-Add to your `~/.openclaw/openclaw.json`:
+Add to `~/.openclaw/openclaw.json`:
 
 ```json5
 {
@@ -45,25 +123,20 @@ Add to your `~/.openclaw/openclaw.json`:
       "agent-smart-memo": {
         enabled: true,
         config: {
-          // Required: Qdrant connection
           qdrantHost: "localhost",
           qdrantPort: 6333,
           qdrantCollection: "openclaw_memory",
 
-          // Required: Any OpenAI-compatible API for fact extraction
           llmBaseUrl: "https://api.openai.com/v1",
           llmApiKey: "sk-...",
           llmModel: "gpt-4o-mini",
 
-          // Required: Embedding backend (additive, backward-compatible)
           embedBaseUrl: "http://localhost:11434",
-          embedBackend: "ollama", // optional: ollama | openai | docker
-          embedModel: "mxbai-embed-large",
+          embedBackend: "ollama",
+          embedModel: "qwen3-embedding:0.6b",
           embedDimensions: 1024,
 
-          // Optional: explicit SlotDB target dir
-          // Priority: OPENCLAW_SLOTDB_DIR > config.slotDbDir > ${OPENCLAW_STATE_DIR}/agent-memo
-          slotDbDir: "/Users/mrcagents/.openclaw/agent-memo"
+          slotDbDir: "/Users/your-user/.openclaw/agent-memo"
         }
       }
     }
@@ -71,225 +144,265 @@ Add to your `~/.openclaw/openclaw.json`:
 }
 ```
 
-### 3. Done!
-
-Start chatting with your agent. Memories are captured automatically.
-
-### Embedding backend mapping (internal)
-
-When `embedBackend` is set, runtime maps requests internally (no user-facing `embedPath` config):
-
-- `ollama` → `/api/embeddings` body `{ model, prompt }` (legacy path/payload)
-- `docker` → `/engines/llama.cpp/v1/embeddings` body `{ model, input }`
-- `openai` → `/v1/embeddings` body `{ model, input }`
-
-If `embedBackend` is omitted, plugin preserves legacy auto behavior.
-
-## Configuration Options
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `qdrantHost` | string | `"localhost"` | Qdrant server hostname |
-| `qdrantPort` | number | `6333` | Qdrant server port |
-| `qdrantCollection` | string | `"openclaw_memory"` | Qdrant collection name |
-| `llmBaseUrl` | string | — | OpenAI-compatible API base URL |
-| `llmApiKey` | string | — | API key for the LLM |
-| `llmModel` | string | `"gpt-4o-mini"` | Model for fact extraction |
-| `embedBaseUrl` | string | `"http://localhost:11434"` | Embedding service base URL |
-| `embedBackend` | string | _unset_ | Optional backend selector: `ollama` \| `openai` \| `docker` (unset = legacy auto behavior) |
-| `embedModel` | string | `"mxbai-embed-large"` | Embedding model name |
-| `embedDimensions` | number | `1024` | Embedding vector dimensions |
-| `slotDbDir` | string | `${OPENCLAW_STATE_DIR}/agent-memo` | Explicit SlotDB directory. Overridden by `OPENCLAW_SLOTDB_DIR` if set |
-| `autoCaptureEnabled` | boolean | `true` | Enable automatic fact extraction |
-| `autoCaptureMinConfidence` | number | `0.7` | Minimum confidence to store a fact (0-1) |
-| `contextWindowMaxTokens` | number | `12000` | Max tokens sent to LLM for extraction |
-| `summarizeEveryActions` | number | `6` | Auto-summarize project state every N turns |
-| `slotCategories` | string[] | `["profile","preferences","project","environment","custom"]` | Allowed slot categories |
-| `maxSlots` | number | `500` | Max slots per agent+user scope |
-| `injectStateTokenBudget` | number | `500` | Max tokens for auto-recall context injection |
-
-See [CONFIG.example.json](./CONFIG.example.json) for a copy-paste template.
-
-### SlotDB Path Resolution
-
-`agent-smart-memo` now resolves the SQLite slot database directory in this order:
-
-1. `OPENCLAW_SLOTDB_DIR`
-2. Plugin config `slotDbDir`
-3. Legacy fallback `${OPENCLAW_STATE_DIR}/agent-memo`
-
-Examples:
-
-- `OPENCLAW_SLOTDB_DIR=/Users/mrcagents/.openclaw/agent-memo` → DB file becomes `/Users/mrcagents/.openclaw/agent-memo/slots.db`
-- Legacy `new SlotDB("/Users/mrcagents/.openclaw")` still resolves to `/Users/mrcagents/.openclaw/agent-memo/slots.db`
-- Passing `/Users/mrcagents/.openclaw/agent-memo` as the target dir will **not** create nested `/agent-memo/agent-memo`
-
-
-## How It Works
-
-```
-User sends message → Agent responds
-                          ↓
-                    [agent_end event]
-                          ↓
-              Auto-Capture extracts facts
-              using LLM + Essence Distillation
-                          ↓
-              Facts stored in SlotDB + Qdrant
-                          ↓
-              Next conversation starts
-                          ↓
-              Auto-Recall searches relevant memories
-                          ↓
-              Context injected into agent prompt
-                          ↓
-              Agent "remembers" previous conversations ✨
-```
-
-### Essence Distillation Modes
-
-The plugin automatically detects what kind of content is being discussed and applies the right distillation mode:
-
-| Mode | Auto-detected when... | What it keeps |
-|------|----------------------|---------------|
-| `general` | Most conversations | Key decisions, rules, configurations |
-| `principles` | Learning or teaching content | Core principles, atomic rules |
-| `requirements` | Technical specs or constraints | Measurable requirements, acceptance criteria |
-| `market_signal` | Financial or market discussions | Actionable signals, risk levels, triggers |
-
-Modes are inferred automatically — no configuration needed.
-
-## Available Tools
-
-These tools are automatically registered and available to your agents:
-
-| Tool | Description |
-|------|-------------|
-| `memory_search` | Semantic search across all stored memories |
-| `memory_store` | Manually store a memory with vector embedding |
-| `memory_auto_capture` | Manually trigger fact extraction on text |
-| `memory_slot_get` | Read slot value(s) by key or category |
-| `memory_slot_set` | Write a structured slot value |
-| `memory_slot_delete` | Remove a slot |
-| `memory_slot_list` | List all slots for current scope |
-| `memory_graph_add` | Add a knowledge graph relation |
-| `memory_graph_query` | Query the knowledge graph |
-
-## LLM Compatibility
-
-Any OpenAI-compatible chat completions API works:
-
-| Provider | `llmBaseUrl` | `llmModel` |
-|----------|-------------|------------|
-| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
-| Anthropic (via proxy) | Your proxy URL | `claude-sonnet-4-20250514` |
-| Local (Ollama) | `http://localhost:11434/v1` | `llama3.2` |
-| OpenRouter | `https://openrouter.ai/api/v1` | `google/gemini-2.5-flash` |
-| Any proxy | Your proxy URL | Your model |
-
-## Commands
+### OpenClaw target commands
 
 ```bash
-# Install
-openclaw plugins install @mrc2204/agent-smart-memo
-
-# Update to latest version
-openclaw plugins update agent-smart-memo
-
-# Check status
-openclaw plugins info agent-smart-memo
-
-# Uninstall
-openclaw plugins uninstall agent-smart-memo
-```
-
-## Module Boundaries & Build Targets
-
-From ASM-43 onward, this repository is built as **multi-target artifacts** (compatibility-first):
-
-- `openclaw` target → OpenClaw plugin artifact (`@mrc2204/agent-smart-memo`)
-- `paperclip` target → Paperclip runtime adapter artifact (`@mrc2204/agent-smart-memo-paperclip`)
-- `core` target → runtime-agnostic core contracts/use-cases (`@mrc2204/agent-smart-memo-core`)
-
-Architecture rules:
-
-- Do **not** treat whole repository output as one OpenClaw-only plugin artifact.
-- OpenClaw artifact contains only what is needed for OpenClaw runtime path.
-- Paperclip artifact is packaged separately and does **not** require OpenClaw plugin metadata/runtime path.
-- Core artifact is packaged separately for shared callers.
-
-### Build commands
-
-```bash
-# backward-compatible default (OpenClaw dist)
+npm install
 npm run build
+openclaw plugins install -l .
+```
 
-# explicit targets
+---
+
+## 5) Quick start for Paperclip
+
+If your goal is to let **Paperclip** consume the same memory core:
+
+### Build the Paperclip target
+
+```bash
+npm install
+npm run build:paperclip
+npm run package:paperclip
+npm run pack:paperclip
+```
+
+### What Paperclip consumes
+Paperclip should consume:
+- shared core contracts/use-cases
+- Paperclip adapter runtime
+- no OpenClaw plugin metadata/runtime dependency unless explicitly needed
+
+### Current maturity
+Paperclip path has:
+- adapter contracts
+- compatibility mapper
+- runtime wrapper
+- production-like smoke verification
+
+But README intentionally does **not** overclaim this as full production-grade multi-runtime completion.
+
+---
+
+## 6) Build targets
+
+### Default build
+
+```bash
+npm run build
+```
+
+Default build remains **OpenClaw-compatible** for backward compatibility.
+
+### Explicit targets
+
+```bash
 npm run build:openclaw
 npm run build:paperclip
 npm run build:core
-
-# build all targets
 npm run build:all
 ```
 
-### Packaging commands
+### Packaging
 
 ```bash
-# prepare target package directories under artifacts/npm/<target>
 npm run package:openclaw
 npm run package:paperclip
 npm run package:core
+```
 
-# create .tgz tarballs
+### Pack tarballs
+
+```bash
 npm run pack:openclaw
 npm run pack:paperclip
 npm run pack:core
 ```
 
-### Publish flow (prepared)
-
-> Publish requires valid npm auth/token in runtime environment.
-> If token/auth is missing, publish will fail (expected).
+### Publish targets
 
 ```bash
-# publish selected target package
 npm run publish:openclaw
 npm run publish:paperclip
 npm run publish:core
 ```
 
-GitHub Actions workflow (`.github/workflows/publish.yml`) now:
+> Publish requires valid npm authentication. If `NPM_TOKEN` is missing, publish should be treated as not ready / dry-run only.
 
-- Builds/packages all targets (`openclaw`, `paperclip`, `core`) on CI.
-- Uploads packed target artifacts.
-- Supports manual dispatch to publish a selected target (`dry_run` supported).
+---
 
-## Development
+## 7) CI/CD model
+
+GitHub Actions workflow: `.github/workflows/publish.yml`
+
+Current flow:
+- matrix build for `openclaw`, `paperclip`, `core`
+- build → package → pack `.tgz` → upload artifact
+- target-aware tests
+- `workflow_dispatch` for manual publish
+- `dry_run` supported
+- real publish gated by `NPM_TOKEN`
+
+### Important distinction
+A `work/...` branch is for:
+- **CI checks**
+- **PR review**
+- **dry-run readiness**
+
+It is **not** the same as:
+- production deploy
+- final release approval
+- final npm publish approval
+
+Recommended flow:
+
+```text
+work/... push -> CI checks -> PR review -> approve -> merge default branch -> publish/release/deploy
+```
+
+---
+
+## 8) Memory capabilities
+
+### Semantic memory
+- `memory_search`
+- `memory_store`
+- namespace-aware retrieval
+- registry-aware alias normalization
+- explicit unknown namespace validation
+
+### Slot memory
+- `memory_slot_get`
+- `memory_slot_set`
+- `memory_slot_delete`
+- `memory_slot_list`
+
+### Graph memory
+- entity create/get/search
+- relationship add/remove
+- scoped traversal
+
+### Runtime automation
+- auto-capture
+- auto-recall
+- runtime identity injection where supported
+
+---
+
+## 9) Configuration notes
+
+### Embedding backend mapping
+When `embedBackend` is set:
+- `ollama` → `/api/embeddings`
+- `docker` → `/engines/llama.cpp/v1/embeddings`
+- `openai` → `/v1/embeddings`
+
+If omitted, legacy auto behavior is preserved.
+
+### SlotDB path resolution
+Resolution order:
+1. `OPENCLAW_SLOTDB_DIR`
+2. plugin config `slotDbDir`
+3. `${OPENCLAW_STATE_DIR}/agent-memo`
+
+---
+
+## 10) Verification levels
+
+### Build level
+Confirms code compiles:
 
 ```bash
-# Clone
-git clone https://github.com/cong91/agent-smart-memo.git
-cd agent-smart-memo
-
-# Install
-npm install
-
-# Build (OpenClaw-compatible default)
 npm run build
-
-# Optional: build all module targets
 npm run build:all
+```
 
-# Link OpenClaw plugin locally (for openclaw target)
-openclaw plugins install -l .
+### Contract / integration level
 
-# Run tests
+```bash
 npm test
 npm run test:openclaw
 npm run test:paperclip
 ```
 
-## License
+### Production-like runtime verification
+Examples already added in this repo include:
+- Paperclip runtime E2E
+- OpenClaw anti-regression integration
+- production-like smoke parity harness
+
+This is stronger than mock-only testing, but still distinct from a full production deployment.
+
+---
+
+## 11) Repository layout (high level)
+
+```text
+src/
+  core/
+    contracts/
+    usecases/
+  adapters/
+    openclaw/
+    paperclip/
+  tools/
+  hooks/
+  entries/
+  services/
+  db/
+  shared/
+
+scripts/
+artifacts/
+docs/architecture/
+```
+
+---
+
+## 12) Current project status
+
+Current repo status after ASM-43 work:
+- architecture pack completed
+- implementation pack substantially advanced
+- runtime wiring exists for OpenClaw and Paperclip paths
+- production-like smoke parity evidence exists
+- target-based packaging/build pipeline exists
+
+Still be precise about claims:
+- strong progress beyond scaffold ✅
+- compatibility-first runtime wiring ✅
+- full production-grade multi-runtime completion should only be claimed with full runtime-host evidence and approved release flow
+
+---
+
+## 13) Useful commands
+
+```bash
+# install dependencies
+npm install
+
+# default build (OpenClaw target)
+npm run build
+
+# build all targets
+npm run build:all
+
+# test
+npm test
+npm run test:openclaw
+npm run test:paperclip
+
+# package / pack
+npm run package:openclaw
+npm run package:paperclip
+npm run package:core
+npm run pack:openclaw
+npm run pack:paperclip
+npm run pack:core
+```
+
+---
+
+## 14) License
 
 MIT © [mrc2204](https://github.com/cong91)
