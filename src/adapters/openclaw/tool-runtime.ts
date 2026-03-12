@@ -1,6 +1,7 @@
 import { SlotDB } from "../../db/slot-db.js";
 import { DefaultMemoryUseCasePort } from "../../core/usecases/default-memory-usecase-port.js";
 import type { MemoryUseCasePort } from "../../core/contracts/adapter-contracts.js";
+import type { SemanticMemoryUseCase } from "../../core/usecases/semantic-memory-usecase.js";
 import {
   createInitialRuntimeConfig,
   createToolTextResult,
@@ -13,15 +14,20 @@ import {
 let runtimeConfig: MemoryRuntimeConfig = createInitialRuntimeConfig();
 const dbInstances = new Map<string, SlotDB>();
 const useCasePortInstances = new Map<string, MemoryUseCasePort>();
+let semanticUseCaseFactory: ((slotDbDir: string) => SemanticMemoryUseCase | undefined) | undefined;
 
 export function configureOpenClawRuntime(options?: {
   stateDir?: string;
   slotDbDir?: string;
+  semanticUseCaseFactory?: (slotDbDir: string) => SemanticMemoryUseCase | undefined;
 }): MemoryRuntimeConfig {
   runtimeConfig = {
     stateDir: options?.stateDir || runtimeConfig.stateDir,
     slotDbDir: options?.slotDbDir || runtimeConfig.slotDbDir,
   };
+  if (options?.semanticUseCaseFactory) {
+    semanticUseCaseFactory = options.semanticUseCaseFactory;
+  }
   return runtimeConfig;
 }
 
@@ -51,7 +57,8 @@ export function getMemoryUseCasePortForContext(ctx: any): MemoryUseCasePort {
   let port = useCasePortInstances.get(slotDbDir);
   if (!port) {
     const db = getSlotDBForContext(ctx);
-    port = new DefaultMemoryUseCasePort(db);
+    const semanticUseCase = semanticUseCaseFactory ? semanticUseCaseFactory(slotDbDir) : undefined;
+    port = new DefaultMemoryUseCasePort(db, semanticUseCase);
     useCasePortInstances.set(slotDbDir, port);
   }
   return port;

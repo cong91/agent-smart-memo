@@ -29,6 +29,25 @@ Phase V verifies integrated behavior after ASM-58..ASM-61 implementation slices 
 - Shared adapter contracts exist for future callers (`src/core/contracts/adapter-contracts.ts`).
 - Paperclip compatibility adapter path is prepared and contract-tested.
 
+## 2026-03-12 deepening pass (post-Phase V hardening)
+
+This pass extends execution depth beyond scaffold for adaptive multi-system behavior:
+
+- `memory.capture` / `memory.search` now execute through **MemoryUseCasePort** via a real semantic use-case (`src/core/usecases/semantic-memory-usecase.ts`) instead of “not wired yet” fallback.
+- OpenClaw runtime now wires semantic use-case instances through boundary configuration (`configureOpenClawRuntime(...semanticUseCaseFactory)`), so semantic tools and slot/graph tools share one execution boundary.
+- `memory_store` / `memory_search` OpenClaw tools now run through runtime boundary + use-case path (`src/tools/semantic-memory-tools.ts`) rather than bypassing core orchestration.
+- Paperclip runtime now supports semantic memory execution path (runtime can inject/use a real `SemanticMemoryUseCase`, covered by e2e).
+
+Additional tests added to strengthen parity/regression evidence:
+
+- `tests/test-semantic-memory-usecase.ts`
+- `tests/test-openclaw-semantic-tools-integration.ts`
+- `tests/test-paperclip-runtime-e2e.ts` (extended to cover `memory.capture` + `memory.search`)
+
+Verifier update:
+
+- `scripts/asm-phase5-verify.ts` now includes the semantic use-case and semantic runtime integration tests above.
+
 ## Go / No-Go decision
 
 - **Decision: GO (implementation lane)**

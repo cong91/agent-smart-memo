@@ -20,8 +20,8 @@ import { resolveSlotDbDir } from "./shared/slotdb-path.js";
 // Tool modules
 import { registerSlotTools } from "./tools/slot-tools.js";
 import { registerGraphTools } from "./tools/graph-tools.js";
-import { createMemorySearchTool } from "./tools/memory_search.js";
-import { createMemoryStoreTool } from "./tools/memory_store.js";
+import { registerSemanticMemoryTools } from "./tools/semantic-memory-tools.js";
+import { SemanticMemoryUseCase } from "./core/usecases/semantic-memory-usecase.js";
 
 // Hook modules
 import { registerAutoRecall } from "./hooks/auto-recall.js";
@@ -391,21 +391,38 @@ const agentMemoPlugin = {
     }
 
     const dedupe = new DeduplicationService(0.95, console);
+    const semanticUseCaseBySlotDbDir = new Map<string, SemanticMemoryUseCase>();
+    const getSemanticUseCase = (resolvedSlotDbDir: string): SemanticMemoryUseCase => {
+      let uc = semanticUseCaseBySlotDbDir.get(resolvedSlotDbDir);
+      if (!uc) {
+        uc = new SemanticMemoryUseCase(qdrant, embedding, dedupe);
+        semanticUseCaseBySlotDbDir.set(resolvedSlotDbDir, uc);
+      }
+      return uc;
+    };
 
     // ----------------------------------------------------------------
-    // Register Qdrant tools from modules
+    // Register tools through shared use-case runtime boundary
     // ----------------------------------------------------------------
-    const memorySearchTool = createMemorySearchTool(qdrant, embedding, "shared.project_context");
-    const memoryStoreTool = createMemoryStoreTool(qdrant, embedding, dedupe, "shared.project_context");
-
-    api.registerTool(memorySearchTool);
-    api.registerTool(memoryStoreTool);
+    registerSemanticMemoryTools(api, {
+      stateDir,
+      slotDbDir,
+      semanticUseCaseFactory: (resolvedSlotDbDir) => getSemanticUseCase(resolvedSlotDbDir),
+    });
 
     // ----------------------------------------------------------------
     // Register Slot & Graph tools
     // ----------------------------------------------------------------
-    registerSlotTools(api, slotCategories, { stateDir, slotDbDir });
-    registerGraphTools(api, { stateDir, slotDbDir });
+    registerSlotTools(api, slotCategories, {
+      stateDir,
+      slotDbDir,
+      semanticUseCaseFactory: (resolvedSlotDbDir) => getSemanticUseCase(resolvedSlotDbDir),
+    });
+    registerGraphTools(api, {
+      stateDir,
+      slotDbDir,
+      semanticUseCaseFactory: (resolvedSlotDbDir) => getSemanticUseCase(resolvedSlotDbDir),
+    });
 
     // ----------------------------------------------------------------
     // Register lifecycle hooks

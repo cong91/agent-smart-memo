@@ -4,6 +4,7 @@ import type {
   MemoryUseCasePort,
 } from "../contracts/adapter-contracts.js";
 import { SlotDB } from "../../db/slot-db.js";
+import type { SemanticMemoryUseCase } from "./semantic-memory-usecase.js";
 
 interface SlotGetPayload {
   key?: string;
@@ -111,7 +112,10 @@ function allScopeIdentities(ctx: { userId: string; agentId: string }): ScopeIden
 }
 
 export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
-  constructor(private readonly slotDb: SlotDB) {}
+  constructor(
+    private readonly slotDb: SlotDB,
+    private readonly semanticUseCase?: SemanticMemoryUseCase,
+  ) {}
 
   async run<TReq, TRes>(
     useCase: MemoryUseCaseName,
@@ -139,8 +143,9 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       case "graph.search":
         return this.handleGraphSearch(payload as unknown as GraphSearchPayload, req) as TRes;
       case "memory.capture":
+        return this.handleMemoryCapture(payload, req) as TRes;
       case "memory.search":
-        throw new Error(`Use-case '${useCase}' is not wired in DefaultMemoryUseCasePort yet`);
+        return this.handleMemorySearch(payload, req) as TRes;
       default:
         throw new Error(`Unsupported use-case: ${useCase}`);
     }
@@ -345,6 +350,20 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
     }
 
     return { deleted: this.slotDb.graph.deleteRelationship(identity.userId, identity.agentId, rel.id) };
+  }
+
+  private async handleMemoryCapture(payload: Record<string, unknown>, req: CoreRequestEnvelope<unknown>) {
+    if (!this.semanticUseCase) {
+      throw new Error("memory.capture is not available: semantic runtime dependencies are not wired");
+    }
+    return this.semanticUseCase.capture(payload as any, req.context);
+  }
+
+  private async handleMemorySearch(payload: Record<string, unknown>, req: CoreRequestEnvelope<unknown>) {
+    if (!this.semanticUseCase) {
+      throw new Error("memory.search is not available: semantic runtime dependencies are not wired");
+    }
+    return this.semanticUseCase.search(payload as any, req.context);
   }
 
   private handleGraphSearch(payload: GraphSearchPayload, req: CoreRequestEnvelope<unknown>) {

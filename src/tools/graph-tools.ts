@@ -17,6 +17,7 @@ import {
   getSessionKey,
   parseOpenClawSessionIdentity,
 } from "../adapters/openclaw/tool-runtime.js";
+import type { SemanticMemoryUseCase } from "../core/usecases/semantic-memory-usecase.js";
 
 function createResult(text: string, isError = false) {
   return createOpenClawResult(text, isError);
@@ -24,7 +25,11 @@ function createResult(text: string, isError = false) {
 
 export function registerGraphTools(
   api: OpenClawPluginApi,
-  options?: { stateDir?: string; slotDbDir?: string },
+  options?: {
+    stateDir?: string;
+    slotDbDir?: string;
+    semanticUseCaseFactory?: (slotDbDir: string) => SemanticMemoryUseCase | undefined;
+  },
 ): void {
   configureOpenClawRuntime(options);
 
