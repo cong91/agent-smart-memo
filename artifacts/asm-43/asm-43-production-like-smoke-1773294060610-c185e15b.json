@@ -1,0 +1,74 @@
+{
+  "runId": "1773294060610-c185e15b",
+  "startedAt": "2026-03-12T05:41:00.610Z",
+  "runtime": {
+    "qdrantHost": "localhost",
+    "qdrantPort": 6333,
+    "qdrantCollection": "asm43_smoke_1773294060610",
+    "qdrantVectorSize": 1024,
+    "embedBaseUrl": "http://localhost:11434",
+    "embedModel": "qwen3-embedding:0.6b",
+    "embedDimensions": 1024
+  },
+  "scenarios": {
+    "paperclip": {
+      "capture": {
+        "id": "932c7ab5-3d90-45e3-9b15-65ee91e0f965",
+        "created": true,
+        "updated": false,
+        "namespace": "shared.project_context"
+      },
+      "searchCount": 1,
+      "topResult": {
+        "id": "932c7ab5-3d90-45e3-9b15-65ee91e0f965",
+        "rawScore": 0.81860197,
+        "score": 0.8840901276,
+        "text": "Paperclip runtime smoke memory asm43-parity-1773294060610-c185e15b",
+        "namespace": "shared.project_context",
+        "timestamp": 1773294061237,
+        "metadata": {
+          "source": "asm43-smoke",
+          "caller": "paperclip-simulated",
+          "embedding_chunked": false,
+          "embedding_chunks_count": 1,
+          "embedding_chunking_strategy": "array_batch_weighted_avg",
+          "embedding_model": "qwen3-embedding:0.6b",
+          "embedding_model_key": "openai::http://localhost:11434/v1/embeddings::qwen3-embedding:0.6b",
+          "embedding_provider": "openai",
+          "embedding_max_tokens": 8192,
+          "embedding_safe_chunk_tokens": 6145,
+          "embedding_source": "docs",
+          "embedding_fallback_hash": false
+        }
+      },
+      "slotGet": {
+        "key": "project.asm43_smoke",
+        "value": "asm43-parity-1773294060610-c185e15b",
+        "category": "project",
+        "version": 1,
+        "scope": "private"
+      }
+    },
+    "openclaw": {
+      "memoryStoreText": "Memory updated (duplicate detected, ID: 932c7ab5-3d90-45e3-9b15-65ee91e0f965)",
+      "memorySearchText": "Found 1 relevant memories for \"asm43-parity-1773294060610-c185e15b\":\n\n[1] Score: 88.4%\nNamespace: shared.project_context\nText: Paperclip runtime smoke memory asm43-parity-1773294060610-c185e15b\nDate: 3/12/2026",
+      "memorySearchFoundCount": 1,
+      "slotGetText": "{\n  \"key\": \"project.asm43_smoke\",\n  \"value\": \"asm43-parity-1773294060610-c185e15b\",\n  \"category\": \"project\",\n  \"version\": 1,\n  \"scope\": \"private\"\n}"
+    }
+  },
+  "parity": {
+    "semanticSearch": {
+      "paperclipCount": 1,
+      "openclawCount": 1,
+      "token": "asm43-parity-1773294060610-c185e15b",
+      "status": "PASS"
+    },
+    "slotRoundtrip": {
+      "paperclipValue": "asm43-parity-1773294060610-c185e15b",
+      "openclawContainsToken": true,
+      "status": "PASS"
+    }
+  },
+  "finishedAt": "2026-03-12T05:41:01.544Z",
+  "status": "PASS"
+}
