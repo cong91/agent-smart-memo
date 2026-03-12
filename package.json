@@ -21,6 +21,8 @@
     "package:core": "npm run build:core && node scripts/prepare-package-target.mjs core",
     "pack:openclaw": "npm run package:openclaw && (cd artifacts/npm/openclaw && npm pack)",
     "pack:paperclip": "npm run package:paperclip && (cd artifacts/npm/paperclip && npm pack)",
+    "package:paperclip:plugin-local": "npm run build:paperclip && node scripts/prepare-paperclip-plugin-local.mjs",
+    "pack:paperclip:plugin-local": "npm run package:paperclip:plugin-local && (cd artifacts/paperclip-plugin-local && npm pack)",
     "pack:core": "npm run package:core && (cd artifacts/npm/core && npm pack)",
     "publish:openclaw": "npm run package:openclaw && node scripts/publish-target.mjs openclaw",
     "publish:paperclip": "npm run package:paperclip && node scripts/publish-target.mjs paperclip",
