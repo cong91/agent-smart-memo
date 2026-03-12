@@ -114,6 +114,25 @@ async function main() {
     assert(details?.toolResult?.text, "memory_store details.toolResult.text must exist");
   });
 
+  await test("search from scrum session honors explicit assistant alias instead of fallback agent", async () => {
+    const res = await memorySearch.execute("t1b", {
+      query: "namespace alias assistant from scrum",
+      namespace: "assistant" as any,
+      agentId: "scrum",
+      minScore: 0.1,
+    });
+
+    assert(res.isError !== true, "memory_search should succeed from scrum context");
+
+    const must = (qdrant.lastSearchFilter as any)?.must || [];
+    const nsCondition = must.find((m: any) => m?.key === "namespace");
+    assertEqual(
+      nsCondition?.match?.value,
+      "agent.assistant.working_memory",
+      "explicit assistant alias must stay assistant even when fallback agent is scrum"
+    );
+  });
+
   await test("search normalizes alias namespace 'assistant' -> canonical filter", async () => {
     const res = await memorySearch.execute("t2", {
       query: "namespace alias assistant",

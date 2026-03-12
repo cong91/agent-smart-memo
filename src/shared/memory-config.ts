@@ -154,6 +154,11 @@ export function normalizeNamespace(value: string | null | undefined, fallbackAge
     return trimmed as MemoryNamespace;
   }
 
+  const directAgentAlias = resolveAgentId(trimmed);
+  if (directAgentAlias && isRegisteredAgent(directAgentAlias)) {
+    return `agent.${directAgentAlias}.working_memory`;
+  }
+
   const mapped = LEGACY_TO_NEW_NAMESPACE[trimmed as LegacyNamespace];
   if (mapped) return mapped;
 
