@@ -2,7 +2,7 @@
  * Slot Memory Tools for OpenClaw Agent - Task 3.3: Cross-Agent Memory Sharing
  *
  * Supports scoping: private (agent-only), team (shared), public (all agents)
- * 
+ *
  * Tools:
  * - memory_slot_get: Retrieve a slot by key or category (with scope filter)
  * - memory_slot_set: Upsert a slot with scope (private/team/public)
@@ -11,32 +11,13 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { SlotDB } from "../db/slot-db.js";
 import {
-  createInitialRuntimeConfig,
-  createToolTextResult,
-  parseSessionIdentity,
-  resolveSlotDbDirForContext,
-  type MemoryRuntimeConfig,
-} from "../core/runtime-boundary.js";
-
-// Singleton DB instances keyed by resolved slotDbDir
-const dbInstances = new Map<string, SlotDB>();
-
-let runtimeConfig: MemoryRuntimeConfig = createInitialRuntimeConfig();
-
-function getSlotDB(slotDbDir: string): SlotDB {
-  let db = dbInstances.get(slotDbDir);
-  if (!db) {
-    db = new SlotDB(runtimeConfig.stateDir, { slotDbDir });
-    dbInstances.set(slotDbDir, db);
-  }
-  return db;
-}
-
-function resolveSlotDbDirFromContext(ctx: any): string {
-  return resolveSlotDbDirForContext(ctx, runtimeConfig);
-}
+  configureOpenClawRuntime,
+  createOpenClawResult,
+  getSessionKey,
+  getSlotDBForContext,
+  parseOpenClawSessionIdentity,
+} from "../adapters/openclaw/tool-runtime.js";
 
 /**
  * Extract scope identifiers from the session context.
@@ -46,7 +27,7 @@ function resolveSlotDbDirFromContext(ctx: any): string {
  * - "public": global scope
  */
 function extractScope(sessionKey: string, scope?: string): { userId: string; agentId: string } {
-  const { userId, agentId } = parseSessionIdentity(sessionKey);
+  const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
 
   // Map scope to agentId for storage
   if (scope === "team") {
@@ -61,18 +42,16 @@ function extractScope(sessionKey: string, scope?: string): { userId: string; age
 
 // Helper to create proper tool result
 function createResult(text: string, isError = false) {
-  return createToolTextResult(text, isError);
+  return createOpenClawResult(text, isError);
 }
 
 export function registerSlotTools(
   api: OpenClawPluginApi,
-  defaultCategories: string[],
+  _defaultCategories: string[],
   options?: { stateDir?: string; slotDbDir?: string },
 ): void {
-  runtimeConfig = {
-    stateDir: options?.stateDir || runtimeConfig.stateDir,
-    slotDbDir: options?.slotDbDir || runtimeConfig.slotDbDir,
-  };
+  configureOpenClawRuntime(options);
+
   // Tool 1: memory_slot_get
   api.registerTool({
     name: "memory_slot_get",
@@ -88,13 +67,12 @@ export function registerSlotTools(
     },
     async execute(_id: string, params: { key?: string; category?: string; scope?: string }, ctx: any) {
       try {
-        const slotDbDir = resolveSlotDbDirFromContext(ctx);
-        const sessionKey = ctx?.sessionKey || "agent:main:default";
-        const db = getSlotDB(slotDbDir);
+        const sessionKey = getSessionKey(ctx);
+        const db = getSlotDBForContext(ctx);
 
         // Determine which scopes to query
         const scopesToQuery: Array<{ userId: string; agentId: string; label: string }> = [];
-        
+
         if (params.scope === "all") {
           // Query all scopes: private (current agent) + team + public
           const { userId, agentId } = extractScope(sessionKey, "private");
@@ -109,7 +87,7 @@ export function registerSlotTools(
 
         // Collect results from all scopes
         const allResults: Array<any> = [];
-        
+
         for (const scopeInfo of scopesToQuery) {
           if (!params.key && !params.category) {
             const slots = db.list(scopeInfo.userId, scopeInfo.agentId);
@@ -178,10 +156,9 @@ export function registerSlotTools(
     },
     async execute(_id: string, params: { key: string; value: unknown; category?: string; source?: string; scope?: string }, ctx: any) {
       try {
-        const slotDbDir = resolveSlotDbDirFromContext(ctx);
-        const sessionKey = ctx?.sessionKey || "agent:main:default";
+        const sessionKey = getSessionKey(ctx);
         const { userId, agentId } = extractScope(sessionKey, params.scope);
-        const db = getSlotDB(slotDbDir);
+        const db = getSlotDBForContext(ctx);
 
         const slot = db.set(userId, agentId, {
           key: params.key,
@@ -213,10 +190,9 @@ export function registerSlotTools(
     },
     async execute(_id: string, params: { key: string; scope?: string }, ctx: any) {
       try {
-        const slotDbDir = resolveSlotDbDirFromContext(ctx);
-        const sessionKey = ctx?.sessionKey || "agent:main:default";
+        const sessionKey = getSessionKey(ctx);
         const { userId, agentId } = extractScope(sessionKey, params.scope || "private");
-        const db = getSlotDB(slotDbDir);
+        const db = getSlotDBForContext(ctx);
 
         const deleted = db.delete(userId, agentId, params.key);
         const scopeLabel = params.scope || "private";
@@ -247,14 +223,13 @@ export function registerSlotTools(
     },
     async execute(_id: string, params: { category?: string; prefix?: string; scope?: string }, ctx: any) {
       try {
-        const slotDbDir = resolveSlotDbDirFromContext(ctx);
-        const sessionKey = ctx?.sessionKey || "agent:main:default";
-        const db = getSlotDB(slotDbDir);
+        const sessionKey = getSessionKey(ctx);
+        const db = getSlotDBForContext(ctx);
 
         // Determine scopes to query
         const scopesToQuery: Array<{ userId: string; agentId: string; label: string }> = [];
         const queryScope = params.scope || "all";
-        
+
         if (queryScope === "all") {
           const { userId, agentId } = extractScope(sessionKey, "private");
           scopesToQuery.push({ userId, agentId, label: "private" });

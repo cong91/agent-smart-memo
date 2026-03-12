@@ -10,49 +10,27 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { SlotDB } from "../db/slot-db.js";
 import {
-  createInitialRuntimeConfig,
-  createToolTextResult,
-  parseSessionIdentity,
-  resolveSlotDbDirForContext,
-  type MemoryRuntimeConfig,
-} from "../core/runtime-boundary.js";
-
-// Singleton DB instances keyed by resolved slotDbDir
-const dbInstances = new Map<string, SlotDB>();
-
-let runtimeConfig: MemoryRuntimeConfig = createInitialRuntimeConfig();
-
-function getSlotDB(slotDbDir: string): SlotDB {
-  let db = dbInstances.get(slotDbDir);
-  if (!db) {
-    db = new SlotDB(runtimeConfig.stateDir, { slotDbDir });
-    dbInstances.set(slotDbDir, db);
-  }
-  return db;
-}
-
-function resolveSlotDbDirFromContext(ctx: any): string {
-  return resolveSlotDbDirForContext(ctx, runtimeConfig);
-}
+  configureOpenClawRuntime,
+  createOpenClawResult,
+  getSessionKey,
+  getSlotDBForContext,
+  parseOpenClawSessionIdentity,
+} from "../adapters/openclaw/tool-runtime.js";
 
 function extractScope(sessionKey: string): { userId: string; agentId: string } {
-  return parseSessionIdentity(sessionKey);
+  return parseOpenClawSessionIdentity(sessionKey);
 }
 
 function createResult(text: string, isError = false) {
-  return createToolTextResult(text, isError);
+  return createOpenClawResult(text, isError);
 }
 
 export function registerGraphTools(
   api: OpenClawPluginApi,
   options?: { stateDir?: string; slotDbDir?: string },
 ): void {
-  runtimeConfig = {
-    stateDir: options?.stateDir || runtimeConfig.stateDir,
-    slotDbDir: options?.slotDbDir || runtimeConfig.slotDbDir,
-  };
+  configureOpenClawRuntime(options);
   // ===========================================================================
   // Tool 1: memory_graph_entity_get
   // ===========================================================================
@@ -74,10 +52,9 @@ export function registerGraphTools(
       ctx: any,
     ) {
       try {
-        const slotDbDir = resolveSlotDbDirFromContext(ctx);
-        const sessionKey = ctx?.sessionKey || "agent:main:default";
+        const sessionKey = getSessionKey(ctx);
         const { userId, agentId } = extractScope(sessionKey);
-        const db = getSlotDB(slotDbDir);
+        const db = getSlotDBForContext(ctx);
 
         // If ID provided, get single entity
         if (params.id) {
@@ -156,10 +133,9 @@ export function registerGraphTools(
       ctx: any,
     ) {
       try {
-        const slotDbDir = resolveSlotDbDirFromContext(ctx);
-        const sessionKey = ctx?.sessionKey || "agent:main:default";
+        const sessionKey = getSessionKey(ctx);
         const { userId, agentId } = extractScope(sessionKey);
-        const db = getSlotDB(slotDbDir);
+        const db = getSlotDBForContext(ctx);
 
         let entity;
         if (params.id) {
@@ -233,10 +209,9 @@ export function registerGraphTools(
       ctx: any,
     ) {
       try {
-        const slotDbDir = resolveSlotDbDirFromContext(ctx);
-        const sessionKey = ctx?.sessionKey || "agent:main:default";
+        const sessionKey = getSessionKey(ctx);
         const { userId, agentId } = extractScope(sessionKey);
-        const db = getSlotDB(slotDbDir);
+        const db = getSlotDBForContext(ctx);
 
         // Verify entities exist
         const source = db.graph.getEntity(userId, agentId, params.source_id);
@@ -301,10 +276,9 @@ export function registerGraphTools(
       ctx: any,
     ) {
       try {
-        const slotDbDir = resolveSlotDbDirFromContext(ctx);
-        const sessionKey = ctx?.sessionKey || "agent:main:default";
+        const sessionKey = getSessionKey(ctx);
         const { userId, agentId } = extractScope(sessionKey);
-        const db = getSlotDB(slotDbDir);
+        const db = getSlotDBForContext(ctx);
 
         if (params.id) {
           // Delete by ID
@@ -373,10 +347,9 @@ export function registerGraphTools(
       ctx: any,
     ) {
       try {
-        const slotDbDir = resolveSlotDbDirFromContext(ctx);
-        const sessionKey = ctx?.sessionKey || "agent:main:default";
+        const sessionKey = getSessionKey(ctx);
         const { userId, agentId } = extractScope(sessionKey);
-        const db = getSlotDB(slotDbDir);
+        const db = getSlotDBForContext(ctx);
 
         // Get starting entity
         const startEntity = db.graph.getEntity(userId, agentId, params.entity_id);
