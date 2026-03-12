@@ -11,24 +11,18 @@
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { SlotDB } from "../db/slot-db.js";
-import { resolveSlotDbDir } from "../shared/slotdb-path.js";
+import {
+  createInitialRuntimeConfig,
+  createToolTextResult,
+  parseSessionIdentity,
+  resolveSlotDbDirForContext,
+  type MemoryRuntimeConfig,
+} from "../core/runtime-boundary.js";
 
 // Singleton DB instances keyed by resolved slotDbDir
 const dbInstances = new Map<string, SlotDB>();
 
-interface GraphToolRuntimeConfig {
-  stateDir: string;
-  slotDbDir: string;
-}
-
-let runtimeConfig: GraphToolRuntimeConfig = {
-  stateDir: process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`,
-  slotDbDir: resolveSlotDbDir({
-    stateDir: process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`,
-    env: process.env,
-    homeDir: process.env.HOME,
-  }),
-};
+let runtimeConfig: MemoryRuntimeConfig = createInitialRuntimeConfig();
 
 function getSlotDB(slotDbDir: string): SlotDB {
   let db = dbInstances.get(slotDbDir);
@@ -40,29 +34,15 @@ function getSlotDB(slotDbDir: string): SlotDB {
 }
 
 function resolveSlotDbDirFromContext(ctx: any): string {
-  const stateDir = ctx?.stateDir || runtimeConfig.stateDir;
-  const configSlotDbDir = ctx?.pluginConfig?.slotDbDir || ctx?.config?.slotDbDir;
-  return resolveSlotDbDir({
-    stateDir,
-    slotDbDir: configSlotDbDir,
-    env: process.env,
-    homeDir: process.env.HOME,
-  });
+  return resolveSlotDbDirForContext(ctx, runtimeConfig);
 }
 
 function extractScope(sessionKey: string): { userId: string; agentId: string } {
-  const parts = sessionKey.split(":");
-  const agentId = parts.length >= 2 ? parts[1] : "main";
-  const userId = parts.length >= 3 ? parts.slice(2).join(":") : "default";
-  return { userId, agentId };
+  return parseSessionIdentity(sessionKey);
 }
 
 function createResult(text: string, isError = false) {
-  return {
-    content: [{ type: "text" as const, text }],
-    details: { toolResult: { text } },
-    isError,
-  };
+  return createToolTextResult(text, isError);
 }
 
 export function registerGraphTools(

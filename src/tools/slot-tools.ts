@@ -12,24 +12,18 @@
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { SlotDB } from "../db/slot-db.js";
-import { resolveSlotDbDir } from "../shared/slotdb-path.js";
+import {
+  createInitialRuntimeConfig,
+  createToolTextResult,
+  parseSessionIdentity,
+  resolveSlotDbDirForContext,
+  type MemoryRuntimeConfig,
+} from "../core/runtime-boundary.js";
 
 // Singleton DB instances keyed by resolved slotDbDir
 const dbInstances = new Map<string, SlotDB>();
 
-interface SlotToolRuntimeConfig {
-  stateDir: string;
-  slotDbDir: string;
-}
-
-let runtimeConfig: SlotToolRuntimeConfig = {
-  stateDir: process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`,
-  slotDbDir: resolveSlotDbDir({
-    stateDir: process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`,
-    env: process.env,
-    homeDir: process.env.HOME,
-  }),
-};
+let runtimeConfig: MemoryRuntimeConfig = createInitialRuntimeConfig();
 
 function getSlotDB(slotDbDir: string): SlotDB {
   let db = dbInstances.get(slotDbDir);
@@ -41,14 +35,7 @@ function getSlotDB(slotDbDir: string): SlotDB {
 }
 
 function resolveSlotDbDirFromContext(ctx: any): string {
-  const stateDir = ctx?.stateDir || runtimeConfig.stateDir;
-  const configSlotDbDir = ctx?.pluginConfig?.slotDbDir || ctx?.config?.slotDbDir;
-  return resolveSlotDbDir({
-    stateDir,
-    slotDbDir: configSlotDbDir,
-    env: process.env,
-    homeDir: process.env.HOME,
-  });
+  return resolveSlotDbDirForContext(ctx, runtimeConfig);
 }
 
 /**
@@ -59,28 +46,22 @@ function resolveSlotDbDirFromContext(ctx: any): string {
  * - "public": global scope
  */
 function extractScope(sessionKey: string, scope?: string): { userId: string; agentId: string } {
-  const parts = sessionKey.split(":");
-  const agentId = parts.length >= 2 ? parts[1] : "main";
-  const userId = parts.length >= 3 ? parts.slice(2).join(":") : "default";
-  
+  const { userId, agentId } = parseSessionIdentity(sessionKey);
+
   // Map scope to agentId for storage
   if (scope === "team") {
     return { userId, agentId: "__team__" }; // Shared across agents
   } else if (scope === "public") {
     return { userId: "__public__", agentId: "__public__" }; // Global
   }
-  
+
   // Default: private scope (agent-specific)
   return { userId, agentId };
 }
 
 // Helper to create proper tool result
 function createResult(text: string, isError = false) {
-  return {
-    content: [{ type: "text" as const, text }],
-    details: { toolResult: { text } },
-    isError,
-  };
+  return createToolTextResult(text, isError);
 }
 
 export function registerSlotTools(
