@@ -193,6 +193,31 @@ async function main() {
     assert(String(searchRes.content?.[0]?.text || "").includes("Found"), "legacy namespace roundtrip should find memory");
   });
 
+  await test("unknown explicit namespace returns clear validation error instead of silent fallback", async () => {
+    const searchRes = await memorySearch.execute("t6", {
+      query: "unknown namespace",
+      namespace: "totally_unknown_namespace" as any,
+      agentId: "assistant",
+      minScore: 0.1,
+    });
+    assert(searchRes.isError === true, "unknown explicit namespace search must fail clearly");
+    assert(
+      String(searchRes.content?.[0]?.text || "").includes("Unknown namespace"),
+      "search error should mention unknown namespace"
+    );
+
+    const storeRes = await memoryStore.execute("t7", {
+      text: "should not store",
+      namespace: "totally_unknown_namespace" as any,
+      agentId: "assistant",
+    });
+    assert(storeRes.isError === true, "unknown explicit namespace store must fail clearly");
+    assert(
+      String(storeRes.content?.[0]?.text || "").includes("Unknown namespace"),
+      "store error should mention unknown namespace"
+    );
+  });
+
   if (!process.exitCode) {
     console.log("\n🎉 memory tools namespace roundtrip tests passed");
   }

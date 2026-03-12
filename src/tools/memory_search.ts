@@ -1,7 +1,29 @@
 import { QdrantClient } from "../services/qdrant.js";
 import { EmbeddingClient } from "../services/embedding.js";
 import { SearchParams, ToolResult, ScoredPoint, MemoryNamespace } from "../types.js";
-import { getAgentNamespaces, getNamespaceWeight, normalizeNamespace, toCoreAgent } from "../shared/memory-config.js";
+import { getAgentNamespaces, getNamespaceWeight, parseExplicitNamespace, toCoreAgent } from "../shared/memory-config.js";
+
+function resolveAgentFromRuntimeParams(params: { agentId?: string; sessionId?: string; namespace?: unknown }): string {
+  const directAgentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
+  if (directAgentId) return toCoreAgent(directAgentId);
+
+  const sessionId = typeof params.sessionId === "string" ? params.sessionId.trim() : "";
+  if (sessionId) {
+    const parts = sessionId.split(":");
+    if (parts.length >= 2 && parts[0] === "agent") {
+      const fromSession = parts[1]?.trim();
+      if (fromSession) return toCoreAgent(fromSession);
+    }
+  }
+
+  const namespace = typeof params.namespace === "string" ? params.namespace.trim() : "";
+  const nsMatch = /^agent\.([a-z0-9][a-z0-9_-]*)\.(working_memory|lessons|decisions)$/i.exec(namespace);
+  if (nsMatch?.[1]) {
+    return toCoreAgent(nsMatch[1]);
+  }
+
+  return "assistant";
+}
 
 export const memorySearchSchema = {
   type: "object",
@@ -86,9 +108,9 @@ export function createMemorySearchTool(
         const minScore = params.minScore ?? 0.7;
         
         // Determine namespaces to search (normalize user-facing aliases to canonical namespaces)
-        const sourceAgent = toCoreAgent(params.agentId || "assistant");
+        const sourceAgent = resolveAgentFromRuntimeParams(params);
         const namespaces: MemoryNamespace[] = params.namespace
-          ? [normalizeNamespace(params.namespace as string, sourceAgent)]
+          ? [parseExplicitNamespace(params.namespace as string, sourceAgent)]
           : getAgentNamespaces(sourceAgent);
         
         // Build namespace filter (OR if multiple namespaces)

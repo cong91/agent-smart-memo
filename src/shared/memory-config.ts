@@ -165,6 +165,37 @@ export function normalizeNamespace(value: string | null | undefined, fallbackAge
   return `agent.${agent}.working_memory`;
 }
 
+export function parseExplicitNamespace(value: string | null | undefined, fallbackAgent: string = "assistant"): MemoryNamespace {
+  if (!value || !value.trim()) {
+    throw new Error("Namespace cannot be empty when provided explicitly");
+  }
+
+  const trimmed = value.trim();
+  const agent = resolveAgentId(fallbackAgent);
+
+  if (
+    trimmed === "shared.project_context"
+    || trimmed === "shared.rules_slotdb"
+    || trimmed === "shared.runbooks"
+    || trimmed === "noise.filtered"
+    || isAgentNamespace(trimmed)
+  ) {
+    return trimmed as MemoryNamespace;
+  }
+
+  const directAgentAlias = resolveAgentId(trimmed);
+  if (directAgentAlias && isRegisteredAgent(directAgentAlias)) {
+    return `agent.${directAgentAlias}.working_memory`;
+  }
+
+  const mapped = LEGACY_TO_NEW_NAMESPACE[trimmed as LegacyNamespace];
+  if (mapped) return mapped;
+
+  throw new Error(
+    `Unknown namespace: ${trimmed}. Use a registered agent alias, canonical agent.<id>.(working_memory|lessons|decisions), or shared namespace.`
+  );
+}
+
 /**
  * Backward-compatible alias.
  * Historically this returned only a hardcoded core agent and defaulted unknowns to assistant.

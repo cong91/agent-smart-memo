@@ -2,7 +2,29 @@ import { QdrantClient } from "../services/qdrant.js";
 import { EmbeddingClient } from "../services/embedding.js";
 import { DeduplicationService } from "../services/dedupe.js";
 import { StoreParams, ToolResult, Point, MemoryNamespace } from "../types.js";
-import { normalizeNamespace, toCoreAgent, evaluateNoiseV2 } from "../shared/memory-config.js";
+import { normalizeNamespace, parseExplicitNamespace, toCoreAgent, evaluateNoiseV2 } from "../shared/memory-config.js";
+
+function resolveAgentFromRuntimeParams(params: { agentId?: string; sessionId?: string; namespace?: unknown }): string {
+  const directAgentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
+  if (directAgentId) return toCoreAgent(directAgentId);
+
+  const sessionId = typeof params.sessionId === "string" ? params.sessionId.trim() : "";
+  if (sessionId) {
+    const parts = sessionId.split(":");
+    if (parts.length >= 2 && parts[0] === "agent") {
+      const fromSession = parts[1]?.trim();
+      if (fromSession) return toCoreAgent(fromSession);
+    }
+  }
+
+  const namespace = typeof params.namespace === "string" ? params.namespace.trim() : "";
+  const nsMatch = /^agent\.([a-z0-9][a-z0-9_-]*)\.(working_memory|lessons|decisions)$/i.exec(namespace);
+  if (nsMatch?.[1]) {
+    return toCoreAgent(nsMatch[1]);
+  }
+
+  return "assistant";
+}
 
 export const memoryStoreSchema = {
   type: "object",
@@ -81,10 +103,14 @@ export function createMemoryStoreTool(
         }
         
         // Namespace router + normalization policy (ASM-5)
-        const agentId = params.agentId || "assistant";
-        const sourceAgent = toCoreAgent(agentId);
-        const requestedNamespace = (params.namespace as string) || defaultNamespace;
-        let namespace = normalizeNamespace(requestedNamespace, sourceAgent);
+        const sourceAgent = resolveAgentFromRuntimeParams(params);
+        const requestedNamespace =
+          typeof params.namespace === "string" && params.namespace.trim().length > 0
+            ? params.namespace
+            : `agent.${sourceAgent}.working_memory`;
+        let namespace = typeof params.namespace === "string" && params.namespace.trim().length > 0
+          ? parseExplicitNamespace(requestedNamespace, sourceAgent)
+          : normalizeNamespace(requestedNamespace, sourceAgent);
 
         // Noise policy v2: quarantine noisy content into noise.filtered
         const noise = evaluateNoiseV2(text, "tool_call");
