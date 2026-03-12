@@ -2,7 +2,7 @@
  * Slot Memory Tools for OpenClaw Agent - Task 3.3: Cross-Agent Memory Sharing
  *
  * Supports scoping: private (agent-only), team (shared), public (all agents)
- * 
+ *
  * Tools:
  * - memory_slot_get: Retrieve a slot by key or category (with scope filter)
  * - memory_slot_set: Upsert a slot with scope (private/team/public)
@@ -11,87 +11,30 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { SlotDB } from "../db/slot-db.js";
-import { resolveSlotDbDir } from "../shared/slotdb-path.js";
+import {
+  configureOpenClawRuntime,
+  createOpenClawResult,
+  getMemoryUseCasePortForContext,
+  getSessionKey,
+  parseOpenClawSessionIdentity,
+} from "../adapters/openclaw/tool-runtime.js";
+import type { SemanticMemoryUseCase } from "../core/usecases/semantic-memory-usecase.js";
 
-// Singleton DB instances keyed by resolved slotDbDir
-const dbInstances = new Map<string, SlotDB>();
-
-interface SlotToolRuntimeConfig {
-  stateDir: string;
-  slotDbDir: string;
-}
-
-let runtimeConfig: SlotToolRuntimeConfig = {
-  stateDir: process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`,
-  slotDbDir: resolveSlotDbDir({
-    stateDir: process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`,
-    env: process.env,
-    homeDir: process.env.HOME,
-  }),
-};
-
-function getSlotDB(slotDbDir: string): SlotDB {
-  let db = dbInstances.get(slotDbDir);
-  if (!db) {
-    db = new SlotDB(runtimeConfig.stateDir, { slotDbDir });
-    dbInstances.set(slotDbDir, db);
-  }
-  return db;
-}
-
-function resolveSlotDbDirFromContext(ctx: any): string {
-  const stateDir = ctx?.stateDir || runtimeConfig.stateDir;
-  const configSlotDbDir = ctx?.pluginConfig?.slotDbDir || ctx?.config?.slotDbDir;
-  return resolveSlotDbDir({
-    stateDir,
-    slotDbDir: configSlotDbDir,
-    env: process.env,
-    homeDir: process.env.HOME,
-  });
-}
-
-/**
- * Extract scope identifiers from the session context.
- * For cross-agent sharing, we use special agentId values:
- * - "private": current agent only (default)
- * - "team": shared across all agents
- * - "public": global scope
- */
-function extractScope(sessionKey: string, scope?: string): { userId: string; agentId: string } {
-  const parts = sessionKey.split(":");
-  const agentId = parts.length >= 2 ? parts[1] : "main";
-  const userId = parts.length >= 3 ? parts.slice(2).join(":") : "default";
-  
-  // Map scope to agentId for storage
-  if (scope === "team") {
-    return { userId, agentId: "__team__" }; // Shared across agents
-  } else if (scope === "public") {
-    return { userId: "__public__", agentId: "__public__" }; // Global
-  }
-  
-  // Default: private scope (agent-specific)
-  return { userId, agentId };
-}
-
-// Helper to create proper tool result
 function createResult(text: string, isError = false) {
-  return {
-    content: [{ type: "text" as const, text }],
-    details: { toolResult: { text } },
-    isError,
-  };
+  return createOpenClawResult(text, isError);
 }
 
 export function registerSlotTools(
   api: OpenClawPluginApi,
-  defaultCategories: string[],
-  options?: { stateDir?: string; slotDbDir?: string },
+  _defaultCategories: string[],
+  options?: {
+    stateDir?: string;
+    slotDbDir?: string;
+    semanticUseCaseFactory?: (slotDbDir: string) => SemanticMemoryUseCase | undefined;
+  },
 ): void {
-  runtimeConfig = {
-    stateDir: options?.stateDir || runtimeConfig.stateDir,
-    slotDbDir: options?.slotDbDir || runtimeConfig.slotDbDir,
-  };
+  configureOpenClawRuntime(options);
+
   // Tool 1: memory_slot_get
   api.registerTool({
     name: "memory_slot_get",
@@ -107,71 +50,44 @@ export function registerSlotTools(
     },
     async execute(_id: string, params: { key?: string; category?: string; scope?: string }, ctx: any) {
       try {
-        const slotDbDir = resolveSlotDbDirFromContext(ctx);
-        const sessionKey = ctx?.sessionKey || "agent:main:default";
-        const db = getSlotDB(slotDbDir);
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
 
-        // Determine which scopes to query
-        const scopesToQuery: Array<{ userId: string; agentId: string; label: string }> = [];
-        
-        if (params.scope === "all") {
-          // Query all scopes: private (current agent) + team + public
-          const { userId, agentId } = extractScope(sessionKey, "private");
-          scopesToQuery.push({ userId, agentId, label: "private" });
-          scopesToQuery.push({ userId, agentId: "__team__", label: "team" });
-          scopesToQuery.push({ userId: "__public__", agentId: "__public__", label: "public" });
-        } else {
-          // Query specific scope
-          const { userId, agentId } = extractScope(sessionKey, params.scope);
-          scopesToQuery.push({ userId, agentId, label: params.scope || "private" });
-        }
+        const data = await useCasePort.run<typeof params, any>("slot.get", {
+          context: { userId, agentId },
+          payload: {
+            key: params.key,
+            category: params.category,
+            scope: params.scope as any,
+          },
+          meta: {
+            source: "openclaw",
+            toolName: "memory_slot_get",
+            requestId: _id,
+          },
+        });
 
-        // Collect results from all scopes
-        const allResults: Array<any> = [];
-        
-        for (const scopeInfo of scopesToQuery) {
-          if (!params.key && !params.category) {
-            const slots = db.list(scopeInfo.userId, scopeInfo.agentId);
-            slots.forEach(s => allResults.push({ ...s, _scope: scopeInfo.label }));
-          } else {
-            const result = db.get(scopeInfo.userId, scopeInfo.agentId, { key: params.key, category: params.category });
-            if (result) {
-              if (Array.isArray(result)) {
-                result.forEach(r => allResults.push({ ...r, _scope: scopeInfo.label }));
-              } else {
-                allResults.push({ ...result, _scope: scopeInfo.label });
-              }
-            }
-          }
-        }
-
-        if (allResults.length === 0) {
+        if (!data || (Array.isArray(data) && data.length === 0)) {
           return createResult(`No slot found${params.key ? ` for key "${params.key}"` : ""}${params.category ? ` in category "${params.category}"` : ""}${params.scope ? ` with scope "${params.scope}"` : ""}.`);
         }
 
-        // For single key query, return first match (private > team > public)
-        if (params.key && allResults.length > 0) {
-          const prioritized = allResults.sort((a, b) => {
-            const priority = { private: 0, team: 1, public: 2 };
-            return (priority[a._scope as keyof typeof priority] || 0) - (priority[b._scope as keyof typeof priority] || 0);
-          });
-          const result = prioritized[0];
+        if (!Array.isArray(data)) {
           return createResult(JSON.stringify({
-            key: result.key,
-            value: result.value,
-            category: result.category,
-            version: result.version,
-            scope: result._scope,
+            key: data.key,
+            value: data.value,
+            category: data.category,
+            version: data.version,
+            scope: data.scope,
           }, null, 2));
         }
 
-        // For category/list queries, return all with scope labels
-        return createResult(JSON.stringify(allResults.map(r => ({
+        return createResult(JSON.stringify(data.map((r: any) => ({
           key: r.key,
           value: r.value,
           category: r.category,
           version: r.version,
-          scope: r._scope,
+          scope: r.scope,
         })), null, 2));
       } catch (error) {
         return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
@@ -197,19 +113,27 @@ export function registerSlotTools(
     },
     async execute(_id: string, params: { key: string; value: unknown; category?: string; source?: string; scope?: string }, ctx: any) {
       try {
-        const slotDbDir = resolveSlotDbDirFromContext(ctx);
-        const sessionKey = ctx?.sessionKey || "agent:main:default";
-        const { userId, agentId } = extractScope(sessionKey, params.scope);
-        const db = getSlotDB(slotDbDir);
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
 
-        const slot = db.set(userId, agentId, {
-          key: params.key,
-          value: params.value,
-          category: params.category,
-          source: (params.source as "manual" | "auto_capture" | "tool") || "tool",
+        const slot = await useCasePort.run<typeof params, any>("slot.set", {
+          context: { userId, agentId },
+          payload: {
+            key: params.key,
+            value: params.value,
+            category: params.category,
+            source: params.source as any,
+            scope: params.scope as any,
+          },
+          meta: {
+            source: "openclaw",
+            toolName: "memory_slot_set",
+            requestId: _id,
+          },
         });
 
-        const scopeLabel = params.scope || "private";
+        const scopeLabel = slot.scope || params.scope || "private";
         return createResult(`✅ Slot "${slot.key}" ${slot.version > 1 ? `updated (v${slot.version})` : "created"} in category "${slot.category}" [scope: ${scopeLabel}].\nValue: ${JSON.stringify(slot.value)}`);
       } catch (error) {
         return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
@@ -232,15 +156,25 @@ export function registerSlotTools(
     },
     async execute(_id: string, params: { key: string; scope?: string }, ctx: any) {
       try {
-        const slotDbDir = resolveSlotDbDirFromContext(ctx);
-        const sessionKey = ctx?.sessionKey || "agent:main:default";
-        const { userId, agentId } = extractScope(sessionKey, params.scope || "private");
-        const db = getSlotDB(slotDbDir);
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
 
-        const deleted = db.delete(userId, agentId, params.key);
-        const scopeLabel = params.scope || "private";
+        const result = await useCasePort.run<typeof params, { key: string; deleted: boolean; scope: string }>("slot.delete", {
+          context: { userId, agentId },
+          payload: {
+            key: params.key,
+            scope: params.scope as any,
+          },
+          meta: {
+            source: "openclaw",
+            toolName: "memory_slot_delete",
+            requestId: _id,
+          },
+        });
 
-        if (!deleted) {
+        const scopeLabel = result.scope || params.scope || "private";
+        if (!result.deleted) {
           return createResult(`No slot found for key "${params.key}" in scope "${scopeLabel}".`);
         }
 
@@ -266,41 +200,33 @@ export function registerSlotTools(
     },
     async execute(_id: string, params: { category?: string; prefix?: string; scope?: string }, ctx: any) {
       try {
-        const slotDbDir = resolveSlotDbDirFromContext(ctx);
-        const sessionKey = ctx?.sessionKey || "agent:main:default";
-        const db = getSlotDB(slotDbDir);
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
 
-        // Determine scopes to query
-        const scopesToQuery: Array<{ userId: string; agentId: string; label: string }> = [];
-        const queryScope = params.scope || "all";
-        
-        if (queryScope === "all") {
-          const { userId, agentId } = extractScope(sessionKey, "private");
-          scopesToQuery.push({ userId, agentId, label: "private" });
-          scopesToQuery.push({ userId, agentId: "__team__", label: "team" });
-          scopesToQuery.push({ userId: "__public__", agentId: "__public__", label: "public" });
-        } else {
-          const { userId, agentId } = extractScope(sessionKey, queryScope);
-          scopesToQuery.push({ userId, agentId, label: queryScope });
-        }
+        const allSlots = await useCasePort.run<typeof params, Array<{ key: string; value: unknown; version: number; scope: string }>>("slot.list", {
+          context: { userId, agentId },
+          payload: {
+            category: params.category,
+            prefix: params.prefix,
+            scope: (params.scope || "all") as any,
+          },
+          meta: {
+            source: "openclaw",
+            toolName: "memory_slot_list",
+            requestId: _id,
+          },
+        });
 
-        // Collect from all scopes
-        const allSlots: Array<any> = [];
-        for (const scopeInfo of scopesToQuery) {
-          const slots = db.list(scopeInfo.userId, scopeInfo.agentId, { category: params.category, prefix: params.prefix });
-          slots.forEach(s => allSlots.push({ ...s, _scope: scopeInfo.label }));
-        }
-
-        if (allSlots.length === 0) {
+        if (!allSlots || allSlots.length === 0) {
           return createResult(params.category
             ? `No slots found in category "${params.category}"${params.scope ? ` with scope "${params.scope}"` : ""}.`
             : "No memory slots stored yet. Use memory_slot_set to store structured data.");
         }
 
-        // Group by scope
         const grouped: Record<string, Array<{ key: string; value: unknown; version: number }>> = {};
         for (const slot of allSlots) {
-          const scope = slot._scope || "private";
+          const scope = slot.scope || "private";
           if (!grouped[scope]) grouped[scope] = [];
           grouped[scope].push({ key: slot.key, value: slot.value, version: slot.version });
         }

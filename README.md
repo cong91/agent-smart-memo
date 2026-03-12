@@ -203,6 +203,68 @@ openclaw plugins info agent-smart-memo
 openclaw plugins uninstall agent-smart-memo
 ```
 
+## Module Boundaries & Build Targets
+
+From ASM-43 onward, this repository is built as **multi-target artifacts** (compatibility-first):
+
+- `openclaw` target → OpenClaw plugin artifact (`@mrc2204/agent-smart-memo`)
+- `paperclip` target → Paperclip runtime adapter artifact (`@mrc2204/agent-smart-memo-paperclip`)
+- `core` target → runtime-agnostic core contracts/use-cases (`@mrc2204/agent-smart-memo-core`)
+
+Architecture rules:
+
+- Do **not** treat whole repository output as one OpenClaw-only plugin artifact.
+- OpenClaw artifact contains only what is needed for OpenClaw runtime path.
+- Paperclip artifact is packaged separately and does **not** require OpenClaw plugin metadata/runtime path.
+- Core artifact is packaged separately for shared callers.
+
+### Build commands
+
+```bash
+# backward-compatible default (OpenClaw dist)
+npm run build
+
+# explicit targets
+npm run build:openclaw
+npm run build:paperclip
+npm run build:core
+
+# build all targets
+npm run build:all
+```
+
+### Packaging commands
+
+```bash
+# prepare target package directories under artifacts/npm/<target>
+npm run package:openclaw
+npm run package:paperclip
+npm run package:core
+
+# create .tgz tarballs
+npm run pack:openclaw
+npm run pack:paperclip
+npm run pack:core
+```
+
+### Publish flow (prepared)
+
+> Publish requires valid npm auth/token in runtime environment.
+> If token/auth is missing, publish will fail (expected).
+
+```bash
+# publish selected target package
+npm run publish:openclaw
+npm run publish:paperclip
+npm run publish:core
+```
+
+GitHub Actions workflow (`.github/workflows/publish.yml`) now:
+
+- Builds/packages all targets (`openclaw`, `paperclip`, `core`) on CI.
+- Uploads packed target artifacts.
+- Supports manual dispatch to publish a selected target (`dry_run` supported).
+
 ## Development
 
 ```bash
@@ -210,15 +272,22 @@ openclaw plugins uninstall agent-smart-memo
 git clone https://github.com/cong91/agent-smart-memo.git
 cd agent-smart-memo
 
-# Install & build
+# Install
 npm install
+
+# Build (OpenClaw-compatible default)
 npm run build
 
-# Link for local development (changes apply immediately)
+# Optional: build all module targets
+npm run build:all
+
+# Link OpenClaw plugin locally (for openclaw target)
 openclaw plugins install -l .
 
 # Run tests
 npm test
+npm run test:openclaw
+npm run test:paperclip
 ```
 
 ## License
