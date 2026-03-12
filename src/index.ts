@@ -26,6 +26,7 @@ import { createMemoryStoreTool } from "./tools/memory_store.js";
 // Hook modules
 import { registerAutoRecall } from "./hooks/auto-recall.js";
 import { registerAutoCapture } from "./hooks/auto-capture.js";
+import { registerMemoryToolContextInjector } from "./hooks/tool-context-injector.js";
 
 // ============================================================================
 // Plugin Configuration Interface
@@ -420,10 +421,11 @@ const agentMemoPlugin = {
       contextWindowMaxTokens,
       summarizeEveryActions,
     });
+    registerMemoryToolContextInjector(api);
 
     console.log("[AgentMemo] Plugin registered successfully");
     console.log("[AgentMemo] Tools: memory_search, memory_store, memory_slot_*, memory_graph_*");
-    console.log("[AgentMemo] Hooks: auto-recall, auto-capture");
+    console.log("[AgentMemo] Hooks: auto-recall, auto-capture, tool-context-injector");
   },
 };
 
