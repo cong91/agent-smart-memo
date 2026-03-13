@@ -21,6 +21,20 @@ const sourceEntryByTarget = {
   core: "./entries/core.js",
 };
 
+const sourceExportMapByTarget = {
+  openclaw: {
+    ".": "./dist/index.js",
+  },
+  paperclip: {
+    ".": "./dist/entries/paperclip.js",
+    "./manifest": "./dist/entries/paperclip.js",
+    "./worker": "./dist/entries/paperclip.js",
+  },
+  core: {
+    ".": "./dist/entries/core.js",
+  },
+};
+
 const sourceDist = join(root, sourceDistByTarget[target]);
 if (!existsSync(sourceDist)) {
   console.error(`[prepare-package-target] Missing build output for ${target}: ${sourceDist}`);
@@ -60,9 +74,7 @@ const pkg = {
   description: packageDescription,
   type: "module",
   main: `dist/${sourceEntryByTarget[target].replace(/^\.\//, "")}`,
-  exports: {
-    ".": `./dist/${sourceEntryByTarget[target].replace(/^\.\//, "")}`,
-  },
+  exports: sourceExportMapByTarget[target],
   types: `dist/${sourceEntryByTarget[target].replace(/\.js$/, ".d.ts").replace(/^\.\//, "")}`,
   files: ["dist/", "README.md", "LICENSE", "CONFIG.example.json"],
   license: rootPkg.license,
@@ -79,6 +91,12 @@ if (target === "openclaw") {
   };
   pkg.files.push("openclaw.plugin.json");
   pkg.devDependencies = { openclaw: "*" };
+} else if (target === "paperclip") {
+  pkg.paperclipPlugin = {
+    manifest: "./dist/entries/paperclip.js",
+    worker: "./dist/entries/paperclip.js",
+  };
+  pkg.devDependencies = {};
 } else {
   // Ensure non-openclaw packages do not pull openclaw runtime dependency.
   pkg.devDependencies = {};

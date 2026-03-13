@@ -13,8 +13,9 @@ import { SlotDB } from "./db/slot-db.js";
 import { QdrantClient } from "./services/qdrant.js";
 import { EmbeddingClient, type EmbedBackend } from "./services/embedding.js";
 import { DeduplicationService } from "./services/dedupe.js";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveSlotDbDir } from "./shared/slotdb-path.js";
 
 // Tool modules
@@ -32,7 +33,7 @@ import { registerMemoryToolContextInjector } from "./hooks/tool-context-injector
 // Plugin Configuration Interface
 // ============================================================================
 
-interface AgentMemoConfig {
+export interface AgentMemoConfig {
   slotCategories?: string[];
   maxSlots?: number;
   injectStateTokenBudget?: number;
@@ -181,95 +182,187 @@ function resolvePluginConfig(
 
 const DEFAULT_CATEGORIES = ["profile", "preferences", "project", "environment", "custom"];
 
-const agentMemoPlugin = {
-  id: "agent-smart-memo",
-  name: "Agent Memo (Slot Memory + Graph)",
-  description: "Structured slot memory, graph relationships, and semantic search for OpenClaw",
-  kind: "memory" as const,
-  configSchema: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      slotCategories: {
-        type: "array",
-        items: { type: "string" },
-        description: "Allowed slot categories",
-      },
-      maxSlots: {
-        type: "number",
-        description: "Maximum number of slots per scope",
-      },
-      injectStateTokenBudget: {
-        type: "number",
-        description: "Max tokens for Current State injection",
-      },
-      qdrantHost: {
-        type: "string",
-        description: "Qdrant server host",
-      },
-      qdrantPort: {
-        type: "number",
-        description: "Qdrant server port",
-      },
-      qdrantCollection: {
-        type: "string",
-        description: "Qdrant collection name (default: mrc_bot)",
-      },
-      qdrantVectorSize: {
-        type: "number",
-        description: "Qdrant vector size (default: 1024)",
-      },
-      llmBaseUrl: {
-        type: "string",
-        description: "LLM API base URL (OpenAI compatible)",
-      },
-      llmApiKey: {
-        type: "string",
-        description: "LLM API key",
-      },
-      llmModel: {
-        type: "string",
-        description: "LLM model for auto-capture",
-      },
-      embedBaseUrl: {
-        type: "string",
-        description: "Embedding service base URL (default: http://localhost:11434)",
-      },
-      embedBackend: {
-        type: "string",
-        enum: ["ollama", "openai", "docker"],
-        description: "Embedding backend selector (optional). If omitted, keeps legacy auto behavior.",
-      },
-      embedModel: {
-        type: "string",
-        description: "Embedding model for vectorization (default: qwen3-embedding:0.6b)",
-      },
-      embedDimensions: {
-        type: "number",
-        description: "Embedding dimensions (default: 1024)",
-      },
-      slotDbDir: {
-        type: "string",
-        description: "Absolute path for SlotDB directory. Priority: OPENCLAW_SLOTDB_DIR > config.slotDbDir > ${OPENCLAW_STATE_DIR}/agent-memo",
-      },
-      autoCaptureEnabled: {
-        type: "boolean",
-        description: "Enable auto-capture feature",
-      },
-      autoCaptureMinConfidence: {
-        type: "number",
-        description: "Minimum confidence for auto-capture",
-      },
-      contextWindowMaxTokens: {
-        type: "number",
-        description: "Maximum tokens for context window in auto-capture (default: 12000)",
-      },
-      summarizeEveryActions: {
-        type: "number",
-        description: "Auto-summarize project_living_state every N actions (default: 6)",
-      },
+export const AGENT_MEMO_PLUGIN_ID = "agent-smart-memo";
+export const AGENT_MEMO_PLUGIN_NAME = "Agent Memo (Slot Memory + Graph)";
+export const AGENT_MEMO_PLUGIN_DESCRIPTION = "Structured slot memory, graph relationships, and semantic search for OpenClaw";
+
+export const AGENT_MEMO_CONFIG_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    slotCategories: {
+      type: "array",
+      items: { type: "string" },
+      description: "Allowed slot categories",
+    },
+    maxSlots: {
+      type: "number",
+      description: "Maximum number of slots per scope",
+    },
+    injectStateTokenBudget: {
+      type: "number",
+      description: "Max tokens for Current State injection",
+    },
+    qdrantHost: {
+      type: "string",
+      description: "Qdrant server host",
+    },
+    qdrantPort: {
+      type: "number",
+      description: "Qdrant server port",
+    },
+    qdrantCollection: {
+      type: "string",
+      description: "Qdrant collection name (default: mrc_bot)",
+    },
+    qdrantVectorSize: {
+      type: "number",
+      description: "Qdrant vector size (default: 1024)",
+    },
+    llmBaseUrl: {
+      type: "string",
+      description: "LLM API base URL (OpenAI compatible)",
+    },
+    llmApiKey: {
+      type: "string",
+      description: "LLM API key",
+    },
+    llmModel: {
+      type: "string",
+      description: "LLM model for auto-capture",
+    },
+    embedBaseUrl: {
+      type: "string",
+      description: "Embedding service base URL (default: http://localhost:11434)",
+    },
+    embedBackend: {
+      type: "string",
+      enum: ["ollama", "openai", "docker"],
+      description: "Embedding backend selector (optional). If omitted, keeps legacy auto behavior.",
+    },
+    embedModel: {
+      type: "string",
+      description: "Embedding model for vectorization (default: qwen3-embedding:0.6b)",
+    },
+    embedDimensions: {
+      type: "number",
+      description: "Embedding dimensions (default: 1024)",
+    },
+    slotDbDir: {
+      type: "string",
+      description: "Absolute path for SlotDB directory. Priority: OPENCLAW_SLOTDB_DIR > config.slotDbDir > ${OPENCLAW_STATE_DIR}/agent-memo",
+    },
+    autoCaptureEnabled: {
+      type: "boolean",
+      description: "Enable auto-capture feature",
+    },
+    autoCaptureMinConfidence: {
+      type: "number",
+      description: "Minimum confidence for auto-capture",
+    },
+    contextWindowMaxTokens: {
+      type: "number",
+      description: "Maximum tokens for context window in auto-capture (default: 12000)",
+    },
+    summarizeEveryActions: {
+      type: "number",
+      description: "Auto-summarize project_living_state every N actions (default: 6)",
     },
   },
+} as const;
+
+export const AGENT_MEMO_UI_HINTS = {
+  slotCategories: {
+    label: "Slot Categories",
+    placeholder: "profile, preferences, project, environment",
+  },
+  maxSlots: {
+    label: "Max Slots",
+    placeholder: "500",
+  },
+  injectStateTokenBudget: {
+    label: "State Injection Token Budget",
+    placeholder: "500",
+  },
+  qdrantHost: {
+    label: "Qdrant Host",
+    placeholder: "localhost",
+  },
+  qdrantPort: {
+    label: "Qdrant Port",
+    placeholder: "6333",
+  },
+  qdrantCollection: {
+    label: "Qdrant Collection",
+    placeholder: "mrc_bot_memory",
+  },
+  llmBaseUrl: {
+    label: "LLM Base URL",
+    placeholder: "http://localhost:8317/v1",
+  },
+  llmApiKey: {
+    label: "LLM API Key",
+    placeholder: "proxypal-local",
+  },
+  llmModel: {
+    label: "LLM Model",
+    placeholder: "gemini-3.1-pro-low",
+  },
+  embedBaseUrl: {
+    label: "Embedding Base URL",
+    placeholder: "http://localhost:11434",
+  },
+  embedBackend: {
+    label: "Embedding Backend",
+    placeholder: "ollama",
+  },
+  embedModel: {
+    label: "Embedding Model",
+    placeholder: "qwen3-embedding:0.6b",
+  },
+  embedDimensions: {
+    label: "Embedding Dimensions",
+    placeholder: "1024",
+  },
+  slotDbDir: {
+    label: "SlotDB Directory",
+    placeholder: "/Users/you/.openclaw/agent-memo",
+  },
+  autoCaptureEnabled: {
+    label: "Auto Capture Enabled",
+  },
+  autoCaptureMinConfidence: {
+    label: "Min Confidence",
+    placeholder: "0.7",
+  },
+  contextWindowMaxTokens: {
+    label: "Context Window Max Tokens",
+    placeholder: "12000",
+  },
+  summarizeEveryActions: {
+    label: "Summarize Every N Actions",
+    placeholder: "6",
+  },
+} as const;
+
+export function getAgentMemoPluginDefinition() {
+  return {
+    id: AGENT_MEMO_PLUGIN_ID,
+    name: AGENT_MEMO_PLUGIN_NAME,
+    description: AGENT_MEMO_PLUGIN_DESCRIPTION,
+    kind: "memory" as const,
+    configSchema: AGENT_MEMO_CONFIG_SCHEMA,
+    uiHints: AGENT_MEMO_UI_HINTS,
+  };
+}
+
+export function loadAgentMemoPluginDefinitionFromSource() {
+  const pluginPath = join(dirname(fileURLToPath(import.meta.url)), "../openclaw.plugin.json");
+  return JSON.parse(readFileSync(pluginPath, "utf8"));
+}
+
+const agentMemoPlugin = {
+  ...getAgentMemoPluginDefinition(),
 
   register(api: OpenClawPluginApi) {
     // ----------------------------------------------------------------
