@@ -101,6 +101,100 @@ test("buildPatchedConfig merges plugin block without dropping unrelated fields",
   assertEqual(entry.config.embedDimensions, 1024, "embedDimensions should be set");
 });
 
+test("buildPatchedConfig keeps single-account telegram merge at channels.telegram.customCommands", () => {
+  const existing = {
+    channels: {
+      telegram: {
+        customCommands: [{ command: "legacy", description: "Legacy command" }],
+      },
+    },
+    plugins: {
+      allow: [],
+      slots: {},
+      entries: {},
+    },
+  };
+
+  const next = mod.buildPatchedConfig(
+    existing,
+    {
+      qdrantHost: "localhost",
+      qdrantPort: 6333,
+      qdrantCollection: "mrc_bot",
+      llmBaseUrl: "http://localhost:8317/v1",
+      llmModel: "gemini-2.5-flash",
+      llmApiKey: "",
+      embedBackend: "ollama",
+      embedModel: "qwen3-embedding:0.6b",
+      embedDimensions: 1024,
+      slotDbDir: join(stateDir, "agent-memo"),
+      telegramOnboardingCommands: ["addproject", "legacy", "addproject"],
+    },
+    true,
+  );
+
+  const commands = (next.channels.telegram.customCommands || []).map((item: any) => item.command);
+  assertEqual(commands, ["legacy", "addproject"], "single-account merge should preserve + dedupe at root telegram customCommands");
+});
+
+test("buildPatchedConfig fans out onboarding commands to enabled telegram accounts in multi-account mode", () => {
+  const existing = {
+    channels: {
+      telegram: {
+        accounts: {
+          ops: {
+            enabled: true,
+            customCommands: [{ command: "legacyops", description: "Legacy ops" }],
+          },
+          growth: {
+            enabled: true,
+            customCommands: [{ command: "addproject", description: "Add project onboarding" }],
+          },
+          disabled: {
+            enabled: false,
+            customCommands: [{ command: "legacydisabled", description: "Disabled" }],
+          },
+        },
+      },
+    },
+    plugins: {
+      allow: [],
+      slots: {},
+      entries: {},
+    },
+  };
+
+  const next = mod.buildPatchedConfig(
+    existing,
+    {
+      qdrantHost: "localhost",
+      qdrantPort: 6333,
+      qdrantCollection: "mrc_bot",
+      llmBaseUrl: "http://localhost:8317/v1",
+      llmModel: "gemini-2.5-flash",
+      llmApiKey: "",
+      embedBackend: "ollama",
+      embedModel: "qwen3-embedding:0.6b",
+      embedDimensions: 1024,
+      slotDbDir: join(stateDir, "agent-memo"),
+      telegramOnboardingCommands: ["addproject"],
+    },
+    true,
+  );
+
+  const opsCommands = (next.channels.telegram.accounts.ops.customCommands || []).map((item: any) => item.command);
+  const growthCommands = (next.channels.telegram.accounts.growth.customCommands || []).map((item: any) => item.command);
+  const disabledCommands = (next.channels.telegram.accounts.disabled.customCommands || []).map((item: any) => item.command);
+
+  assertEqual(opsCommands, ["legacyops", "addproject"], "enabled account ops should receive /addproject with preserve+dedupe");
+  assertEqual(growthCommands, ["addproject"], "enabled account with existing /addproject should be deduped");
+  assertEqual(disabledCommands, ["legacydisabled"], "disabled account should remain unchanged");
+  assert(
+    !Array.isArray(next.channels.telegram.customCommands),
+    "multi-account mode should not force root-level channels.telegram.customCommands",
+  );
+});
+
 test("validateAnswers returns explicit errors for invalid inputs", () => {
   const errors = mod.validateAnswers({
     qdrantHost: "",

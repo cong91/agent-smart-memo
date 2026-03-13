@@ -99,6 +99,101 @@ function mergeTelegramCustomCommands(existing, commandNames) {
   return out;
 }
 
+function asStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item || "").trim()).filter(Boolean);
+}
+
+function detectTelegramCustomCommandTargets(telegramConfig) {
+  const telegram = asObj(telegramConfig);
+  const accounts = asObj(telegram.accounts);
+  const accountKeys = Object.keys(accounts).filter((key) => key.trim().length > 0);
+
+  if (!accountKeys.length) {
+    return { mode: "single", accountKeys: [] };
+  }
+
+  const selected = new Set();
+  const scalarSelectors = [
+    telegram.account,
+    telegram.accountId,
+    telegram.activeAccount,
+    telegram.currentAccount,
+    telegram.defaultAccount,
+    telegram.selectedAccount,
+  ];
+
+  for (const raw of scalarSelectors) {
+    const key = String(raw || "").trim();
+    if (key && accountKeys.includes(key)) selected.add(key);
+  }
+
+  const arraySelectors = [
+    telegram.accountsEnabled,
+    telegram.enabledAccounts,
+    telegram.activeAccounts,
+    telegram.usedAccounts,
+    telegram.selectedAccounts,
+  ];
+
+  for (const arr of arraySelectors) {
+    for (const key of asStringArray(arr)) {
+      if (accountKeys.includes(key)) selected.add(key);
+    }
+  }
+
+  for (const key of accountKeys) {
+    const account = asObj(accounts[key]);
+    if (
+      account.enabled === true ||
+      account.isEnabled === true ||
+      account.active === true ||
+      account.inUse === true ||
+      account.selected === true ||
+      account.default === true
+    ) {
+      selected.add(key);
+    }
+  }
+
+  if (!selected.size) {
+    if (accountKeys.length === 1) {
+      selected.add(accountKeys[0]);
+    } else {
+      for (const key of accountKeys) {
+        const account = asObj(accounts[key]);
+        if (account.enabled !== false) selected.add(key);
+      }
+    }
+  }
+
+  return {
+    mode: "multi",
+    accountKeys: accountKeys.filter((key) => selected.has(key)),
+  };
+}
+
+function collectTelegramCommandNames(config, answers) {
+  const current = asObj(config);
+  const commands = [
+    ...(asObj(asObj(current.channels).telegram).customCommands || []),
+  ].map((item) => normalizeTelegramCommandName(item?.command));
+
+  const targets = detectTelegramCustomCommandTargets(asObj(asObj(current.channels).telegram));
+  if (targets.mode === "multi") {
+    const accounts = asObj(asObj(asObj(current.channels).telegram).accounts);
+    for (const accountKey of targets.accountKeys) {
+      commands.push(
+        ...((asObj(accounts[accountKey]).customCommands || [])
+          .map((item) => normalizeTelegramCommandName(item?.command))),
+      );
+    }
+  }
+
+  commands.push(...(Array.isArray(answers?.telegramOnboardingCommands) ? answers.telegramOnboardingCommands : []));
+  return dedupeStringArray(commands.filter((name) => isValidTelegramCommandName(name)));
+}
+
 export function validateAnswers(answers) {
   const errors = [];
 
@@ -174,19 +269,43 @@ export function buildPatchedConfig(existingConfig, answers, mapMemorySlot = true
 
   const channels = asObj(root.channels);
   const telegram = asObj(channels.telegram);
-  const telegramCustomCommands = mergeTelegramCustomCommands(
-    telegram.customCommands,
-    answers.telegramOnboardingCommands || [],
-  );
+  const targets = detectTelegramCustomCommandTargets(telegram);
+
+  let nextTelegram;
+  if (targets.mode === "single") {
+    nextTelegram = {
+      ...telegram,
+      customCommands: mergeTelegramCustomCommands(
+        telegram.customCommands,
+        answers.telegramOnboardingCommands || [],
+      ),
+    };
+  } else {
+    const prevAccounts = asObj(telegram.accounts);
+    const nextAccounts = { ...prevAccounts };
+
+    for (const accountKey of targets.accountKeys) {
+      const account = asObj(prevAccounts[accountKey]);
+      nextAccounts[accountKey] = {
+        ...account,
+        customCommands: mergeTelegramCustomCommands(
+          account.customCommands,
+          answers.telegramOnboardingCommands || [],
+        ),
+      };
+    }
+
+    nextTelegram = {
+      ...telegram,
+      accounts: nextAccounts,
+    };
+  }
 
   return {
     ...root,
     channels: {
       ...channels,
-      telegram: {
-        ...telegram,
-        customCommands: telegramCustomCommands,
-      },
+      telegram: nextTelegram,
     },
     plugins: {
       ...plugins,
@@ -292,25 +411,64 @@ export function buildSetupSummary(currentConfig, answers, nextConfig) {
     asObj(nextPlugins.slots).memory,
   );
 
-  const currentTelegramCommands = dedupeStringArray(
-    (asObj(asObj(current.channels).telegram).customCommands || [])
-      .map((item) => normalizeTelegramCommandName(item?.command))
-      .filter((name) => isValidTelegramCommandName(name)),
-  );
+  const currentTelegram = asObj(asObj(current.channels).telegram);
+  const nextTelegram = asObj(asObj(next.channels).telegram);
+  const currentTargets = detectTelegramCustomCommandTargets(currentTelegram);
+  const nextTargets = detectTelegramCustomCommandTargets(nextTelegram);
+  const commandNames = collectTelegramCommandNames(next, answers);
 
-  const nextTelegramCommands = dedupeStringArray(
-    (asObj(asObj(next.channels).telegram).customCommands || [])
-      .map((item) => normalizeTelegramCommandName(item?.command))
-      .filter((name) => isValidTelegramCommandName(name)),
-  );
-
-  for (const commandName of dedupeStringArray(answers.telegramOnboardingCommands || [])) {
-    classifySummaryItem(
-      summary,
-      `channels.telegram.customCommands includes /${commandName}`,
-      currentTelegramCommands.includes(commandName),
-      nextTelegramCommands.includes(commandName),
+  if (nextTargets.mode === "single") {
+    const currentTelegramCommands = dedupeStringArray(
+      (currentTelegram.customCommands || [])
+        .map((item) => normalizeTelegramCommandName(item?.command))
+        .filter((name) => isValidTelegramCommandName(name)),
     );
+
+    const nextTelegramCommands = dedupeStringArray(
+      (nextTelegram.customCommands || [])
+        .map((item) => normalizeTelegramCommandName(item?.command))
+        .filter((name) => isValidTelegramCommandName(name)),
+    );
+
+    for (const commandName of commandNames) {
+      classifySummaryItem(
+        summary,
+        `channels.telegram.customCommands includes /${commandName}`,
+        currentTelegramCommands.includes(commandName),
+        nextTelegramCommands.includes(commandName),
+      );
+    }
+  } else {
+    const accountKeys = dedupeStringArray(nextTargets.accountKeys);
+    const currentAccounts = asObj(currentTelegram.accounts);
+    const nextAccounts = asObj(nextTelegram.accounts);
+
+    for (const accountKey of accountKeys) {
+      const currentTelegramCommands = dedupeStringArray(
+        (asObj(currentAccounts[accountKey]).customCommands || [])
+          .map((item) => normalizeTelegramCommandName(item?.command))
+          .filter((name) => isValidTelegramCommandName(name)),
+      );
+
+      const nextTelegramCommands = dedupeStringArray(
+        (asObj(nextAccounts[accountKey]).customCommands || [])
+          .map((item) => normalizeTelegramCommandName(item?.command))
+          .filter((name) => isValidTelegramCommandName(name)),
+      );
+
+      for (const commandName of commandNames) {
+        classifySummaryItem(
+          summary,
+          `channels.telegram.accounts.${accountKey}.customCommands includes /${commandName}`,
+          currentTelegramCommands.includes(commandName),
+          nextTelegramCommands.includes(commandName),
+        );
+      }
+    }
+
+    if (currentTargets.mode !== "multi" && accountKeys.length > 0) {
+      summary.willUpdate.push("channels.telegram.customCommands scope switched to account fan-out");
+    }
   }
 
   return summary;
@@ -440,9 +598,7 @@ export async function runInitOpenClaw({ env = process.env, interactive = true } 
     mapMemorySlot: asObj(asObj(current.plugins).slots).memory === PLUGIN_ID,
     telegramOnboardingCommands: dedupeStringArray([
       "addproject",
-      ...((asObj(asObj(current.channels).telegram).customCommands || [])
-        .map((item) => normalizeTelegramCommandName(item?.command))
-        .filter((name) => isValidTelegramCommandName(name))),
+      ...collectTelegramCommandNames(current, { telegramOnboardingCommands: [] }),
     ]),
   };
 
