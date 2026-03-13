@@ -118,6 +118,74 @@ test("validateAnswers returns explicit errors for invalid inputs", () => {
   assert(errors.length >= 5, "should return multiple validation errors");
 });
 
+test("buildSetupSummary classifies already configured / will add / will update", () => {
+  const current = {
+    channels: {
+      telegram: {
+        customCommands: [{ command: "addproject", description: "Add project onboarding" }],
+      },
+    },
+    plugins: {
+      allow: ["agent-smart-memo"],
+      slots: { memory: "agent-smart-memo" },
+      entries: {
+        "agent-smart-memo": {
+          enabled: true,
+          config: {
+            qdrantHost: "localhost",
+            qdrantPort: 6333,
+            qdrantCollection: "mrc_bot",
+            llmBaseUrl: "http://localhost:8317/v1",
+            llmModel: "gemini-2.5-flash",
+            llmApiKey: "",
+            embedBackend: "ollama",
+            embedModel: "qwen3-embedding:0.6b",
+            embedDimensions: 1024,
+            slotDbDir: join(stateDir, "agent-memo"),
+          },
+        },
+      },
+    },
+  };
+
+  const answers = {
+    qdrantHost: "localhost",
+    qdrantPort: 6333,
+    qdrantCollection: "mrc_bot",
+    llmBaseUrl: "http://localhost:8317/v1",
+    llmModel: "gemini-2.5-flash",
+    llmApiKey: "new-secret",
+    embedBackend: "ollama",
+    embedModel: "qwen3-embedding:0.6b",
+    embedDimensions: 1024,
+    slotDbDir: join(stateDir, "agent-memo"),
+    mapMemorySlot: true,
+    telegramOnboardingCommands: ["addproject", "indexproject"],
+  };
+
+  const next = mod.buildPatchedConfig(current, answers, true);
+  const summary = mod.buildSetupSummary(current, answers, next);
+
+  assert(summary.alreadyConfigured.includes("plugins.allow includes agent-smart-memo"), "plugin allow should be already configured");
+  assert(summary.willUpdate.includes("plugins.entries.agent-smart-memo.config.llmApiKey"), "llmApiKey should be will update");
+  assert(
+    summary.willAdd.includes("channels.telegram.customCommands includes /indexproject"),
+    "indexproject should be classified as will add",
+  );
+});
+
+test("formatSetupSummary renders required operator sections", () => {
+  const output = mod.formatSetupSummary({
+    alreadyConfigured: ["plugins.allow includes agent-smart-memo"],
+    willAdd: ["channels.telegram.customCommands includes /indexproject"],
+    willUpdate: ["plugins.entries.agent-smart-memo.config.llmApiKey"],
+  });
+
+  assert(output.includes("already configured"), "must include already configured section");
+  assert(output.includes("will add"), "must include will add section");
+  assert(output.includes("will update"), "must include will update section");
+});
+
 test("buildBackupPath uses .bak timestamp suffix", () => {
   const sample = mod.buildBackupPath(configPath, new Date("2026-03-13T10:11:12Z"));
   assert(sample.includes(".bak."), "backup suffix should include .bak.");
