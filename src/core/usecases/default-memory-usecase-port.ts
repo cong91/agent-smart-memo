@@ -231,6 +231,19 @@ interface ProjectLegacyBackfillPayload {
   source?: "repo_root" | "repo_remote" | "task_registry" | "mixed";
 }
 
+interface ProjectTelegramOnboardingPayload {
+  command?: string;
+  repo_url?: string;
+  project_alias?: string;
+  jira_space_key?: string;
+  default_epic_key?: string;
+  index_now?: boolean;
+  project_name?: string;
+  repo_root?: string;
+  active_version?: string;
+  mode?: "preview" | "confirm";
+}
+
 interface ScopeIdentity {
   userId: string;
   agentId: string;
@@ -326,6 +339,8 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
         return this.handleProjectHybridSearch(payload as unknown as ProjectHybridSearchPayload, req) as TRes;
       case "project.legacy_backfill":
         return this.handleProjectLegacyBackfill(payload as unknown as ProjectLegacyBackfillPayload, req) as TRes;
+      case "project.telegram_onboarding":
+        return this.handleProjectTelegramOnboarding(payload as unknown as ProjectTelegramOnboardingPayload, req) as TRes;
       case "graph.entity.get":
         return this.handleGraphEntityGet(payload as unknown as GraphEntityGetPayload, req) as TRes;
       case "graph.entity.set":
@@ -870,6 +885,119 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       force_registration_state: payload.force_registration_state === true,
       source: payload.source || "mixed",
     });
+  }
+
+  private handleProjectTelegramOnboarding(
+    payload: ProjectTelegramOnboardingPayload,
+    req: CoreRequestEnvelope<unknown>,
+  ) {
+    const mode = payload.mode || "preview";
+
+    const draft = {
+      command: String(payload.command || "").trim() || "/add_project",
+      repo_url: String(payload.repo_url || "").trim(),
+      project_alias: String(payload.project_alias || "").trim(),
+      jira_space_key: String(payload.jira_space_key || "").trim().toUpperCase(),
+      default_epic_key: String(payload.default_epic_key || "").trim().toUpperCase(),
+      index_now: payload.index_now === true,
+      project_name: String(payload.project_name || "").trim() || undefined,
+      repo_root: String(payload.repo_root || "").trim() || undefined,
+      active_version: String(payload.active_version || "").trim() || undefined,
+    };
+
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
+    if (!draft.repo_url && !draft.repo_root) {
+      errors.push("repo_url or repo_root is required");
+    }
+
+    if (!draft.project_alias) {
+      warnings.push("project_alias is empty; alias should be confirmed before final commit");
+    }
+
+    if (draft.jira_space_key) {
+      if (!/^[A-Z][A-Z0-9_]*$/.test(draft.jira_space_key)) {
+        errors.push("jira_space_key format is invalid");
+      }
+
+      if (draft.default_epic_key) {
+        const expectedPrefix = `${draft.jira_space_key}-`;
+        if (!draft.default_epic_key.startsWith(expectedPrefix)) {
+          errors.push(`default_epic_key must match jira_space_key prefix '${draft.jira_space_key}-*'`);
+        }
+      }
+    } else if (draft.default_epic_key) {
+      errors.push("jira_space_key is required when default_epic_key is provided");
+    }
+
+    const summaryCard = {
+      title: "Project onboarding preview",
+      fields: {
+        command: draft.command,
+        repo_url: draft.repo_url || null,
+        repo_root: draft.repo_root || null,
+        project_alias: draft.project_alias || null,
+        jira_space_key: draft.jira_space_key || null,
+        default_epic_key: draft.default_epic_key || null,
+        index_now: draft.index_now,
+      },
+      actions: ["confirm", "edit_alias", "edit_jira", "index_now", "cancel"],
+    };
+
+    if (mode !== "confirm") {
+      return {
+        status: errors.length > 0 ? "validation_error" : "preview_ready",
+        errors,
+        warnings,
+        summary_card: summaryCard,
+        bridge_commands: {
+          register: "project.register_command",
+          link_tracker: "project.link_tracker",
+          trigger_index: "project.trigger_index",
+        },
+      };
+    }
+
+    if (errors.length > 0) {
+      return {
+        status: "validation_error",
+        errors,
+        warnings,
+        summary_card: summaryCard,
+      };
+    }
+
+    const registerPayload: ProjectRegisterCommandPayload = {
+      project_alias: draft.project_alias,
+      project_name: draft.project_name,
+      repo_root: draft.repo_root,
+      repo_remote: draft.repo_url || undefined,
+      active_version: draft.active_version,
+      options: {
+        trigger_index: draft.index_now,
+      },
+      tracker: draft.jira_space_key
+        ? {
+            tracker_type: "jira",
+            tracker_space_key: draft.jira_space_key,
+            default_epic_key: draft.default_epic_key || undefined,
+            active_version: draft.active_version,
+          }
+        : undefined,
+    };
+
+    const registered = this.handleProjectRegisterCommand(registerPayload, req);
+
+    return {
+      status: "committed",
+      project_id: registered.project_id,
+      project_alias: registered.project_alias,
+      tracker_mapping: registered.tracker_mapping,
+      index_trigger: registered.index_trigger,
+      warnings,
+      used_commands: ["project.register_command", "project.link_tracker", "project.trigger_index"],
+    };
   }
 
   private handleGraphEntityGet(payload: GraphEntityGetPayload, req: CoreRequestEnvelope<unknown>) {

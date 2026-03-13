@@ -39,6 +39,7 @@ export type MemoryUseCaseName =
   | "project.task_lineage_context"
   | "project.hybrid_search"
   | "project.legacy_backfill"
+  | "project.telegram_onboarding"
   | "memory.capture"
   | "memory.search"
   | "graph.entity.get"
