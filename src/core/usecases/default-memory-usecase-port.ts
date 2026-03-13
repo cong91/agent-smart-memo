@@ -223,6 +223,14 @@ interface ProjectHybridSearchPayload {
   };
 }
 
+interface ProjectLegacyBackfillPayload {
+  mode?: "dry_run" | "apply";
+  only_project_ids?: string[];
+  only_aliases?: string[];
+  force_registration_state?: boolean;
+  source?: "repo_root" | "repo_remote" | "task_registry" | "mixed";
+}
+
 interface ScopeIdentity {
   userId: string;
   agentId: string;
@@ -316,6 +324,8 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
         return this.handleProjectTaskLineageContext(payload as unknown as ProjectTaskLineageContextPayload, req) as TRes;
       case "project.hybrid_search":
         return this.handleProjectHybridSearch(payload as unknown as ProjectHybridSearchPayload, req) as TRes;
+      case "project.legacy_backfill":
+        return this.handleProjectLegacyBackfill(payload as unknown as ProjectLegacyBackfillPayload, req) as TRes;
       case "graph.entity.get":
         return this.handleGraphEntityGet(payload as unknown as GraphEntityGetPayload, req) as TRes;
       case "graph.entity.set":
@@ -847,6 +857,18 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       task_id: payload.task_id || [],
       tracker_issue_key: payload.tracker_issue_key || [],
       task_context: payload.task_context,
+    });
+  }
+
+  private handleProjectLegacyBackfill(payload: ProjectLegacyBackfillPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+
+    return this.slotDb.runLegacyCompatibilityBackfill(identity.userId, identity.agentId, {
+      mode: payload.mode || "dry_run",
+      only_project_ids: payload.only_project_ids || [],
+      only_aliases: payload.only_aliases || [],
+      force_registration_state: payload.force_registration_state === true,
+      source: payload.source || "mixed",
     });
   }
 

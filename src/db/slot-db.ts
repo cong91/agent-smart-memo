@@ -294,6 +294,42 @@ export interface ProjectHybridSearchResult {
   results: ProjectHybridSearchResultItem[];
 }
 
+export interface ProjectLegacyBackfillInput {
+  mode?: "dry_run" | "apply";
+  only_project_ids?: string[];
+  only_aliases?: string[];
+  force_registration_state?: boolean;
+  source?: "repo_root" | "repo_remote" | "task_registry" | "mixed";
+}
+
+export interface ProjectLegacyBackfillItem {
+  project_id: string;
+  project_name: string;
+  inferred_aliases: string[];
+  inferred_tracker_mappings: Array<{
+    tracker_type: "jira" | "github" | "other";
+    tracker_space_key: string | null;
+    tracker_project_id: string | null;
+    default_epic_key: string | null;
+    confidence: number;
+    source: "repo_remote" | "task_registry";
+  }>;
+  actions: string[];
+  warnings: string[];
+}
+
+export interface ProjectLegacyBackfillResult {
+  mode: "dry_run" | "apply";
+  source: "repo_root" | "repo_remote" | "task_registry" | "mixed";
+  scanned_projects: number;
+  candidates: number;
+  updated_aliases: number;
+  updated_tracker_mappings: number;
+  updated_registration_states: number;
+  migration_state_upserts: number;
+  items: ProjectLegacyBackfillItem[];
+}
+
 // ============================================================================
 // SlotDB Class
 // ============================================================================
@@ -1672,6 +1708,155 @@ export class SlotDB {
     };
   }
 
+  runLegacyCompatibilityBackfill(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: ProjectLegacyBackfillInput = {},
+  ): ProjectLegacyBackfillResult {
+    const mode = input.mode || "dry_run";
+    const source = input.source || "mixed";
+    const now = new Date().toISOString();
+
+    const onlyProjectIds = new Set(this.normalizeStringArray(input.only_project_ids));
+    const onlyAliases = new Set(this.normalizeStringArray(input.only_aliases).map((a) => this.normalizeProjectAlias(a)));
+
+    const projects = this.listProjects(scopeUserId, scopeAgentId);
+    const selected = projects.filter((row) => {
+      if (onlyProjectIds.size > 0 && !onlyProjectIds.has(row.project.project_id)) return false;
+      if (onlyAliases.size > 0) {
+        const aliases = row.aliases.map((a) => this.normalizeProjectAlias(a.project_alias));
+        if (!aliases.some((a) => onlyAliases.has(a))) return false;
+      }
+      return true;
+    });
+
+    let updatedAliases = 0;
+    let updatedMappings = 0;
+    let updatedRegistrations = 0;
+    let migrationStateUpserts = 0;
+
+    const items: ProjectLegacyBackfillItem[] = [];
+
+    for (const row of selected) {
+      const project = row.project;
+      const warnings: string[] = [];
+      const actions: string[] = [];
+
+      const existingAliases = new Set(
+        row.aliases.map((a) => this.normalizeProjectAlias(a.project_alias)).filter(Boolean),
+      );
+
+      const inferredAliases = this.inferBackfillAliases(project, existingAliases, source);
+      const inferredMappings = this.inferBackfillTrackerMappings(scopeUserId, scopeAgentId, project.project_id, project, source);
+
+      if (mode === "apply") {
+        for (const alias of inferredAliases) {
+          if (existingAliases.has(alias)) continue;
+          this.upsertProjectAlias(scopeUserId, scopeAgentId, project.project_id, alias, false, now, false);
+          existingAliases.add(alias);
+          updatedAliases += 1;
+          actions.push(`alias.backfilled:${alias}`);
+        }
+
+        for (const mapping of inferredMappings) {
+          const existing = this.getProjectTrackerMapping(scopeUserId, scopeAgentId, project.project_id, mapping.tracker_type);
+          if (
+            existing
+            && existing.tracker_space_key === mapping.tracker_space_key
+            && existing.default_epic_key === mapping.default_epic_key
+            && existing.tracker_project_id === mapping.tracker_project_id
+          ) {
+            continue;
+          }
+
+          this.setProjectTrackerMapping(scopeUserId, scopeAgentId, {
+            project_id: project.project_id,
+            tracker_type: mapping.tracker_type,
+            tracker_space_key: mapping.tracker_space_key || undefined,
+            tracker_project_id: mapping.tracker_project_id || undefined,
+            default_epic_key: mapping.default_epic_key || undefined,
+          });
+          updatedMappings += 1;
+          actions.push(`tracker.backfilled:${mapping.tracker_type}`);
+        }
+      }
+
+      const primaryAlias = this.pickPrimaryAlias(existingAliases, project);
+      const completeness = this.computeRegistrationCompleteness(project, primaryAlias);
+      const missingFields = this.computeMissingRegistrationFields(project, primaryAlias);
+      const hasTracker = inferredMappings.length > 0 || Boolean(this.getProjectTrackerMapping(scopeUserId, scopeAgentId, project.project_id, "jira"));
+      const status: "registered" | "validated" = hasTracker && completeness >= 90 ? "validated" : "registered";
+      const validationStatus: "ok" | "warn" = missingFields.length === 0 ? "ok" : "warn";
+
+      const existingRegistration = this.getProjectRegistrationState(scopeUserId, scopeAgentId, project.project_id);
+      const shouldUpdateRegistration =
+        !existingRegistration
+        || input.force_registration_state === true
+        || existingRegistration.registration_status === "draft"
+        || existingRegistration.validation_status !== validationStatus;
+
+      if (shouldUpdateRegistration) {
+        if (mode === "apply") {
+          this.upsertProjectRegistrationState(scopeUserId, scopeAgentId, {
+            project_id: project.project_id,
+            registration_status: status,
+            validation_status: validationStatus,
+            validation_notes: `legacy_backfill:${source}`,
+            completeness_score: completeness,
+            missing_required_fields: missingFields,
+            last_validated_at: now,
+          });
+          updatedRegistrations += 1;
+          actions.push("registration.backfilled");
+        }
+      }
+
+      if (mode === "apply") {
+        this.upsertMigrationState(scopeUserId, scopeAgentId, {
+          migration_id: `legacy-backfill:${project.project_id}`,
+          schema_from: "legacy",
+          schema_to: "5.1",
+          applied_at: now,
+          status: "migrated",
+          notes: JSON.stringify({
+            source,
+            alias_count: inferredAliases.length,
+            tracker_count: inferredMappings.length,
+          }),
+        });
+        migrationStateUpserts += 1;
+      }
+
+      if (inferredAliases.length === 0) {
+        warnings.push("no additional alias inferred");
+      }
+      if (inferredMappings.length === 0) {
+        warnings.push("no tracker mapping inferred");
+      }
+
+      items.push({
+        project_id: project.project_id,
+        project_name: project.project_name,
+        inferred_aliases: inferredAliases,
+        inferred_tracker_mappings: inferredMappings,
+        actions,
+        warnings,
+      });
+    }
+
+    return {
+      mode,
+      source,
+      scanned_projects: projects.length,
+      candidates: selected.length,
+      updated_aliases: updatedAliases,
+      updated_tracker_mappings: updatedMappings,
+      updated_registration_states: updatedRegistrations,
+      migration_state_upserts: migrationStateUpserts,
+      items,
+    };
+  }
+
   // --------------------------------------------------------------------------
   // Helpers
   // --------------------------------------------------------------------------
@@ -1939,6 +2124,175 @@ export class SlotDB {
 
   private uniqueSorted(values: string[]): string[] {
     return Array.from(new Set(values.map((v) => String(v || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  }
+
+  private inferBackfillAliases(
+    project: ProjectRecord,
+    existingAliases: Set<string>,
+    source: "repo_root" | "repo_remote" | "task_registry" | "mixed",
+  ): string[] {
+    const candidates = new Set<string>();
+
+    if (source === "repo_root" || source === "mixed") {
+      if (project.repo_root) {
+        const parts = project.repo_root.replace(/\\/g, "/").split("/").filter(Boolean);
+        const leaf = parts[parts.length - 1] || "";
+        const normalized = this.normalizeProjectAlias(leaf);
+        if (normalized) candidates.add(normalized);
+      }
+    }
+
+    if (source === "repo_remote" || source === "mixed") {
+      if (project.repo_remote_primary) {
+        const remote = String(project.repo_remote_primary);
+        const m = remote.match(/[:\/]([^/]+?)\.git$/i) || remote.match(/[:\/]([^/]+?)$/i);
+        const repoName = m?.[1] || "";
+        const normalized = this.normalizeProjectAlias(repoName);
+        if (normalized) candidates.add(normalized);
+      }
+    }
+
+    const filtered = Array.from(candidates).filter((a) => !existingAliases.has(a));
+    return filtered.sort((a, b) => a.localeCompare(b));
+  }
+
+  private inferBackfillTrackerMappings(
+    scopeUserId: string,
+    scopeAgentId: string,
+    projectId: string,
+    project: ProjectRecord,
+    source: "repo_root" | "repo_remote" | "task_registry" | "mixed",
+  ): Array<{
+    tracker_type: "jira" | "github" | "other";
+    tracker_space_key: string | null;
+    tracker_project_id: string | null;
+    default_epic_key: string | null;
+    confidence: number;
+    source: "repo_remote" | "task_registry";
+  }> {
+    const result: Array<{
+      tracker_type: "jira" | "github" | "other";
+      tracker_space_key: string | null;
+      tracker_project_id: string | null;
+      default_epic_key: string | null;
+      confidence: number;
+      source: "repo_remote" | "task_registry";
+    }> = [];
+
+    if (source === "repo_remote" || source === "mixed") {
+      const remote = String(project.repo_remote_primary || "").trim();
+      if (remote.includes("github.com")) {
+        result.push({
+          tracker_type: "github",
+          tracker_space_key: null,
+          tracker_project_id: null,
+          default_epic_key: null,
+          confidence: 0.7,
+          source: "repo_remote",
+        });
+      }
+    }
+
+    if (source === "task_registry" || source === "mixed") {
+      const stmt = this.db.prepare(
+        `SELECT tracker_issue_key FROM task_registry
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND tracker_issue_key IS NOT NULL AND tracker_issue_key != ''
+         ORDER BY updated_at DESC LIMIT 200`,
+      );
+      const rows = stmt.all(scopeUserId, scopeAgentId, projectId) as Array<{ tracker_issue_key: string | null }>;
+      const keys = rows.map((r) => String(r.tracker_issue_key || "").trim()).filter(Boolean);
+      const jiraLike = keys
+        .map((key) => key.match(/^([A-Z][A-Z0-9_]+)-\d+$/)?.[1] || null)
+        .filter((x): x is string => Boolean(x));
+      if (jiraLike.length > 0) {
+        const counts = new Map<string, number>();
+        for (const p of jiraLike) counts.set(p, (counts.get(p) || 0) + 1);
+        const top = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0];
+        if (top) {
+          result.push({
+            tracker_type: "jira",
+            tracker_space_key: top[0],
+            tracker_project_id: null,
+            default_epic_key: `${top[0]}-1`,
+            confidence: Math.min(0.95, 0.55 + top[1] * 0.03),
+            source: "task_registry",
+          });
+        }
+      }
+    }
+
+    const dedup = new Map<string, (typeof result)[number]>();
+    for (const item of result) {
+      const key = `${item.tracker_type}:${item.tracker_space_key || ""}:${item.default_epic_key || ""}`;
+      const prev = dedup.get(key);
+      if (!prev || item.confidence > prev.confidence) dedup.set(key, item);
+    }
+
+    return Array.from(dedup.values()).sort((a, b) => b.confidence - a.confidence);
+  }
+
+  private pickPrimaryAlias(existingAliases: Set<string>, project: ProjectRecord): string {
+    const aliases = Array.from(existingAliases).filter(Boolean).sort((a, b) => a.localeCompare(b));
+    if (aliases.length > 0) return aliases[0];
+
+    const fromName = this.normalizeProjectAlias(project.project_name);
+    if (fromName) return fromName;
+
+    return this.normalizeProjectAlias(project.project_id) || "project";
+  }
+
+  private upsertMigrationState(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: {
+      migration_id: string;
+      schema_from: string;
+      schema_to: string;
+      applied_at: string;
+      status: string;
+      notes?: string | null;
+    },
+  ): void {
+    const existingStmt = this.db.prepare(
+      `SELECT migration_id FROM migration_state
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND migration_id = ?`,
+    );
+    const existing = existingStmt.get(scopeUserId, scopeAgentId, input.migration_id) as { migration_id: string } | undefined;
+
+    if (existing) {
+      const updateStmt = this.db.prepare(
+        `UPDATE migration_state
+         SET schema_from = ?, schema_to = ?, applied_at = ?, status = ?, notes = ?
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND migration_id = ?`,
+      );
+      updateStmt.run(
+        input.schema_from,
+        input.schema_to,
+        input.applied_at,
+        input.status,
+        input.notes || null,
+        scopeUserId,
+        scopeAgentId,
+        input.migration_id,
+      );
+      return;
+    }
+
+    const insertStmt = this.db.prepare(
+      `INSERT INTO migration_state (
+        migration_id, scope_user_id, scope_agent_id, schema_from, schema_to, applied_at, status, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertStmt.run(
+      input.migration_id,
+      scopeUserId,
+      scopeAgentId,
+      input.schema_from,
+      input.schema_to,
+      input.applied_at,
+      input.status,
+      input.notes || null,
+    );
   }
 
   private rowToTaskRecord(row: {
