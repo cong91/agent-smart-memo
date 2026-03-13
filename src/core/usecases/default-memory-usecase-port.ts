@@ -118,6 +118,49 @@ interface ProjectIndexWatchGetPayload {
   project_id: string;
 }
 
+interface ProjectTaskRegistryUpsertPayload {
+  task_id: string;
+  project_id: string;
+  task_title: string;
+  task_type?: string | null;
+  task_status?: string | null;
+  parent_task_id?: string | null;
+  related_task_ids?: string[];
+  files_touched?: string[];
+  symbols_touched?: string[];
+  commit_refs?: string[];
+  diff_refs?: string[];
+  decision_notes?: string | null;
+  tracker_issue_key?: string | null;
+}
+
+interface ProjectTaskLineageContextPayload {
+  project_id: string;
+  task_id?: string;
+  tracker_issue_key?: string;
+  task_title?: string;
+  include_related?: boolean;
+  include_parent_chain?: boolean;
+}
+
+interface ProjectHybridSearchPayload {
+  project_id: string;
+  query: string;
+  limit?: number;
+  path_prefix?: string[];
+  module?: string[];
+  language?: string[];
+  task_id?: string[];
+  tracker_issue_key?: string[];
+  task_context?: {
+    task_id?: string;
+    tracker_issue_key?: string;
+    task_title?: string;
+    include_related?: boolean;
+    include_parent_chain?: boolean;
+  };
+}
+
 interface ScopeIdentity {
   userId: string;
   agentId: string;
@@ -199,6 +242,12 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
         return this.handleProjectReindexDiff(payload as unknown as ProjectReindexDiffPayload, req) as TRes;
       case "project.index_watch_get":
         return this.handleProjectIndexWatchGet(payload as unknown as ProjectIndexWatchGetPayload, req) as TRes;
+      case "project.task_registry_upsert":
+        return this.handleProjectTaskRegistryUpsert(payload as unknown as ProjectTaskRegistryUpsertPayload, req) as TRes;
+      case "project.task_lineage_context":
+        return this.handleProjectTaskLineageContext(payload as unknown as ProjectTaskLineageContextPayload, req) as TRes;
+      case "project.hybrid_search":
+        return this.handleProjectHybridSearch(payload as unknown as ProjectHybridSearchPayload, req) as TRes;
       case "graph.entity.get":
         return this.handleGraphEntityGet(payload as unknown as GraphEntityGetPayload, req) as TRes;
       case "graph.entity.set":
@@ -445,6 +494,71 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
     }
 
     return this.slotDb.getProjectIndexWatchState(identity.userId, identity.agentId, payload.project_id);
+  }
+
+  private handleProjectTaskRegistryUpsert(payload: ProjectTaskRegistryUpsertPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+
+    if (!payload.task_id || !payload.project_id || !payload.task_title) {
+      throw new Error("project.task_registry_upsert requires payload.task_id, payload.project_id, payload.task_title");
+    }
+
+    return this.slotDb.upsertTaskRegistryRecord(identity.userId, identity.agentId, {
+      task_id: payload.task_id,
+      project_id: payload.project_id,
+      task_title: payload.task_title,
+      task_type: payload.task_type,
+      task_status: payload.task_status,
+      parent_task_id: payload.parent_task_id,
+      related_task_ids: payload.related_task_ids || [],
+      files_touched: payload.files_touched || [],
+      symbols_touched: payload.symbols_touched || [],
+      commit_refs: payload.commit_refs || [],
+      diff_refs: payload.diff_refs || [],
+      decision_notes: payload.decision_notes ?? null,
+      tracker_issue_key: payload.tracker_issue_key ?? null,
+    });
+  }
+
+  private handleProjectTaskLineageContext(payload: ProjectTaskLineageContextPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+
+    if (!payload.project_id) {
+      throw new Error("project.task_lineage_context requires payload.project_id");
+    }
+
+    if (!payload.task_id && !payload.tracker_issue_key && !payload.task_title) {
+      throw new Error("project.task_lineage_context requires one selector: task_id|tracker_issue_key|task_title");
+    }
+
+    return this.slotDb.getTaskLineageContext(identity.userId, identity.agentId, {
+      project_id: payload.project_id,
+      task_id: payload.task_id,
+      tracker_issue_key: payload.tracker_issue_key,
+      task_title: payload.task_title,
+      include_related: payload.include_related,
+      include_parent_chain: payload.include_parent_chain,
+    });
+  }
+
+  private handleProjectHybridSearch(payload: ProjectHybridSearchPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+
+    if (!payload.project_id || !payload.query) {
+      throw new Error("project.hybrid_search requires payload.project_id and payload.query");
+    }
+
+    return this.slotDb.hybridSearchProjectContext(identity.userId, identity.agentId, {
+      project_id: payload.project_id,
+      query: payload.query,
+      limit: payload.limit,
+      path_prefix: payload.path_prefix || [],
+      module: payload.module || [],
+      language: payload.language || [],
+      task_id: payload.task_id || [],
+      tracker_issue_key: payload.tracker_issue_key || [],
+      task_context: payload.task_context,
+    });
   }
 
   private handleGraphEntityGet(payload: GraphEntityGetPayload, req: CoreRequestEnvelope<unknown>) {

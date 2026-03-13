@@ -540,7 +540,7 @@ const agentMemoPlugin = {
     registerMemoryToolContextInjector(api);
 
     console.log("[AgentMemo] Plugin registered successfully");
-    console.log("[AgentMemo] Tools: memory_search, memory_store, memory_slot_*, memory_graph_*, project_registry_*");
+    console.log("[AgentMemo] Tools: memory_search, memory_store, memory_slot_*, memory_graph_*, project_registry_*, project_task_*, project_hybrid_search");
     console.log("[AgentMemo] Hooks: auto-recall, auto-capture, tool-context-injector");
   },
 };

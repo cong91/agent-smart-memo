@@ -355,4 +355,192 @@ export function registerProjectTools(
       }
     },
   });
+
+  api.registerTool({
+    name: "project_task_registry_upsert",
+    label: "Project Task Registry Upsert",
+    description:
+      "Upsert task-lineage metadata for a project task (parent/related links, touched files/symbols, decisions, tracker key).",
+    parameters: {
+      type: "object",
+      properties: {
+        task_id: { type: "string" },
+        project_id: { type: "string" },
+        task_title: { type: "string" },
+        task_type: { type: "string" },
+        task_status: { type: "string" },
+        parent_task_id: { type: "string" },
+        related_task_ids: { type: "array", items: { type: "string" } },
+        files_touched: { type: "array", items: { type: "string" } },
+        symbols_touched: { type: "array", items: { type: "string" } },
+        commit_refs: { type: "array", items: { type: "string" } },
+        diff_refs: { type: "array", items: { type: "string" } },
+        decision_notes: { type: "string" },
+        tracker_issue_key: { type: "string" },
+      },
+      required: ["task_id", "project_id", "task_title"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        task_id: string;
+        project_id: string;
+        task_title: string;
+        task_type?: string;
+        task_status?: string;
+        parent_task_id?: string;
+        related_task_ids?: string[];
+        files_touched?: string[];
+        symbols_touched?: string[];
+        commit_refs?: string[];
+        diff_refs?: string[];
+        decision_notes?: string;
+        tracker_issue_key?: string;
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.task_registry_upsert", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_task_registry_upsert",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
+    name: "project_task_lineage_context",
+    label: "Project Task Lineage Context",
+    description:
+      "Assemble compact task-lineage context (focus task, parent chain, related tasks, touched files/symbols, commit refs, decisions).",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        task_id: { type: "string" },
+        tracker_issue_key: { type: "string" },
+        task_title: { type: "string" },
+        include_related: { type: "boolean" },
+        include_parent_chain: { type: "boolean" },
+      },
+      required: ["project_id"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_id: string;
+        task_id?: string;
+        tracker_issue_key?: string;
+        task_title?: string;
+        include_related?: boolean;
+        include_parent_chain?: boolean;
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.task_lineage_context", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_task_lineage_context",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
+    name: "project_hybrid_search",
+    label: "Project Hybrid Search",
+    description:
+      "Hybrid retrieval over file/symbol/task registries with optional task-lineage context assembly and project/task filters.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        query: { type: "string" },
+        limit: { type: "number" },
+        path_prefix: { type: "array", items: { type: "string" } },
+        module: { type: "array", items: { type: "string" } },
+        language: { type: "array", items: { type: "string" } },
+        task_id: { type: "array", items: { type: "string" } },
+        tracker_issue_key: { type: "array", items: { type: "string" } },
+        task_context: {
+          type: "object",
+          properties: {
+            task_id: { type: "string" },
+            tracker_issue_key: { type: "string" },
+            task_title: { type: "string" },
+            include_related: { type: "boolean" },
+            include_parent_chain: { type: "boolean" },
+          },
+        },
+      },
+      required: ["project_id", "query"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_id: string;
+        query: string;
+        limit?: number;
+        path_prefix?: string[];
+        module?: string[];
+        language?: string[];
+        task_id?: string[];
+        tracker_issue_key?: string[];
+        task_context?: {
+          task_id?: string;
+          tracker_issue_key?: string;
+          task_title?: string;
+          include_related?: boolean;
+          include_parent_chain?: boolean;
+        };
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.hybrid_search", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_hybrid_search",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
 }
