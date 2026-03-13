@@ -30,6 +30,8 @@ export type MemoryUseCaseName =
   | "project.list"
   | "project.set_registration_state"
   | "project.set_tracker_mapping"
+  | "project.reindex_diff"
+  | "project.index_watch_get"
   | "memory.capture"
   | "memory.search"
   | "graph.entity.get"

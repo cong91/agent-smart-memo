@@ -101,6 +101,23 @@ interface ProjectSetTrackerMappingPayload {
   external_project_url?: string;
 }
 
+interface ProjectReindexDiffPayload {
+  project_id: string;
+  source_rev?: string | null;
+  trigger_type?: "bootstrap" | "incremental" | "manual" | "repair";
+  index_profile?: string;
+  paths?: Array<{
+    relative_path: string;
+    checksum?: string | null;
+    module?: string | null;
+    language?: string | null;
+  }>;
+}
+
+interface ProjectIndexWatchGetPayload {
+  project_id: string;
+}
+
 interface ScopeIdentity {
   userId: string;
   agentId: string;
@@ -178,6 +195,10 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
         return this.handleProjectSetRegistrationState(payload as unknown as ProjectSetRegistrationStatePayload, req) as TRes;
       case "project.set_tracker_mapping":
         return this.handleProjectSetTrackerMapping(payload as unknown as ProjectSetTrackerMappingPayload, req) as TRes;
+      case "project.reindex_diff":
+        return this.handleProjectReindexDiff(payload as unknown as ProjectReindexDiffPayload, req) as TRes;
+      case "project.index_watch_get":
+        return this.handleProjectIndexWatchGet(payload as unknown as ProjectIndexWatchGetPayload, req) as TRes;
       case "graph.entity.get":
         return this.handleGraphEntityGet(payload as unknown as GraphEntityGetPayload, req) as TRes;
       case "graph.entity.set":
@@ -398,6 +419,32 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       active_version: payload.active_version,
       external_project_url: payload.external_project_url,
     });
+  }
+
+  private handleProjectReindexDiff(payload: ProjectReindexDiffPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+
+    if (!payload.project_id) {
+      throw new Error("project.reindex_diff requires payload.project_id");
+    }
+
+    return this.slotDb.reindexProjectByDiff(identity.userId, identity.agentId, {
+      project_id: payload.project_id,
+      source_rev: payload.source_rev,
+      trigger_type: payload.trigger_type,
+      index_profile: payload.index_profile,
+      paths: payload.paths || [],
+    });
+  }
+
+  private handleProjectIndexWatchGet(payload: ProjectIndexWatchGetPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+
+    if (!payload.project_id) {
+      throw new Error("project.index_watch_get requires payload.project_id");
+    }
+
+    return this.slotDb.getProjectIndexWatchState(identity.userId, identity.agentId, payload.project_id);
   }
 
   private handleGraphEntityGet(payload: GraphEntityGetPayload, req: CoreRequestEnvelope<unknown>) {
