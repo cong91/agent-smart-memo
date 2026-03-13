@@ -155,6 +155,44 @@ export interface ProjectRegistrationStateRecord {
   updated_at: string;
 }
 
+export interface ProjectReindexDiffInput {
+  project_id: string;
+  source_rev?: string | null;
+  trigger_type?: "bootstrap" | "incremental" | "manual" | "repair";
+  index_profile?: string;
+  paths?: Array<{
+    relative_path: string;
+    checksum?: string | null;
+    module?: string | null;
+    language?: string | null;
+  }>;
+}
+
+export interface ProjectIndexWatchState {
+  project_id: string;
+  scope_user_id: string;
+  scope_agent_id: string;
+  last_source_rev: string | null;
+  last_checksum_snapshot: Record<string, string>;
+  updated_at: string;
+}
+
+export interface ProjectReindexDiffResult {
+  run_id: string;
+  project_id: string;
+  trigger_type: "bootstrap" | "incremental" | "manual" | "repair";
+  index_profile: string;
+  source_rev: string | null;
+  changed: string[];
+  unchanged: string[];
+  deleted: string[];
+  run_state: "indexed" | "error";
+  watch_state: {
+    last_source_rev: string | null;
+    updated_at: string;
+  };
+}
+
 // ============================================================================
 // SlotDB Class
 // ============================================================================
@@ -442,6 +480,24 @@ export class SlotDB {
         notes TEXT,
         PRIMARY KEY (scope_user_id, scope_agent_id, migration_id)
       )
+    `);
+
+    // ASM-78 (v5.1) incremental reindex watch-state + diff/checksum control plane.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS project_index_watch_state (
+        project_id TEXT NOT NULL,
+        scope_user_id TEXT NOT NULL DEFAULT '',
+        scope_agent_id TEXT NOT NULL DEFAULT '',
+        last_source_rev TEXT,
+        last_checksum_snapshot TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (scope_user_id, scope_agent_id, project_id)
+      )
+    `);
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_project_watch_updated
+      ON project_index_watch_state(scope_user_id, scope_agent_id, updated_at)
     `);
   }
 
@@ -956,6 +1012,145 @@ export class SlotDB {
     });
   }
 
+  getProjectIndexWatchState(
+    scopeUserId: string,
+    scopeAgentId: string,
+    projectId: string,
+  ): ProjectIndexWatchState | null {
+    const stmt = this.db.prepare(
+      `SELECT * FROM project_index_watch_state WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+    );
+    const row = stmt.get(scopeUserId, scopeAgentId, projectId) as {
+      project_id: string;
+      scope_user_id: string;
+      scope_agent_id: string;
+      last_source_rev: string | null;
+      last_checksum_snapshot: string | null;
+      updated_at: string;
+    } | undefined;
+
+    if (!row) return null;
+    return {
+      project_id: row.project_id,
+      scope_user_id: row.scope_user_id,
+      scope_agent_id: row.scope_agent_id,
+      last_source_rev: row.last_source_rev,
+      last_checksum_snapshot: this.parseChecksumMap(row.last_checksum_snapshot),
+      updated_at: row.updated_at,
+    };
+  }
+
+  reindexProjectByDiff(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: ProjectReindexDiffInput,
+  ): ProjectReindexDiffResult {
+    const now = new Date().toISOString();
+    const runId = randomUUID();
+    const triggerType = input.trigger_type || "incremental";
+    const indexProfile = (input.index_profile || "default").trim() || "default";
+    const sourceRev = input.source_rev?.trim() || null;
+
+    if (!input.project_id || !String(input.project_id).trim()) {
+      throw new Error("project_id is required");
+    }
+
+    const project = this.getProjectById(scopeUserId, scopeAgentId, input.project_id);
+    if (!project) {
+      throw new Error(`project_id '${input.project_id}' is not registered`);
+    }
+
+    const watch = this.getProjectIndexWatchState(scopeUserId, scopeAgentId, input.project_id);
+    const previousSnapshot = watch?.last_checksum_snapshot || {};
+
+    const currentSnapshot = new Map<string, string>();
+    for (const item of input.paths || []) {
+      const relativePath = this.normalizeRelativePath(item.relative_path);
+      if (!relativePath) continue;
+      const checksum = (item.checksum || "").trim() || "__missing__";
+      currentSnapshot.set(relativePath, checksum);
+    }
+
+    const changed: string[] = [];
+    const unchanged: string[] = [];
+
+    for (const [relativePath, checksum] of currentSnapshot.entries()) {
+      const prev = previousSnapshot[relativePath];
+      if (!prev || prev !== checksum) changed.push(relativePath);
+      else unchanged.push(relativePath);
+    }
+
+    const deleted: string[] = [];
+    for (const prevPath of Object.keys(previousSnapshot)) {
+      if (!currentSnapshot.has(prevPath)) deleted.push(prevPath);
+    }
+
+    this.insertIndexRun(scopeUserId, scopeAgentId, {
+      run_id: runId,
+      project_id: input.project_id,
+      index_profile: indexProfile,
+      trigger_type: triggerType,
+      state: "indexing",
+      started_at: now,
+      finished_at: null,
+      error_message: null,
+    });
+
+    try {
+      const nowIso = new Date().toISOString();
+      for (const relativePath of changed) {
+        const item = (input.paths || []).find((p) => this.normalizeRelativePath(p.relative_path) === relativePath);
+        this.upsertFileIndexState(scopeUserId, scopeAgentId, {
+          file_id: this.makeScopedId(input.project_id, relativePath),
+          project_id: input.project_id,
+          relative_path: relativePath,
+          module: item?.module || null,
+          language: item?.language || null,
+          checksum: currentSnapshot.get(relativePath) || "__missing__",
+          last_commit_sha: sourceRev,
+          index_state: "indexed",
+          active: 1,
+          tombstone_at: null,
+          indexed_at: nowIso,
+        });
+      }
+
+      for (const relativePath of deleted) {
+        this.markFileIndexStateDeleted(scopeUserId, scopeAgentId, input.project_id, relativePath, nowIso);
+      }
+
+      const checksumSnapshotRecord = Object.fromEntries(currentSnapshot.entries());
+      this.upsertProjectIndexWatchState(scopeUserId, scopeAgentId, {
+        project_id: input.project_id,
+        last_source_rev: sourceRev,
+        last_checksum_snapshot: checksumSnapshotRecord,
+        updated_at: nowIso,
+      });
+
+      this.finishIndexRun(scopeUserId, scopeAgentId, runId, "indexed", null, nowIso);
+
+      return {
+        run_id: runId,
+        project_id: input.project_id,
+        trigger_type: triggerType,
+        index_profile: indexProfile,
+        source_rev: sourceRev,
+        changed,
+        unchanged,
+        deleted,
+        run_state: "indexed",
+        watch_state: {
+          last_source_rev: sourceRev,
+          updated_at: nowIso,
+        },
+      };
+    } catch (error) {
+      const err = error instanceof Error ? error.message : String(error);
+      this.finishIndexRun(scopeUserId, scopeAgentId, runId, "error", err, new Date().toISOString());
+      throw error;
+    }
+  }
+
   // --------------------------------------------------------------------------
   // Helpers
   // --------------------------------------------------------------------------
@@ -968,6 +1163,220 @@ export class SlotDB {
       .replace(/[^a-z0-9._-]+/g, "-")
       .replace(/-+/g, "-")
       .replace(/^-|-$/g, "");
+  }
+
+  private normalizeRelativePath(pathInput: string | undefined): string {
+    const normalized = String(pathInput || "")
+      .trim()
+      .replace(/\\/g, "/")
+      .replace(/^\.\//, "")
+      .replace(/\/+/g, "/");
+    return normalized;
+  }
+
+  private makeScopedId(projectId: string, relativePath: string): string {
+    return `${projectId}::${relativePath}`;
+  }
+
+  private parseChecksumMap(raw: string | null | undefined): Record<string, string> {
+    if (!raw) return {};
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+      const out: Record<string, string> = {};
+      for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+        if (typeof key === "string" && typeof value === "string") {
+          out[key] = value;
+        }
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  }
+
+  private insertIndexRun(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: {
+      run_id: string;
+      project_id: string;
+      index_profile: string;
+      trigger_type: string;
+      state: string;
+      started_at: string;
+      finished_at: string | null;
+      error_message: string | null;
+    },
+  ): void {
+    const stmt = this.db.prepare(
+      `INSERT INTO index_runs (
+        run_id, scope_user_id, scope_agent_id, project_id, index_profile, trigger_type, state, started_at, finished_at, error_message
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    stmt.run(
+      input.run_id,
+      scopeUserId,
+      scopeAgentId,
+      input.project_id,
+      input.index_profile,
+      input.trigger_type,
+      input.state,
+      input.started_at,
+      input.finished_at,
+      input.error_message,
+    );
+  }
+
+  private finishIndexRun(
+    scopeUserId: string,
+    scopeAgentId: string,
+    runId: string,
+    state: "indexed" | "error",
+    errorMessage: string | null,
+    finishedAt: string,
+  ): void {
+    const stmt = this.db.prepare(
+      `UPDATE index_runs
+       SET state = ?, finished_at = ?, error_message = ?
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND run_id = ?`,
+    );
+    stmt.run(state, finishedAt, errorMessage, scopeUserId, scopeAgentId, runId);
+  }
+
+  private upsertFileIndexState(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: {
+      file_id: string;
+      project_id: string;
+      relative_path: string;
+      module: string | null;
+      language: string | null;
+      checksum: string;
+      last_commit_sha: string | null;
+      index_state: string;
+      active: number;
+      tombstone_at: string | null;
+      indexed_at: string | null;
+    },
+  ): void {
+    const existingStmt = this.db.prepare(
+      `SELECT file_id FROM file_index_state
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND relative_path = ?`,
+    );
+    const existing = existingStmt.get(
+      scopeUserId,
+      scopeAgentId,
+      input.project_id,
+      input.relative_path,
+    ) as { file_id: string } | undefined;
+
+    if (existing) {
+      const updateStmt = this.db.prepare(
+        `UPDATE file_index_state
+         SET module = ?, language = ?, checksum = ?, last_commit_sha = ?, index_state = ?, active = ?, tombstone_at = ?, indexed_at = ?
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND file_id = ?`,
+      );
+      updateStmt.run(
+        input.module,
+        input.language,
+        input.checksum,
+        input.last_commit_sha,
+        input.index_state,
+        input.active,
+        input.tombstone_at,
+        input.indexed_at,
+        scopeUserId,
+        scopeAgentId,
+        existing.file_id,
+      );
+      return;
+    }
+
+    const insertStmt = this.db.prepare(
+      `INSERT INTO file_index_state (
+        file_id, scope_user_id, scope_agent_id, project_id, relative_path, module, language,
+        checksum, last_commit_sha, index_state, active, tombstone_at, indexed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    insertStmt.run(
+      input.file_id,
+      scopeUserId,
+      scopeAgentId,
+      input.project_id,
+      input.relative_path,
+      input.module,
+      input.language,
+      input.checksum,
+      input.last_commit_sha,
+      input.index_state,
+      input.active,
+      input.tombstone_at,
+      input.indexed_at,
+    );
+  }
+
+  private markFileIndexStateDeleted(
+    scopeUserId: string,
+    scopeAgentId: string,
+    projectId: string,
+    relativePath: string,
+    tombstoneAt: string,
+  ): void {
+    const stmt = this.db.prepare(
+      `UPDATE file_index_state
+       SET index_state = 'stale', active = 0, tombstone_at = ?, indexed_at = ?
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND relative_path = ?`,
+    );
+    stmt.run(tombstoneAt, tombstoneAt, scopeUserId, scopeAgentId, projectId, relativePath);
+  }
+
+  private upsertProjectIndexWatchState(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: {
+      project_id: string;
+      last_source_rev: string | null;
+      last_checksum_snapshot: Record<string, string>;
+      updated_at: string;
+    },
+  ): void {
+    const existing = this.getProjectIndexWatchState(scopeUserId, scopeAgentId, input.project_id);
+    const checksumJson = JSON.stringify(input.last_checksum_snapshot || {});
+
+    if (existing) {
+      const stmt = this.db.prepare(
+        `UPDATE project_index_watch_state
+         SET last_source_rev = ?, last_checksum_snapshot = ?, updated_at = ?
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+      );
+      stmt.run(
+        input.last_source_rev,
+        checksumJson,
+        input.updated_at,
+        scopeUserId,
+        scopeAgentId,
+        input.project_id,
+      );
+      return;
+    }
+
+    const stmt = this.db.prepare(
+      `INSERT INTO project_index_watch_state (
+        project_id, scope_user_id, scope_agent_id, last_source_rev, last_checksum_snapshot, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    stmt.run(
+      input.project_id,
+      scopeUserId,
+      scopeAgentId,
+      input.last_source_rev,
+      checksumJson,
+      input.updated_at,
+    );
   }
 
   private normalizeProjectId(projectId?: string): string {

@@ -255,4 +255,104 @@ export function registerProjectTools(
       }
     },
   });
+
+  api.registerTool({
+    name: "project_reindex_diff",
+    label: "Project Reindex Diff",
+    description:
+      "Run incremental reindex by diff/checksum and update watch state. Tracks changed/unchanged/deleted paths and updates index run lifecycle.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        source_rev: { type: "string" },
+        trigger_type: { type: "string", enum: ["bootstrap", "incremental", "manual", "repair"] },
+        index_profile: { type: "string" },
+        paths: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              relative_path: { type: "string" },
+              checksum: { type: "string" },
+              module: { type: "string" },
+              language: { type: "string" },
+            },
+            required: ["relative_path"],
+          },
+        },
+      },
+      required: ["project_id", "paths"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_id: string;
+        source_rev?: string;
+        trigger_type?: "bootstrap" | "incremental" | "manual" | "repair";
+        index_profile?: string;
+        paths: Array<{
+          relative_path: string;
+          checksum?: string;
+          module?: string;
+          language?: string;
+        }>;
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.reindex_diff", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_reindex_diff",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
+    name: "project_index_watch_get",
+    label: "Project Index Watch Get",
+    description: "Get current project index watch-state snapshot (last source rev + checksum map).",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+      },
+      required: ["project_id"],
+    },
+    async execute(_id: string, params: { project_id: string }, ctx: any) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.index_watch_get", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_index_watch_get",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
 }
