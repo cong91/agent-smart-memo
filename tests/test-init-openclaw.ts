@@ -80,6 +80,7 @@ test("buildPatchedConfig merges plugin block without dropping unrelated fields",
       embedModel: "qwen3-embedding:0.6b",
       embedDimensions: 1024,
       slotDbDir: join(stateDir, "agent-memo"),
+      telegramOnboardingCommands: ["addproject"],
     },
     true,
   );
@@ -89,6 +90,11 @@ test("buildPatchedConfig merges plugin block without dropping unrelated fields",
   assert(next.plugins.allow.includes("other-plugin"), "existing allow item must remain");
   assert(next.plugins.allow.includes("agent-smart-memo"), "agent-smart-memo must be added to plugins.allow");
   assertEqual(next.plugins.slots.memory, "agent-smart-memo", "plugins.slots.memory should map to agent-smart-memo");
+  assert(Array.isArray(next.channels?.telegram?.customCommands), "telegram customCommands should be created");
+  assert(
+    next.channels.telegram.customCommands.some((item: any) => item.command === "addproject"),
+    "addproject should be present in telegram customCommands",
+  );
 
   const entry = next.plugins.entries["agent-smart-memo"];
   assert(entry && entry.enabled === true, "agent-smart-memo entry should be enabled");
@@ -106,6 +112,7 @@ test("validateAnswers returns explicit errors for invalid inputs", () => {
     embedModel: "",
     embedDimensions: -1,
     slotDbDir: "",
+    telegramOnboardingCommands: ["$bad"],
   });
 
   assert(errors.length >= 5, "should return multiple validation errors");

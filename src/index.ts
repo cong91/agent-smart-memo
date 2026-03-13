@@ -29,6 +29,7 @@ import { SemanticMemoryUseCase } from "./core/usecases/semantic-memory-usecase.j
 import { registerAutoRecall } from "./hooks/auto-recall.js";
 import { registerAutoCapture } from "./hooks/auto-capture.js";
 import { registerMemoryToolContextInjector } from "./hooks/tool-context-injector.js";
+import { registerTelegramAddProjectCommand } from "./commands/telegram-addproject-command.js";
 
 // ============================================================================
 // Plugin Configuration Interface
@@ -522,6 +523,7 @@ const agentMemoPlugin = {
       slotDbDir,
       semanticUseCaseFactory: (resolvedSlotDbDir) => getSemanticUseCase(resolvedSlotDbDir),
     });
+    registerTelegramAddProjectCommand(api);
 
     // ----------------------------------------------------------------
     // Register lifecycle hooks
