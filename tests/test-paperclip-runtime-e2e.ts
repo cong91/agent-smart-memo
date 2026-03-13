@@ -6,6 +6,7 @@ import {
   createAsmMemoryWorker,
   createPaperclipRuntime,
   manifest,
+  type HostWorkerInput,
 } from "../src/entries/paperclip.js";
 import { SemanticMemoryUseCase } from "../src/core/usecases/semantic-memory-usecase.js";
 import { DeduplicationService } from "../src/services/dedupe.js";
@@ -14,7 +15,7 @@ function assert(condition: unknown, message: string): void {
   if (!condition) throw new Error(`ASSERTION FAILED: ${message}`);
 }
 
-console.log("\n🧪 Paperclip Runtime E2E Tests\n");
+console.log("\n🧪 Paperclip Runtime E2E Tests (CI-safe)\n");
 
 const TEST_ROOT = join(tmpdir(), `agent-memo-paperclip-e2e-${Date.now()}`);
 const STATE_DIR = join(TEST_ROOT, "state");
@@ -58,17 +59,21 @@ class MockQdrant {
   }
 }
 
-const semanticUseCase = new SemanticMemoryUseCase(
-  new MockQdrant() as any,
-  new MockEmbedding() as any,
-  new DeduplicationService(0.95, console),
-);
+function createCiSafeRuntime(_input?: HostWorkerInput) {
+  const semanticUseCase = new SemanticMemoryUseCase(
+    new MockQdrant() as any,
+    new MockEmbedding() as any,
+    new DeduplicationService(0.95, console),
+  );
 
-const runtime = createPaperclipRuntime({
-  stateDir: STATE_DIR,
-  slotDbDir: SLOTDB_DIR,
-  semanticUseCase,
-});
+  return createPaperclipRuntime({
+    stateDir: STATE_DIR,
+    slotDbDir: SLOTDB_DIR,
+    semanticUseCase,
+  });
+}
+
+const runtime = createCiSafeRuntime();
 
 const ctx = {
   userId: "paperclip-user-1",
@@ -109,12 +114,14 @@ const memCaptureRes = await runtime.adapter.execute({
 assert(memCaptureRes.ok === true, "memory.capture should succeed");
 assert(Boolean((memCaptureRes.data as any)?.id), "memory.capture should return id");
 
-const worker = createAsmMemoryWorker();
+const worker = createAsmMemoryWorker(createCiSafeRuntime);
 const initRes = worker.initialize({
   config: {
     runtime: {
       stateDir: STATE_DIR,
       slotDbDir: SLOTDB_DIR,
+      qdrantHost: "ci-mock",
+      embedBaseUrl: "ci-mock",
     },
   },
 });
@@ -145,6 +152,28 @@ const toolRecallRes = await worker.executeTool(ASM_MEMORY_TOOL_NAMES.recall, {
 assert(toolRecallRes.ok === true, "worker memory_recall should succeed");
 assert(Array.isArray((toolRecallRes.data as any)?.results), "worker memory_recall should return results array");
 
+const eventAck = await worker.onEvent("activity.logged", {
+  summary: "Captured from CI-safe activity event",
+  context: {
+    userId: "paperclip-user-3",
+    sessionId: "paperclip-session-3",
+    projectWorkspaceId: "workspace-3",
+  },
+  namespace: "assistant",
+});
+assert(eventAck.accepted === true, "activity.logged should be accepted");
+
+const preview = await worker.getData("recall.preview", {
+  query: "CI-safe activity event",
+  context: {
+    userId: "paperclip-user-3",
+    sessionId: "paperclip-session-3",
+    projectWorkspaceId: "workspace-3",
+  },
+  namespace: "assistant",
+});
+assert(preview.ok === true, "recall.preview should succeed");
+
 assert(manifest.paperclipPlugin === undefined, "manifest stays host manifest object only");
 assert(manifest.configSchema.fields.some((field) => field.key === "embedModel"), "manifest carries shared config field");
 
@@ -154,4 +183,4 @@ try {
   rmSync(TEST_ROOT, { recursive: true, force: true });
 } catch {}
 
-console.log("✅ Paperclip runtime e2e passed (runtime wiring + source worker lifecycle)\n");
+console.log("✅ Paperclip runtime e2e passed (CI-safe, deterministic, no localhost deps)\n");

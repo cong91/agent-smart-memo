@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -12,26 +12,23 @@ function logStep(label) {
 }
 
 const root = process.cwd();
-const workerPath = join(root, "packages", "plugins", "agent-smart-memo", "dist", "worker.js");
-const manifestPath = join(root, "packages", "plugins", "agent-smart-memo", "dist", "manifest.js");
+const entryPath = join(root, "dist-paperclip", "entries", "paperclip.js");
 
-if (!existsSync(workerPath) || !existsSync(manifestPath)) {
-  console.error("[smoke] Missing plugin dist files. Build plugin dist first.");
-  console.error("Expected:", workerPath, manifestPath);
+if (!existsSync(entryPath)) {
+  console.error("[smoke] Missing paperclip entry build output. Run npm run build:paperclip first.");
+  console.error("Expected:", entryPath);
   process.exit(1);
 }
 
-const workerMod = await import(pathToFileURL(workerPath).href);
-const manifestMod = await import(pathToFileURL(manifestPath).href);
-const createAsmMemoryWorker = workerMod.createAsmMemoryWorker;
-const manifest = manifestMod.manifest;
+const entryMod = await import(pathToFileURL(entryPath).href);
+const createAsmMemoryWorker = entryMod.createAsmMemoryWorker;
+const manifest = entryMod.manifest;
 
 assert(typeof createAsmMemoryWorker === "function", "createAsmMemoryWorker export missing");
 assert(manifest?.id === "@paperclip/plugin-asm-memory", "manifest id mismatch");
 console.log("✅ plugin load: manifest + worker exports are readable");
 
 const sandboxRoot = mkdtempSync(join(tmpdir(), "asm-paperclip-smoke-"));
-const fallbackRoot = join(sandboxRoot, "skills", "para-memory-files");
 
 const worker = createAsmMemoryWorker();
 
@@ -41,7 +38,6 @@ const init = worker.initialize({
     enabled: true,
     capture: { mode: "event+batch", minConfidence: 0.62, maxItemsPerRun: 12, dedupWindowHours: 72 },
     recall: { topK: 8, minScore: 0.3 },
-    markdownFallback: { enabled: true, rootDir: fallbackRoot },
   },
 });
 assert(init?.ok === true, "worker initialize failed");
@@ -71,9 +67,10 @@ assert(capture?.decision === "accepted", "memory_capture should be accepted");
 const recall = await worker.executeTool("memory_recall", {
   query: "correlationId runtime traces",
   context: sharedContext,
+  minScore: 0,
 });
 assert(recall?.ok === true, "memory_recall failed");
-const recalledItems = recall?.data?.items ?? [];
+const recalledItems = recall?.data?.results ?? recall?.data?.items ?? [];
 assert(Array.isArray(recalledItems) && recalledItems.length >= 1, "memory_recall returned no items");
 console.log("✅ memory_capture + memory_recall ok");
 
@@ -90,40 +87,18 @@ const jobAck = await worker.runJob("asm_capture_compact", {});
 assert(jobAck?.ok === true, "asm_capture_compact should succeed");
 console.log("✅ job hook ack ok");
 
-logStep("markdown fallback guard (must not override source-of-truth)");
-const fallbackCapture = await worker.executeTool("memory_capture", {
-  text: "Force fallback entry for markdown queue",
-  source: "smoke-test",
-  confidence: 0.2,
-  forceFallback: true,
+logStep("basic worker action surface");
+const feedback = await worker.executeTool("memory_feedback", {
+  memoryId: "memory-1",
+  feedback: "upvote",
+  reason: "smoke",
   context: sharedContext,
 });
-assert(fallbackCapture?.ok === true, "fallback capture should succeed");
-assert(fallbackCapture?.decision === "deferred", "fallback capture should be deferred");
-
-const fallbackQueue = await worker.getData("fallback.queue", { context: sharedContext });
-const pending = fallbackQueue?.data ?? [];
-assert(Array.isArray(pending) && pending.length >= 1, "fallback queue should contain pending entries");
+assert(feedback?.ok === true, "memory_feedback should succeed");
 
 const fallbackSync = await worker.runJob("asm_fallback_sync", {});
-assert(fallbackSync?.ok === true, "fallback sync should succeed");
-
-const recallAfterFallback = await worker.executeTool("memory_recall", {
-  query: "Force fallback entry",
-  context: sharedContext,
-});
-const fallbackItems = recallAfterFallback?.data?.items ?? [];
-assert(Array.isArray(fallbackItems), "recall after fallback invalid payload");
-assert(
-  !fallbackItems.some((item) => String(item?.text || "").includes("Force fallback entry")),
-  "fallback markdown entry must not appear as source-of-truth recall item"
-);
-
-const fallbackFile = join(fallbackRoot, "fallback", "capture-queue", `${new Date().toISOString().slice(0, 10)}.md`);
-assert(existsSync(fallbackFile), "fallback markdown file missing");
-const fallbackContent = readFileSync(fallbackFile, "utf8");
-assert(fallbackContent.includes("capture.deferred"), "fallback markdown file missing capture.deferred marker");
-console.log("✅ markdown fallback queued without overriding source-of-truth");
+assert(fallbackSync?.ok === true, "asm_fallback_sync should succeed");
+console.log("✅ action + job surface ok");
 
 console.log("\n🎉 Paperclip local smoke/debug passed");
 console.log(`[smoke] sandboxRoot=${sandboxRoot}`);

@@ -240,7 +240,7 @@ export const manifest = {
   instanceConfigSchema,
 } as const;
 
-type HostWorkerInput = {
+export type HostWorkerInput = {
   config?: {
     enabled?: boolean;
     runtime?: {
@@ -258,6 +258,8 @@ type HostWorkerInput = {
   };
   now?: string;
 };
+
+export type HostRuntimeFactory = (input?: HostWorkerInput) => ReturnType<typeof createPaperclipRuntime>;
 
 type ToolContext = {
   companyId?: string;
@@ -367,8 +369,10 @@ function validateWorkerConfig(raw: Record<string, any>) {
 export class AsmMemoryPaperclipWorker {
   private initialized = false;
   private startedAt: string | null = null;
-  private runtime = createPaperclipRuntime();
+  private runtime?: ReturnType<typeof createPaperclipRuntime>;
   private config = validateWorkerConfig({}).normalized;
+
+  constructor(private readonly runtimeFactory: HostRuntimeFactory = (input) => createPaperclipRuntime(input?.config?.runtime)) {}
 
   initialize(input?: HostWorkerInput) {
     const validation = validateWorkerConfig(asRecord(input?.config));
@@ -377,7 +381,7 @@ export class AsmMemoryPaperclipWorker {
     }
 
     this.config = validation.normalized;
-    this.runtime = createPaperclipRuntime(validation.normalized.runtime);
+    this.runtime = this.runtimeFactory({ config: validation.normalized, now: input?.now });
     this.initialized = true;
     this.startedAt = input?.now || new Date().toISOString();
     return { ok: true, config: this.config };
@@ -393,13 +397,16 @@ export class AsmMemoryPaperclipWorker {
   }
 
   async shutdown() {
-    this.runtime.slotDb.close();
+    this.runtime?.slotDb?.close?.();
     this.initialized = false;
     return { ok: true };
   }
 
   async executeTool(toolName: string, payload: unknown) {
     const input = asRecord(payload);
+    if (!this.runtime) {
+      throw new Error("ASM worker not initialized");
+    }
 
     if (toolName === ASM_MEMORY_TOOL_NAMES.capture) {
       return toToolResponse(await this.runtime.adapter.execute(toEnvelope("memory.capture", input)));
@@ -438,6 +445,9 @@ export class AsmMemoryPaperclipWorker {
 
   async onEvent(eventName: string, payload: unknown) {
     const input = asRecord(payload);
+    if (!this.runtime) {
+      throw new Error("ASM worker not initialized");
+    }
 
     if (eventName === ASM_MEMORY_EVENT_NAMES.activityLogged || eventName === ASM_MEMORY_EVENT_NAMES.runFinished) {
       const summary = asString(input.summary) || asString(input.outputText) || asString(input.result);
@@ -469,6 +479,9 @@ export class AsmMemoryPaperclipWorker {
   }
 
   async getData(key: string, params?: unknown) {
+    if (!this.runtime) {
+      throw new Error("ASM worker not initialized");
+    }
     if (key === "recall.preview" || key === "recall.history") {
       const response = await this.runtime.adapter.execute(toEnvelope("memory.search", {
         ...(asRecord(params)),
@@ -485,8 +498,8 @@ export class AsmMemoryPaperclipWorker {
   }
 }
 
-export function createAsmMemoryWorker() {
-  return new AsmMemoryPaperclipWorker();
+export function createAsmMemoryWorker(runtimeFactory?: HostRuntimeFactory) {
+  return new AsmMemoryPaperclipWorker(runtimeFactory);
 }
 
 const singletonWorker = createAsmMemoryWorker();

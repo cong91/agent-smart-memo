@@ -30,6 +30,7 @@
     "test": "npx tsx tests/test.ts && npx tsx tests/test-auto-recall.ts && npx tsx tests/test-memory-config.ts",
     "test:openclaw": "npx tsx tests/test-openclaw-adapter-contract.ts && npx tsx tests/test-openclaw-semantic-tools-integration.ts",
     "test:paperclip": "npx tsx tests/test-paperclip-contracts.ts && npx tsx tests/test-paperclip-runtime-e2e.ts",
+    "smoke:paperclip:local": "npm run build:paperclip && node scripts/paperclip-local-smoke-debug.mjs",
     "clean": "rm -rf dist dist-openclaw dist-paperclip dist-core artifacts/npm",
     "migrate:namespaces": "npx tsx scripts/migrate-namespaces.ts",
     "distill:namespaces": "npx tsx scripts/distill-by-namespace.ts",
