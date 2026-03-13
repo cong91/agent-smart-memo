@@ -7,6 +7,7 @@ Implement a local setup UX command for OpenClaw so operators can initialize `age
 - Added bootstrap wizard script: `scripts/init-openclaw.mjs`
 - Added npm command: `npm run init-openclaw`
 - Added regression tests for merge/validation behavior: `tests/test-init-openclaw.ts`
+- Follow-up integration: register `/addproject` command behavior in plugin runtime and bootstrap Telegram custom command menu entry for onboarding discoverability.
 
 ## Behavior
 The bootstrap command:
@@ -19,6 +20,7 @@ The bootstrap command:
    - embedding backend/model/dimensions
    - slotDbDir
    - map `plugins.slots.memory = agent-smart-memo`
+   - telegram onboarding command menu entries (default includes `addproject`, extensible)
 3. Validates basic input format
 4. Shows preview diff before writing
 5. Creates backup file before overwrite:
@@ -27,8 +29,14 @@ The bootstrap command:
    - `plugins.allow`
    - `plugins.slots.memory`
    - `plugins.entries["agent-smart-memo"]`
-7. Preserves unrelated existing fields and plugin entries
+7. Also maintains Telegram custom command menu safely:
+   - `channels.telegram.customCommands` includes `/addproject` (normalized as `addproject`)
+   - preserves existing custom commands, dedupes and normalizes command names
+8. Registers plugin slash behavior (`/addproject`) through OpenClaw `registerCommand` and routes to `project.telegram_onboarding` (preview/confirm)
+9. Preserves unrelated existing fields and plugin entries
 
 ## Verification
 - `npm run build:openclaw` ✅
 - `npx tsx tests/test-init-openclaw.ts` ✅
+- `npx tsx tests/test-project-registry.ts` ✅
+- `npx tsx tests/test-telegram-addproject-command.ts` ✅

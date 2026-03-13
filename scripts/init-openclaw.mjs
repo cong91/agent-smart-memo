@@ -55,6 +55,50 @@ function yesNoNormalize(value, fallback = true) {
   return fallback;
 }
 
+function normalizeTelegramCommandName(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^\/+/, "")
+    .toLowerCase()
+    .replace(/-/g, "_")
+    .replace(/[^a-z0-9_]/g, "")
+    .slice(0, 32);
+}
+
+function isValidTelegramCommandName(value) {
+  return /^[a-z][a-z0-9_]{0,31}$/.test(String(value || ""));
+}
+
+function defaultTelegramCommandDescription(name) {
+  if (name === "addproject") return "Add project onboarding";
+  if (name === "linkjira") return "Link Jira mapping";
+  if (name === "indexproject") return "Index registered project";
+  return `Run /${name}`;
+}
+
+function mergeTelegramCustomCommands(existing, commandNames) {
+  const current = Array.isArray(existing) ? existing : [];
+  const out = [];
+  const seen = new Set();
+
+  for (const item of current) {
+    const command = normalizeTelegramCommandName(item?.command);
+    const description = String(item?.description || "").trim();
+    if (!isValidTelegramCommandName(command) || seen.has(command)) continue;
+    seen.add(command);
+    out.push({ command, description: description || defaultTelegramCommandDescription(command) });
+  }
+
+  for (const rawName of commandNames || []) {
+    const command = normalizeTelegramCommandName(rawName);
+    if (!isValidTelegramCommandName(command) || seen.has(command)) continue;
+    seen.add(command);
+    out.push({ command, description: defaultTelegramCommandDescription(command) });
+  }
+
+  return out;
+}
+
 export function validateAnswers(answers) {
   const errors = [];
 
@@ -77,6 +121,16 @@ export function validateAnswers(answers) {
   }
 
   if (!String(answers.slotDbDir || "").trim()) errors.push("slotDbDir is required");
+
+  const onboardingCommands = Array.isArray(answers.telegramOnboardingCommands)
+    ? answers.telegramOnboardingCommands
+    : [];
+  for (const name of onboardingCommands) {
+    const normalized = normalizeTelegramCommandName(name);
+    if (!isValidTelegramCommandName(normalized)) {
+      errors.push(`invalid telegram command name: ${String(name)}`);
+    }
+  }
 
   return errors;
 }
@@ -118,8 +172,22 @@ export function buildPatchedConfig(existingConfig, answers, mapMemorySlot = true
     delete nextSlots.memory;
   }
 
+  const channels = asObj(root.channels);
+  const telegram = asObj(channels.telegram);
+  const telegramCustomCommands = mergeTelegramCustomCommands(
+    telegram.customCommands,
+    answers.telegramOnboardingCommands || [],
+  );
+
   return {
     ...root,
+    channels: {
+      ...channels,
+      telegram: {
+        ...telegram,
+        customCommands: telegramCustomCommands,
+      },
+    },
     plugins: {
       ...plugins,
       allow,
@@ -195,6 +263,16 @@ async function promptWizard(defaults) {
     const mapMemorySlotRaw = await ask("Map plugins.slots.memory = agent-smart-memo? (y/n)", defaults.mapMemorySlot ? "y" : "n");
     const mapMemorySlot = yesNoNormalize(mapMemorySlotRaw, defaults.mapMemorySlot);
 
+    const onboardingCommandsRaw = await ask(
+      "Telegram custom onboarding commands (comma-separated)",
+      (defaults.telegramOnboardingCommands || []).join(","),
+    );
+    const telegramOnboardingCommands = dedupeStringArray(
+      String(onboardingCommandsRaw || "")
+        .split(",")
+        .map((item) => normalizeTelegramCommandName(item)),
+    ).filter((name) => isValidTelegramCommandName(name));
+
     return {
       qdrantHost,
       qdrantPort,
@@ -207,6 +285,7 @@ async function promptWizard(defaults) {
       embedDimensions,
       slotDbDir,
       mapMemorySlot,
+      telegramOnboardingCommands,
     };
   } finally {
     rl.close();
@@ -230,6 +309,12 @@ export async function runInitOpenClaw({ env = process.env, interactive = true } 
     embedDimensions: toIntOrDefault(pluginCfg.embedDimensions, 1024),
     slotDbDir: String(pluginCfg.slotDbDir || env.OPENCLAW_SLOTDB_DIR || `${env.HOME}/.openclaw/agent-memo`),
     mapMemorySlot: asObj(asObj(current.plugins).slots).memory === PLUGIN_ID,
+    telegramOnboardingCommands: dedupeStringArray([
+      "addproject",
+      ...((asObj(asObj(current.channels).telegram).customCommands || [])
+        .map((item) => normalizeTelegramCommandName(item?.command))
+        .filter((name) => isValidTelegramCommandName(name))),
+    ]),
   };
 
   const answers = interactive ? await promptWizard(defaults) : defaults;
