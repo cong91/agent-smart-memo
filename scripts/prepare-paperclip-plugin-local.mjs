@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 const root = process.cwd();
 const pluginDist = join(root, "packages", "plugins", "agent-smart-memo", "dist");
 const outDir = join(root, "artifacts", "paperclip-plugin-local");
+const openclawPluginJsonPath = join(root, "openclaw.plugin.json");
 
 if (!existsSync(pluginDist)) {
   console.error(`[prepare-paperclip-plugin-local] Missing plugin dist at: ${pluginDist}`);
@@ -12,10 +13,16 @@ if (!existsSync(pluginDist)) {
   process.exit(1);
 }
 
+if (!existsSync(openclawPluginJsonPath)) {
+  console.error(`[prepare-paperclip-plugin-local] Missing OpenClaw plugin definition at: ${openclawPluginJsonPath}`);
+  process.exit(1);
+}
+
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 
 cpSync(pluginDist, join(outDir, "dist"), { recursive: true });
+cpSync(openclawPluginJsonPath, join(outDir, "openclaw.plugin.json"));
 
 const rootPkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 
@@ -38,6 +45,7 @@ const pkg = {
     "README.local.md",
     "dist/",
     "host-worker.mjs",
+    "openclaw.plugin.json",
     "plugin.manifest.json"
   ],
   paperclipPlugin: {
