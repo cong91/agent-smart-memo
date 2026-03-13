@@ -83,7 +83,7 @@ test("buildPatchedConfig merges plugin block without dropping unrelated fields",
       embedModel: "qwen3-embedding:0.6b",
       embedDimensions: 1024,
       slotDbDir: join(stateDir, "agent-memo"),
-      telegramOnboardingCommands: ["addproject"],
+      telegramOnboardingCommands: ["project"],
     },
     true,
   );
@@ -95,8 +95,8 @@ test("buildPatchedConfig merges plugin block without dropping unrelated fields",
   assertEqual(next.plugins.slots.memory, "agent-smart-memo", "plugins.slots.memory should map to agent-smart-memo");
   assert(Array.isArray(next.channels?.telegram?.customCommands), "telegram customCommands should be created");
   assert(
-    next.channels.telegram.customCommands.some((item: any) => item.command === "addproject"),
-    "addproject should be present in telegram customCommands",
+    next.channels.telegram.customCommands.some((item: any) => item.command === "project"),
+    "project should be present in telegram customCommands",
   );
 
   const entry = next.plugins.entries["agent-smart-memo"];
@@ -131,13 +131,13 @@ test("buildPatchedConfig keeps single-account telegram merge at channels.telegra
       embedModel: "qwen3-embedding:0.6b",
       embedDimensions: 1024,
       slotDbDir: join(stateDir, "agent-memo"),
-      telegramOnboardingCommands: ["addproject", "legacy", "addproject"],
+      telegramOnboardingCommands: ["project", "legacy", "project"],
     },
     true,
   );
 
   const commands = (next.channels.telegram.customCommands || []).map((item: any) => item.command);
-  assertEqual(commands, ["legacy", "addproject"], "single-account merge should preserve + dedupe at root telegram customCommands");
+  assertEqual(commands, ["legacy", "project"], "single-account merge should preserve + dedupe at root telegram customCommands");
 });
 
 test("buildPatchedConfig fans out onboarding commands to enabled telegram accounts in multi-account mode", () => {
@@ -151,7 +151,7 @@ test("buildPatchedConfig fans out onboarding commands to enabled telegram accoun
           },
           growth: {
             enabled: true,
-            customCommands: [{ command: "addproject", description: "Add project onboarding" }],
+            customCommands: [{ command: "project", description: "Project onboarding" }],
           },
           disabled: {
             enabled: false,
@@ -180,7 +180,7 @@ test("buildPatchedConfig fans out onboarding commands to enabled telegram accoun
       embedModel: "qwen3-embedding:0.6b",
       embedDimensions: 1024,
       slotDbDir: join(stateDir, "agent-memo"),
-      telegramOnboardingCommands: ["addproject"],
+      telegramOnboardingCommands: ["project"],
     },
     true,
   );
@@ -189,8 +189,8 @@ test("buildPatchedConfig fans out onboarding commands to enabled telegram accoun
   const growthCommands = (next.channels.telegram.accounts.growth.customCommands || []).map((item: any) => item.command);
   const disabledCommands = (next.channels.telegram.accounts.disabled.customCommands || []).map((item: any) => item.command);
 
-  assertEqual(opsCommands, ["legacyops", "addproject"], "enabled account ops should receive /addproject with preserve+dedupe");
-  assertEqual(growthCommands, ["addproject"], "enabled account with existing /addproject should be deduped");
+  assertEqual(opsCommands, ["legacyops", "project"], "enabled account ops should receive /project with preserve+dedupe");
+  assertEqual(growthCommands, ["project"], "enabled account with existing /project should be deduped");
   assertEqual(disabledCommands, ["legacydisabled"], "disabled account should remain unchanged");
   assert(
     !Array.isArray(next.channels.telegram.customCommands),
@@ -219,7 +219,7 @@ test("buildSetupSummary classifies already configured / will add / will update",
   const current = {
     channels: {
       telegram: {
-        customCommands: [{ command: "addproject", description: "Add project onboarding" }],
+        customCommands: [{ command: "project", description: "Project onboarding" }],
       },
     },
     plugins: {
@@ -257,7 +257,7 @@ test("buildSetupSummary classifies already configured / will add / will update",
     embedDimensions: 1024,
     slotDbDir: join(stateDir, "agent-memo"),
     mapMemorySlot: true,
-    telegramOnboardingCommands: ["addproject", "indexproject"],
+    telegramOnboardingCommands: ["project", "indexproject"],
   };
 
   const next = mod.buildPatchedConfig(current, answers, true);
@@ -307,7 +307,7 @@ test("runInitOpenClaw supports non-interactive auto-apply write path", async () 
     const commands =
       updated?.channels?.telegram?.customCommands?.map((item: any) => item.command) || [];
 
-    assert(commands.includes("addproject"), "auto-apply should include /addproject in telegram customCommands");
+    assert(commands.includes("project"), "auto-apply should include /project in telegram customCommands");
     assert(logs.some((line) => line.includes("Auto-apply mode enabled")), "should log auto-apply mode");
   } finally {
     console.log = originalLog;

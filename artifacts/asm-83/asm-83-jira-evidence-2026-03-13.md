@@ -34,9 +34,9 @@
      - `plugins.entries["agent-smart-memo"]`
    - preserves unrelated existing fields/plugin entries
 4. Follow-up integration (ASM-83 + ASM-82):
-   - extended init wizard to maintain `channels.telegram.customCommands` with `addproject` default (normalized + deduped, extensible for later `linkjira` / `indexproject`)
+   - extended init wizard to maintain `channels.telegram.customCommands` with `project` default (normalized + deduped, extensible for later `linkjira` / `indexproject`)
    - added plugin command registration path using OpenClaw `registerCommand`:
-     - new command: `/addproject`
+     - new command: `/project`
      - behavior routes into `project.telegram_onboarding` (`preview|confirm`)
    - enforced account/group-safe scoping via command-context-derived identity:
      - scope key includes channel + accountId + senderId + optional messageThreadId
