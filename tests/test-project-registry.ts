@@ -125,6 +125,87 @@ async function main() {
     assertEqual(state.completeness_score, 96, "completeness score should be updated");
   });
 
+  await test("project.register_command supports tracker mapping envelope", async () => {
+    const result = await usecase.run<any, any>("project.register_command", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        project_name: "Agent Smart Memo Cmd",
+        repo_root: "/tmp/agent-smart-memo-cmd",
+        tracker: {
+          tracker_type: "jira",
+          tracker_space_key: "ASM",
+          default_epic_key: "ASM-69",
+        },
+        options: {
+          trigger_index: false,
+        },
+      },
+    });
+
+    assert(Boolean(result.project_id), "register_command should return project_id");
+    assertEqual(result.project_alias, "agent-smart-memo-cmd", "alias should be normalized");
+    assertEqual(result.tracker_mapping.tracker_type, "jira", "tracker mapping should be linked");
+    assertEqual(result.index_trigger.requested, false, "trigger flag should be false");
+  });
+
+  await test("project.link_tracker attaches Jira mapping by alias", async () => {
+    const linked = await usecase.run<any, any>("project.link_tracker", {
+      ...ctx,
+      payload: {
+        project_ref: { project_alias: "agent-smart-memo-cmd" },
+        tracker: {
+          tracker_type: "jira",
+          tracker_space_key: "ASM",
+          default_epic_key: "ASM-80",
+        },
+      },
+    });
+
+    assertEqual(linked.project_id.length > 0, true, "linked response should contain project_id");
+    assertEqual(linked.tracker_mapping.default_epic_key, "ASM-80", "default epic should update");
+    assertEqual(linked.validation_status, "ok", "link tracker validation should be ok");
+  });
+
+  await test("project.trigger_index accepts and executes when paths provided", async () => {
+    const triggered = await usecase.run<any, any>("project.trigger_index", {
+      ...ctx,
+      payload: {
+        project_ref: { project_alias: "agent-smart-memo-cmd" },
+        mode: "bootstrap",
+        reason: "post_registration",
+        source_rev: "asm-80-test",
+        paths: [
+          { relative_path: "src/tools/project-tools.ts", checksum: "asm80-c1", module: "tools", language: "ts" },
+        ],
+      },
+    });
+
+    assertEqual(triggered.accepted, true, "trigger should be accepted");
+    assertEqual(triggered.enqueued, true, "trigger should enqueue run when paths exist");
+    assert(Boolean(triggered.run_id), "trigger should return run_id");
+  });
+
+  await test("project.link_tracker validates jira space/epic mapping", async () => {
+    let thrown = false;
+    try {
+      await usecase.run<any, any>("project.link_tracker", {
+        ...ctx,
+        payload: {
+          project_ref: { project_alias: "agent-smart-memo-cmd" },
+          tracker: {
+            tracker_type: "jira",
+            tracker_space_key: "asm",
+            default_epic_key: "WRONG-80",
+          },
+        },
+      });
+    } catch {
+      thrown = true;
+    }
+    assertEqual(thrown, true, "invalid jira mapping should throw");
+  });
+
   await test("project.list returns registry entries", async () => {
     const rows = await usecase.run<any, any[]>("project.list", {
       ...ctx,
@@ -132,7 +213,7 @@ async function main() {
     });
 
     assert(rows.length >= 1, "project list should not be empty");
-    assertEqual(rows[0].aliases[0].project_alias, "agent-smart-memo", "primary alias should be present");
+    assert(rows.some((r) => r.aliases.some((a: any) => a.project_alias === "agent-smart-memo")), "primary alias should be present");
   });
 
   db.close();

@@ -3,6 +3,7 @@ import type {
   MemoryUseCaseName,
   MemoryUseCasePort,
 } from "../contracts/adapter-contracts.js";
+import { execSync } from "node:child_process";
 import { SlotDB } from "../../db/slot-db.js";
 import type { SemanticMemoryUseCase } from "./semantic-memory-usecase.js";
 
@@ -99,6 +100,67 @@ interface ProjectSetTrackerMappingPayload {
   board_key?: string;
   active_version?: string;
   external_project_url?: string;
+}
+
+interface ProjectRegisterCommandPayload {
+  project_alias: string;
+  project_name?: string;
+  project_id?: string;
+  repo_root?: string;
+  repo_remote?: string;
+  active_version?: string;
+  tracker?: {
+    tracker_type: "jira" | "github" | "other";
+    tracker_space_key?: string;
+    tracker_project_id?: string;
+    default_epic_key?: string;
+    board_key?: string;
+    active_version?: string;
+    external_project_url?: string;
+  };
+  options?: {
+    trigger_index?: boolean;
+    allow_alias_update?: boolean;
+  };
+}
+
+interface ProjectLinkTrackerPayload {
+  project_ref: {
+    project_id?: string;
+    project_alias?: string;
+  };
+  tracker: {
+    tracker_type: "jira" | "github" | "other";
+    tracker_space_key?: string;
+    tracker_project_id?: string;
+    default_epic_key?: string;
+    board_key?: string;
+    active_version?: string;
+    external_project_url?: string;
+  };
+  mode?: "attach_or_update";
+}
+
+interface ProjectTriggerIndexPayload {
+  project_ref: {
+    project_id?: string;
+    project_alias?: string;
+  };
+  mode?: "bootstrap" | "incremental" | "manual" | "repair";
+  scope?: {
+    path_prefix?: string[];
+    module?: string[];
+    task_id?: string[];
+  };
+  reason?: string;
+  paths?: Array<{
+    relative_path: string;
+    checksum?: string | null;
+    module?: string | null;
+    language?: string | null;
+  }>;
+  source_rev?: string | null;
+  index_profile?: string;
 }
 
 interface ProjectReindexDiffPayload {
@@ -238,6 +300,12 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
         return this.handleProjectSetRegistrationState(payload as unknown as ProjectSetRegistrationStatePayload, req) as TRes;
       case "project.set_tracker_mapping":
         return this.handleProjectSetTrackerMapping(payload as unknown as ProjectSetTrackerMappingPayload, req) as TRes;
+      case "project.register_command":
+        return this.handleProjectRegisterCommand(payload as unknown as ProjectRegisterCommandPayload, req) as TRes;
+      case "project.link_tracker":
+        return this.handleProjectLinkTracker(payload as unknown as ProjectLinkTrackerPayload, req) as TRes;
+      case "project.trigger_index":
+        return this.handleProjectTriggerIndex(payload as unknown as ProjectTriggerIndexPayload, req) as TRes;
       case "project.reindex_diff":
         return this.handleProjectReindexDiff(payload as unknown as ProjectReindexDiffPayload, req) as TRes;
       case "project.index_watch_get":
@@ -458,6 +526,10 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       throw new Error("project.set_tracker_mapping requires payload.project_id and payload.tracker_type");
     }
 
+    if (payload.tracker_type === "jira") {
+      this.validateJiraTrackerFields(payload.tracker_space_key, payload.default_epic_key);
+    }
+
     return this.slotDb.setProjectTrackerMapping(identity.userId, identity.agentId, {
       project_id: payload.project_id,
       tracker_type: payload.tracker_type,
@@ -468,6 +540,223 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       active_version: payload.active_version,
       external_project_url: payload.external_project_url,
     });
+  }
+
+  private handleProjectRegisterCommand(payload: ProjectRegisterCommandPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+
+    const alias = String(payload.project_alias || "").trim();
+    if (!alias) {
+      throw new Error("project.register_command requires payload.project_alias");
+    }
+
+    const resolvedRepoRoot = payload.repo_root || this.tryResolveRepoRootFromCwd();
+
+    const registered = this.slotDb.registerProject(identity.userId, identity.agentId, {
+      project_id: payload.project_id,
+      project_name: payload.project_name,
+      project_alias: alias,
+      repo_root: resolvedRepoRoot,
+      repo_remote: payload.repo_remote,
+      active_version: payload.active_version,
+      allow_alias_update: payload.options?.allow_alias_update,
+    });
+
+    let trackerMapping: any = null;
+    if (payload.tracker?.tracker_type) {
+      if (payload.tracker.tracker_type === "jira") {
+        this.validateJiraTrackerFields(payload.tracker.tracker_space_key, payload.tracker.default_epic_key);
+      }
+
+      trackerMapping = this.slotDb.setProjectTrackerMapping(identity.userId, identity.agentId, {
+        project_id: registered.project.project_id,
+        tracker_type: payload.tracker.tracker_type,
+        tracker_space_key: payload.tracker.tracker_space_key,
+        tracker_project_id: payload.tracker.tracker_project_id,
+        default_epic_key: payload.tracker.default_epic_key,
+        board_key: payload.tracker.board_key,
+        active_version: payload.tracker.active_version || payload.active_version,
+        external_project_url: payload.tracker.external_project_url,
+      });
+    }
+
+    const triggerRequested = payload.options?.trigger_index === true;
+    let indexTrigger: any = {
+      requested: triggerRequested,
+      enqueued: false,
+      run_id: null,
+      note: triggerRequested ? "code_light: no paths provided for immediate diff indexing" : null,
+    };
+
+    if (triggerRequested) {
+      const triggerResult = this.handleProjectTriggerIndex(
+        {
+          project_ref: { project_id: registered.project.project_id },
+          mode: "bootstrap",
+          reason: "post_registration",
+          paths: [],
+        },
+        req,
+      );
+      indexTrigger = {
+        requested: true,
+        enqueued: Boolean(triggerResult?.enqueued),
+        run_id: triggerResult?.run_id || null,
+        note: triggerResult?.note || null,
+      };
+    }
+
+    return {
+      project_id: registered.project.project_id,
+      project_alias: registered.alias.project_alias,
+      registration_status: registered.registration.registration_status,
+      validation_status: registered.registration.validation_status,
+      completeness_score: Number((registered.registration.completeness_score / 100).toFixed(2)),
+      warnings: [],
+      tracker_mapping: trackerMapping
+        ? {
+            tracker_type: trackerMapping.tracker_type,
+            tracker_space_key: trackerMapping.tracker_space_key,
+            default_epic_key: trackerMapping.default_epic_key,
+            mapping_status: "linked",
+          }
+        : null,
+      index_trigger: indexTrigger,
+      project: registered.project,
+      registration: registered.registration,
+    };
+  }
+
+  private handleProjectLinkTracker(payload: ProjectLinkTrackerPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+    const mode = payload.mode || "attach_or_update";
+    if (mode !== "attach_or_update") {
+      throw new Error("project.link_tracker only supports mode=attach_or_update");
+    }
+
+    const project = this.resolveProjectRef(identity.userId, identity.agentId, payload.project_ref);
+    if (!payload.tracker?.tracker_type) {
+      throw new Error("project.link_tracker requires tracker.tracker_type");
+    }
+
+    if (payload.tracker.tracker_type === "jira") {
+      this.validateJiraTrackerFields(payload.tracker.tracker_space_key, payload.tracker.default_epic_key);
+    }
+
+    const mapped = this.slotDb.setProjectTrackerMapping(identity.userId, identity.agentId, {
+      project_id: project.project_id,
+      tracker_type: payload.tracker.tracker_type,
+      tracker_space_key: payload.tracker.tracker_space_key,
+      tracker_project_id: payload.tracker.tracker_project_id,
+      default_epic_key: payload.tracker.default_epic_key,
+      board_key: payload.tracker.board_key,
+      active_version: payload.tracker.active_version,
+      external_project_url: payload.tracker.external_project_url,
+    });
+
+    return {
+      project_id: project.project_id,
+      tracker_mapping: {
+        tracker_type: mapped.tracker_type,
+        tracker_space_key: mapped.tracker_space_key,
+        default_epic_key: mapped.default_epic_key,
+        mapping_status: "linked",
+        updated: true,
+      },
+      validation_status: "ok",
+      warnings: [],
+    };
+  }
+
+  private handleProjectTriggerIndex(payload: ProjectTriggerIndexPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+    const project = this.resolveProjectRef(identity.userId, identity.agentId, payload.project_ref);
+
+    const normalizedPaths = (payload.paths || []).filter((item) => String(item.relative_path || "").trim().length > 0);
+    if (normalizedPaths.length === 0) {
+      return {
+        project_id: project.project_id,
+        accepted: true,
+        enqueued: false,
+        run_id: null,
+        queued_at: new Date().toISOString(),
+        note: "code_light: trigger accepted but no concrete paths supplied",
+      };
+    }
+
+    const result = this.slotDb.reindexProjectByDiff(identity.userId, identity.agentId, {
+      project_id: project.project_id,
+      source_rev: payload.source_rev || null,
+      trigger_type: payload.mode || "bootstrap",
+      index_profile: payload.index_profile || "default",
+      paths: normalizedPaths,
+    });
+
+    return {
+      project_id: project.project_id,
+      accepted: true,
+      enqueued: true,
+      run_id: result.run_id,
+      queued_at: new Date().toISOString(),
+      reason: payload.reason || "manual_trigger",
+      diff_summary: {
+        changed: result.changed.length,
+        unchanged: result.unchanged.length,
+        deleted: result.deleted.length,
+      },
+    };
+  }
+
+  private resolveProjectRef(
+    scopeUserId: string,
+    scopeAgentId: string,
+    projectRef: { project_id?: string; project_alias?: string },
+  ) {
+    if (projectRef?.project_id) {
+      const project = this.slotDb.getProjectById(scopeUserId, scopeAgentId, projectRef.project_id);
+      if (!project) throw new Error(`project_id '${projectRef.project_id}' is not registered`);
+      return project;
+    }
+
+    if (projectRef?.project_alias) {
+      const byAlias = this.slotDb.getProjectByAlias(scopeUserId, scopeAgentId, projectRef.project_alias);
+      if (!byAlias) throw new Error(`project_alias '${projectRef.project_alias}' is not registered`);
+      return byAlias.project;
+    }
+
+    throw new Error("project reference requires project_id or project_alias");
+  }
+
+  private validateJiraTrackerFields(trackerSpaceKey?: string, defaultEpicKey?: string): void {
+    const space = String(trackerSpaceKey || "").trim();
+    if (!space) {
+      throw new Error("jira tracker requires tracker_space_key");
+    }
+
+    if (!/^[A-Z][A-Z0-9_]*$/.test(space)) {
+      throw new Error("jira tracker_space_key format is invalid");
+    }
+
+    const epic = String(defaultEpicKey || "").trim();
+    if (epic) {
+      const expectedPrefix = `${space}-`;
+      if (!epic.toUpperCase().startsWith(expectedPrefix)) {
+        throw new Error(`default_epic_key must match tracker_space_key prefix '${space}-*'`);
+      }
+    }
+  }
+
+  private tryResolveRepoRootFromCwd(): string | undefined {
+    try {
+      const output = execSync("git rev-parse --show-toplevel", {
+        stdio: ["ignore", "pipe", "ignore"],
+        encoding: "utf8",
+      });
+      const value = String(output || "").trim();
+      return value || undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private handleProjectReindexDiff(payload: ProjectReindexDiffPayload, req: CoreRequestEnvelope<unknown>) {
