@@ -39,9 +39,11 @@
 - `npx tsx tests/test-project-hybrid-lineage.ts` ✅ (3/3)
 
 ## Commit evidence
-- Commit: `<pending>`
+- Commit: `295975720112677ea4e4aefc45c74265493161dd`
 - Message: `feat(asm-82): add telegram operator onboarding flow for project registration`
 
 ## Jira update evidence
 - Added implementation comment in ASM-82 activity with scope + commit + validation.
+- Comment id: `13572`
+- Comment url: `https://linktovn.atlassian.net/browse/ASM-82?focusedCommentId=13572`
 - Transitioned status: **To Do -> Done**.
