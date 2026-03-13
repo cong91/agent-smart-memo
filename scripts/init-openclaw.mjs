@@ -210,6 +210,135 @@ function toJson(value) {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
+function isSameValue(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function classifySummaryItem(summary, label, beforeValue, afterValue) {
+  if (isSameValue(beforeValue, afterValue)) {
+    summary.alreadyConfigured.push(label);
+    return;
+  }
+
+  if (beforeValue === false && afterValue === true) {
+    summary.willAdd.push(label);
+    return;
+  }
+
+  if (typeof beforeValue === "undefined" && typeof afterValue !== "undefined") {
+    summary.willAdd.push(label);
+    return;
+  }
+
+  summary.willUpdate.push(label);
+}
+
+export function buildSetupSummary(currentConfig, answers, nextConfig) {
+  const current = asObj(currentConfig);
+  const next = asObj(nextConfig || buildPatchedConfig(current, answers, answers.mapMemorySlot));
+
+  const currentPlugins = asObj(current.plugins);
+  const nextPlugins = asObj(next.plugins);
+  const currentEntries = asObj(currentPlugins.entries);
+  const nextEntries = asObj(nextPlugins.entries);
+  const currentEntry = asObj(currentEntries[PLUGIN_ID]);
+  const nextEntry = asObj(nextEntries[PLUGIN_ID]);
+  const currentEntryConfig = asObj(currentEntry.config);
+  const nextEntryConfig = asObj(nextEntry.config);
+
+  const summary = {
+    alreadyConfigured: [],
+    willAdd: [],
+    willUpdate: [],
+  };
+
+  const currentAllowHasPlugin = dedupeStringArray(currentPlugins.allow).includes(PLUGIN_ID);
+  const nextAllowHasPlugin = dedupeStringArray(nextPlugins.allow).includes(PLUGIN_ID);
+  classifySummaryItem(summary, `plugins.allow includes ${PLUGIN_ID}`, currentAllowHasPlugin, nextAllowHasPlugin);
+
+  classifySummaryItem(
+    summary,
+    `plugins.entries.${PLUGIN_ID} exists`,
+    Object.keys(currentEntry).length > 0,
+    Object.keys(nextEntry).length > 0,
+  );
+
+  const managedConfigKeys = [
+    "qdrantHost",
+    "qdrantPort",
+    "qdrantCollection",
+    "llmBaseUrl",
+    "llmModel",
+    "llmApiKey",
+    "embedBackend",
+    "embedModel",
+    "embedDimensions",
+    "slotDbDir",
+  ];
+
+  for (const key of managedConfigKeys) {
+    classifySummaryItem(
+      summary,
+      `plugins.entries.${PLUGIN_ID}.config.${key}`,
+      currentEntryConfig[key],
+      nextEntryConfig[key],
+    );
+  }
+
+  classifySummaryItem(
+    summary,
+    "plugins.slots.memory",
+    asObj(currentPlugins.slots).memory,
+    asObj(nextPlugins.slots).memory,
+  );
+
+  const currentTelegramCommands = dedupeStringArray(
+    (asObj(asObj(current.channels).telegram).customCommands || [])
+      .map((item) => normalizeTelegramCommandName(item?.command))
+      .filter((name) => isValidTelegramCommandName(name)),
+  );
+
+  const nextTelegramCommands = dedupeStringArray(
+    (asObj(asObj(next.channels).telegram).customCommands || [])
+      .map((item) => normalizeTelegramCommandName(item?.command))
+      .filter((name) => isValidTelegramCommandName(name)),
+  );
+
+  for (const commandName of dedupeStringArray(answers.telegramOnboardingCommands || [])) {
+    classifySummaryItem(
+      summary,
+      `channels.telegram.customCommands includes /${commandName}`,
+      currentTelegramCommands.includes(commandName),
+      nextTelegramCommands.includes(commandName),
+    );
+  }
+
+  return summary;
+}
+
+export function formatSetupSummary(summary) {
+  const sections = [
+    ["already configured", summary.alreadyConfigured],
+    ["will add", summary.willAdd],
+    ["will update", summary.willUpdate],
+  ];
+
+  const lines = ["[ASM-83] Setup summary (before confirm):"];
+  for (const [label, items] of sections) {
+    lines.push(`- ${label} (${items.length})`);
+    if (!items.length) {
+      lines.push("  • (none)");
+      continue;
+    }
+
+    for (const item of items) {
+      lines.push(`  • ${item}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
 function previewDiff(beforeText, afterText) {
   if (beforeText === afterText) return "(no change)";
   const before = beforeText.split("\n");
@@ -324,6 +453,7 @@ export async function runInitOpenClaw({ env = process.env, interactive = true } 
   }
 
   const next = buildPatchedConfig(current, answers, answers.mapMemorySlot);
+  const summary = buildSetupSummary(current, answers, next);
   const beforeText = toJson(current);
   const afterText = toJson(next);
 
@@ -332,7 +462,9 @@ export async function runInitOpenClaw({ env = process.env, interactive = true } 
     console.log("[ASM-83] openclaw.json not found. A new file will be created.");
   }
 
-  console.log("\n[ASM-83] Preview diff:\n");
+  console.log(`\n${formatSetupSummary(summary)}\n`);
+
+  console.log("[ASM-83] Preview diff:\n");
   console.log(previewDiff(beforeText, afterText));
 
   const rl = createInterface({ input, output });

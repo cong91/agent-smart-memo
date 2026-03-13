@@ -116,6 +116,29 @@ export async function runSetupOpenClawFlow({
   }
 
   const pluginState = detectPluginInstalled(runner);
+  const setupSummary = pluginState.installed
+    ? {
+        alreadyConfigured: [`plugin installed: ${ASM_PLUGIN_PACKAGE}`],
+        willAdd: [],
+        willUpdate: ["openclaw.json bootstrap via init-openclaw wizard"],
+      }
+    : {
+        alreadyConfigured: [],
+        willAdd: [`plugin install: ${ASM_PLUGIN_PACKAGE}`],
+        willUpdate: ["openclaw.json bootstrap via init-openclaw wizard"],
+      };
+
+  log("[ASM-84] Setup summary (before execution):");
+  log(`- already configured (${setupSummary.alreadyConfigured.length})`);
+  if (!setupSummary.alreadyConfigured.length) log("  • (none)");
+  for (const item of setupSummary.alreadyConfigured) log(`  • ${item}`);
+  log(`- will add (${setupSummary.willAdd.length})`);
+  if (!setupSummary.willAdd.length) log("  • (none)");
+  for (const item of setupSummary.willAdd) log(`  • ${item}`);
+  log(`- will update (${setupSummary.willUpdate.length})`);
+  if (!setupSummary.willUpdate.length) log("  • (none)");
+  for (const item of setupSummary.willUpdate) log(`  • ${item}`);
+
   if (pluginState.installed) {
     log(`[ASM-84] plugin already installed (${pluginState.source}).`);
   } else {

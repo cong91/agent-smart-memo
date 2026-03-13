@@ -122,6 +122,10 @@ test("runSetupOpenClawFlow installs plugin when missing and runs init", async ()
     calls.some((line) => line.includes("plugins install @mrc2204/agent-smart-memo")),
     "should install plugin when missing",
   );
+  assert(logLines.some((line) => line.includes("Setup summary (before execution)")), "should print setup summary header");
+  assert(logLines.some((line) => line.includes("already configured")), "should print already configured section");
+  assert(logLines.some((line) => line.includes("will add")), "should print will add section");
+  assert(logLines.some((line) => line.includes("will update")), "should print will update section");
   assert(logLines.some((line) => line.includes("setup-openclaw completed")), "should print completion line");
 });
 
