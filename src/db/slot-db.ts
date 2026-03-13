@@ -193,6 +193,107 @@ export interface ProjectReindexDiffResult {
   };
 }
 
+export interface ProjectTaskRegistryUpsertInput {
+  task_id: string;
+  project_id: string;
+  task_title: string;
+  task_type?: string | null;
+  task_status?: string | null;
+  parent_task_id?: string | null;
+  related_task_ids?: string[];
+  files_touched?: string[];
+  symbols_touched?: string[];
+  commit_refs?: string[];
+  diff_refs?: string[];
+  decision_notes?: string | null;
+  tracker_issue_key?: string | null;
+}
+
+export interface TaskRegistryRecord {
+  task_id: string;
+  scope_user_id: string;
+  scope_agent_id: string;
+  project_id: string;
+  task_title: string;
+  task_type: string | null;
+  task_status: string | null;
+  parent_task_id: string | null;
+  related_task_ids: string[];
+  files_touched: string[];
+  symbols_touched: string[];
+  commit_refs: string[];
+  diff_refs: string[];
+  decision_notes: string | null;
+  tracker_issue_key: string | null;
+  updated_at: string;
+}
+
+export interface ProjectTaskLineageContextInput {
+  project_id: string;
+  task_id?: string;
+  tracker_issue_key?: string;
+  task_title?: string;
+  include_related?: boolean;
+  include_parent_chain?: boolean;
+}
+
+export interface ProjectTaskLineageContextResult {
+  focus: {
+    project_id: string;
+    task_id: string;
+    tracker_issue_key: string | null;
+    task_title: string;
+  };
+  parent_chain: TaskRegistryRecord[];
+  related_tasks: TaskRegistryRecord[];
+  touched_files: string[];
+  touched_symbols: string[];
+  commit_refs: string[];
+  decision_notes: string[];
+}
+
+export interface ProjectHybridSearchInput {
+  project_id: string;
+  query: string;
+  limit?: number;
+  path_prefix?: string[];
+  module?: string[];
+  language?: string[];
+  task_id?: string[];
+  tracker_issue_key?: string[];
+  task_context?: {
+    task_id?: string;
+    tracker_issue_key?: string;
+    task_title?: string;
+    include_related?: boolean;
+    include_parent_chain?: boolean;
+  };
+}
+
+export interface ProjectHybridSearchResultItem {
+  source: "file_index_state" | "symbol_registry" | "task_registry";
+  id: string;
+  score: number;
+  project_id: string;
+  relative_path?: string;
+  module?: string | null;
+  language?: string | null;
+  symbol_name?: string;
+  symbol_kind?: string;
+  task_id?: string;
+  task_title?: string;
+  tracker_issue_key?: string | null;
+  snippet: string;
+}
+
+export interface ProjectHybridSearchResult {
+  query: string;
+  project_id: string;
+  count: number;
+  task_lineage_context: ProjectTaskLineageContextResult | null;
+  results: ProjectHybridSearchResultItem[];
+}
+
 // ============================================================================
 // SlotDB Class
 // ============================================================================
@@ -1151,6 +1252,426 @@ export class SlotDB {
     }
   }
 
+  upsertTaskRegistryRecord(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: ProjectTaskRegistryUpsertInput,
+  ): TaskRegistryRecord {
+    const now = new Date().toISOString();
+    const taskId = String(input.task_id || "").trim();
+    const projectId = String(input.project_id || "").trim();
+    const taskTitle = String(input.task_title || "").trim();
+
+    if (!taskId) throw new Error("task_id is required");
+    if (!projectId) throw new Error("project_id is required");
+    if (!taskTitle) throw new Error("task_title is required");
+
+    const project = this.getProjectById(scopeUserId, scopeAgentId, projectId);
+    if (!project) {
+      throw new Error(`project_id '${projectId}' is not registered`);
+    }
+
+    const existing = this.getTaskRegistryRecordById(scopeUserId, scopeAgentId, taskId);
+
+    const relatedTaskIds = this.normalizeStringArray(input.related_task_ids);
+    const filesTouched = this.normalizeStringArray(input.files_touched).map((p) => this.normalizeRelativePath(p)).filter(Boolean);
+    const symbolsTouched = this.normalizeStringArray(input.symbols_touched);
+    const commitRefs = this.normalizeStringArray(input.commit_refs);
+    const diffRefs = this.normalizeStringArray(input.diff_refs);
+
+    if (existing) {
+      const stmt = this.db.prepare(
+        `UPDATE task_registry
+         SET project_id = ?, task_title = ?, task_type = ?, task_status = ?, parent_task_id = ?,
+             related_task_ids = ?, files_touched = ?, symbols_touched = ?, commit_refs = ?, diff_refs = ?,
+             decision_notes = ?, tracker_issue_key = ?, updated_at = ?
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND task_id = ?`,
+      );
+      stmt.run(
+        projectId,
+        taskTitle,
+        input.task_type ?? null,
+        input.task_status ?? null,
+        input.parent_task_id ?? null,
+        JSON.stringify(relatedTaskIds),
+        JSON.stringify(filesTouched),
+        JSON.stringify(symbolsTouched),
+        JSON.stringify(commitRefs),
+        JSON.stringify(diffRefs),
+        input.decision_notes ?? null,
+        input.tracker_issue_key ?? null,
+        now,
+        scopeUserId,
+        scopeAgentId,
+        taskId,
+      );
+    } else {
+      const stmt = this.db.prepare(
+        `INSERT INTO task_registry (
+          task_id, scope_user_id, scope_agent_id, project_id, task_title, task_type, task_status, parent_task_id,
+          related_task_ids, files_touched, symbols_touched, commit_refs, diff_refs, decision_notes, tracker_issue_key, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      stmt.run(
+        taskId,
+        scopeUserId,
+        scopeAgentId,
+        projectId,
+        taskTitle,
+        input.task_type ?? null,
+        input.task_status ?? null,
+        input.parent_task_id ?? null,
+        JSON.stringify(relatedTaskIds),
+        JSON.stringify(filesTouched),
+        JSON.stringify(symbolsTouched),
+        JSON.stringify(commitRefs),
+        JSON.stringify(diffRefs),
+        input.decision_notes ?? null,
+        input.tracker_issue_key ?? null,
+        now,
+      );
+    }
+
+    const row = this.getTaskRegistryRecordById(scopeUserId, scopeAgentId, taskId);
+    if (!row) throw new Error("failed to persist task registry record");
+    return row;
+  }
+
+  getTaskRegistryRecordById(
+    scopeUserId: string,
+    scopeAgentId: string,
+    taskId: string,
+  ): TaskRegistryRecord | null {
+    const normalizedTaskId = String(taskId || "").trim();
+    if (!normalizedTaskId) return null;
+
+    const stmt = this.db.prepare(
+      `SELECT * FROM task_registry WHERE scope_user_id = ? AND scope_agent_id = ? AND task_id = ?`,
+    );
+    const row = stmt.get(scopeUserId, scopeAgentId, normalizedTaskId) as {
+      task_id: string;
+      scope_user_id: string;
+      scope_agent_id: string;
+      project_id: string;
+      task_title: string;
+      task_type: string | null;
+      task_status: string | null;
+      parent_task_id: string | null;
+      related_task_ids: string | null;
+      files_touched: string | null;
+      symbols_touched: string | null;
+      commit_refs: string | null;
+      diff_refs: string | null;
+      decision_notes: string | null;
+      tracker_issue_key: string | null;
+      updated_at: string;
+    } | undefined;
+
+    if (!row) return null;
+    return this.rowToTaskRecord(row);
+  }
+
+  getTaskRegistryRecordByTrackerIssueKey(
+    scopeUserId: string,
+    scopeAgentId: string,
+    projectId: string,
+    trackerIssueKey: string,
+  ): TaskRegistryRecord | null {
+    const tracker = String(trackerIssueKey || "").trim();
+    if (!tracker) return null;
+
+    const stmt = this.db.prepare(
+      `SELECT * FROM task_registry
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND tracker_issue_key = ?
+       ORDER BY updated_at DESC LIMIT 1`,
+    );
+    const row = stmt.get(scopeUserId, scopeAgentId, projectId, tracker) as any;
+    if (!row) return null;
+    return this.rowToTaskRecord(row);
+  }
+
+  getTaskLineageContext(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: ProjectTaskLineageContextInput,
+  ): ProjectTaskLineageContextResult {
+    const projectId = String(input.project_id || "").trim();
+    if (!projectId) throw new Error("project_id is required");
+
+    const project = this.getProjectById(scopeUserId, scopeAgentId, projectId);
+    if (!project) {
+      throw new Error(`project_id '${projectId}' is not registered`);
+    }
+
+    let focus: TaskRegistryRecord | null = null;
+
+    if (input.task_id) {
+      const byId = this.getTaskRegistryRecordById(scopeUserId, scopeAgentId, input.task_id);
+      if (byId && byId.project_id === projectId) focus = byId;
+    }
+
+    if (!focus && input.tracker_issue_key) {
+      focus = this.getTaskRegistryRecordByTrackerIssueKey(scopeUserId, scopeAgentId, projectId, input.tracker_issue_key);
+    }
+
+    if (!focus && input.task_title) {
+      const stmt = this.db.prepare(
+        `SELECT * FROM task_registry
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND lower(task_title) LIKE ?
+         ORDER BY updated_at DESC LIMIT 1`,
+      );
+      const row = stmt.get(
+        scopeUserId,
+        scopeAgentId,
+        projectId,
+        `%${String(input.task_title).trim().toLowerCase()}%`,
+      ) as any;
+      if (row) focus = this.rowToTaskRecord(row);
+    }
+
+    if (!focus) {
+      throw new Error("task lineage focus not found for provided selector");
+    }
+
+    const includeParentChain = input.include_parent_chain !== false;
+    const includeRelated = input.include_related !== false;
+
+    const parentChain: TaskRegistryRecord[] = [];
+    if (includeParentChain) {
+      let cursor = focus.parent_task_id;
+      const guard = new Set<string>();
+      while (cursor && !guard.has(cursor)) {
+        guard.add(cursor);
+        const parent = this.getTaskRegistryRecordById(scopeUserId, scopeAgentId, cursor);
+        if (!parent) break;
+        parentChain.push(parent);
+        cursor = parent.parent_task_id;
+      }
+    }
+
+    const relatedTasks: TaskRegistryRecord[] = [];
+    if (includeRelated) {
+      const seen = new Set<string>();
+      for (const relatedId of focus.related_task_ids || []) {
+        if (!relatedId || seen.has(relatedId)) continue;
+        seen.add(relatedId);
+        const related = this.getTaskRegistryRecordById(scopeUserId, scopeAgentId, relatedId);
+        if (related) relatedTasks.push(related);
+      }
+    }
+
+    const aggregate = [focus, ...parentChain, ...relatedTasks];
+    const touchedFiles = this.uniqueSorted(aggregate.flatMap((t) => t.files_touched || []));
+    const touchedSymbols = this.uniqueSorted(aggregate.flatMap((t) => t.symbols_touched || []));
+    const commitRefs = this.uniqueSorted(aggregate.flatMap((t) => t.commit_refs || []));
+    const decisionNotes = this.uniqueSorted(
+      aggregate
+        .map((t) => String(t.decision_notes || "").trim())
+        .filter(Boolean),
+    );
+
+    return {
+      focus: {
+        project_id: projectId,
+        task_id: focus.task_id,
+        tracker_issue_key: focus.tracker_issue_key,
+        task_title: focus.task_title,
+      },
+      parent_chain: parentChain,
+      related_tasks: relatedTasks,
+      touched_files: touchedFiles,
+      touched_symbols: touchedSymbols,
+      commit_refs: commitRefs,
+      decision_notes: decisionNotes,
+    };
+  }
+
+  hybridSearchProjectContext(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: ProjectHybridSearchInput,
+  ): ProjectHybridSearchResult {
+    const projectId = String(input.project_id || "").trim();
+    const query = String(input.query || "").trim();
+    if (!projectId) throw new Error("project_id is required");
+    if (!query) throw new Error("query is required");
+
+    const project = this.getProjectById(scopeUserId, scopeAgentId, projectId);
+    if (!project) {
+      throw new Error(`project_id '${projectId}' is not registered`);
+    }
+
+    const limit = Math.min(Math.max(Number(input.limit || 10), 1), 50);
+    const queryLc = query.toLowerCase();
+    const taskContextInput = input.task_context;
+
+    let lineageContext: ProjectTaskLineageContextResult | null = null;
+    if (taskContextInput && (taskContextInput.task_id || taskContextInput.tracker_issue_key || taskContextInput.task_title)) {
+      lineageContext = this.getTaskLineageContext(scopeUserId, scopeAgentId, {
+        project_id: projectId,
+        task_id: taskContextInput.task_id,
+        tracker_issue_key: taskContextInput.tracker_issue_key,
+        task_title: taskContextInput.task_title,
+        include_parent_chain: taskContextInput.include_parent_chain,
+        include_related: taskContextInput.include_related,
+      });
+    }
+
+    const lexicalPathPrefix = this.normalizeStringArray(input.path_prefix).map((p) => this.normalizeRelativePath(p)).filter(Boolean);
+    const lexicalModules = new Set(this.normalizeStringArray(input.module).map((s) => s.toLowerCase()));
+    const lexicalLanguages = new Set(this.normalizeStringArray(input.language).map((s) => s.toLowerCase()));
+    const lexicalTaskIds = new Set(this.normalizeStringArray(input.task_id));
+    const lexicalIssueKeys = new Set(this.normalizeStringArray(input.tracker_issue_key).map((s) => s.toUpperCase()));
+
+    if (lineageContext) {
+      lexicalTaskIds.add(lineageContext.focus.task_id);
+      if (lineageContext.focus.tracker_issue_key) lexicalIssueKeys.add(lineageContext.focus.tracker_issue_key.toUpperCase());
+      for (const t of [...lineageContext.parent_chain, ...lineageContext.related_tasks]) {
+        lexicalTaskIds.add(t.task_id);
+        if (t.tracker_issue_key) lexicalIssueKeys.add(t.tracker_issue_key.toUpperCase());
+      }
+    }
+
+    const results: ProjectHybridSearchResultItem[] = [];
+
+    const fileStmt = this.db.prepare(
+      `SELECT * FROM file_index_state
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND active = 1`,
+    );
+    const fileRows = fileStmt.all(scopeUserId, scopeAgentId, projectId) as any[];
+    for (const row of fileRows) {
+      const relativePath = String(row.relative_path || "");
+      const moduleName = row.module ? String(row.module) : null;
+      const language = row.language ? String(row.language) : null;
+
+      if (lexicalPathPrefix.length > 0 && !lexicalPathPrefix.some((prefix) => relativePath.startsWith(prefix))) continue;
+      if (lexicalModules.size > 0 && !moduleName) continue;
+      if (lexicalModules.size > 0 && moduleName && !lexicalModules.has(moduleName.toLowerCase())) continue;
+      if (lexicalLanguages.size > 0 && !language) continue;
+      if (lexicalLanguages.size > 0 && language && !lexicalLanguages.has(language.toLowerCase())) continue;
+
+      const text = `${relativePath} ${moduleName || ""} ${language || ""}`.toLowerCase();
+      let score = 0;
+      if (text.includes(queryLc)) score += 0.55;
+      if (lineageContext && lineageContext.touched_files.includes(relativePath)) score += 0.35;
+      if (relativePath.includes("README") || relativePath.includes("docs/")) score += 0.05;
+      if (score <= 0) continue;
+
+      results.push({
+        source: "file_index_state",
+        id: String(row.file_id),
+        score,
+        project_id: projectId,
+        relative_path: relativePath,
+        module: moduleName,
+        language,
+        snippet: `file ${relativePath}${moduleName ? ` (module ${moduleName})` : ""}`,
+      });
+    }
+
+    const symbolStmt = this.db.prepare(
+      `SELECT * FROM symbol_registry
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND active = 1`,
+    );
+    const symbolRows = symbolStmt.all(scopeUserId, scopeAgentId, projectId) as any[];
+    for (const row of symbolRows) {
+      const relativePath = String(row.relative_path || "");
+      const moduleName = row.module ? String(row.module) : null;
+      const language = row.language ? String(row.language) : null;
+      const symbolName = String(row.symbol_name || "");
+      const symbolKind = String(row.symbol_kind || "");
+      const symbolFqn = String(row.symbol_fqn || "");
+
+      if (lexicalPathPrefix.length > 0 && !lexicalPathPrefix.some((prefix) => relativePath.startsWith(prefix))) continue;
+      if (lexicalModules.size > 0 && !moduleName) continue;
+      if (lexicalModules.size > 0 && moduleName && !lexicalModules.has(moduleName.toLowerCase())) continue;
+      if (lexicalLanguages.size > 0 && !language) continue;
+      if (lexicalLanguages.size > 0 && language && !lexicalLanguages.has(language.toLowerCase())) continue;
+
+      const text = `${symbolName} ${symbolFqn} ${relativePath} ${moduleName || ""} ${symbolKind}`.toLowerCase();
+      let score = 0;
+      if (text.includes(queryLc)) score += 0.62;
+      if (lineageContext && lineageContext.touched_symbols.includes(symbolName)) score += 0.3;
+      if (lineageContext && lineageContext.touched_files.includes(relativePath)) score += 0.12;
+      if (score <= 0) continue;
+
+      results.push({
+        source: "symbol_registry",
+        id: String(row.symbol_id),
+        score,
+        project_id: projectId,
+        relative_path: relativePath,
+        module: moduleName,
+        language,
+        symbol_name: symbolName,
+        symbol_kind: symbolKind,
+        snippet: `symbol ${symbolName} (${symbolKind}) in ${relativePath}`,
+      });
+    }
+
+    const taskStmt = this.db.prepare(
+      `SELECT * FROM task_registry
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+    );
+    const taskRows = taskStmt.all(scopeUserId, scopeAgentId, projectId) as any[];
+    for (const row of taskRows) {
+      const task = this.rowToTaskRecord(row);
+      const taskIssueKey = task.tracker_issue_key ? task.tracker_issue_key.toUpperCase() : null;
+
+      if (lexicalTaskIds.size > 0 && !lexicalTaskIds.has(task.task_id)) {
+        if (!taskIssueKey || !lexicalIssueKeys.has(taskIssueKey)) {
+          // keep if user query still lexically matches strongly
+        }
+      }
+
+      const text = [
+        task.task_id,
+        task.task_title,
+        task.task_status || "",
+        task.tracker_issue_key || "",
+        ...(task.files_touched || []),
+        ...(task.symbols_touched || []),
+        ...(task.commit_refs || []),
+        task.decision_notes || "",
+      ].join(" ").toLowerCase();
+
+      let score = 0;
+      if (text.includes(queryLc)) score += 0.58;
+      if (lexicalTaskIds.has(task.task_id)) score += 0.28;
+      if (taskIssueKey && lexicalIssueKeys.has(taskIssueKey)) score += 0.28;
+      if (lineageContext) {
+        if (task.task_id === lineageContext.focus.task_id) score += 0.35;
+        if (lineageContext.parent_chain.some((t) => t.task_id === task.task_id)) score += 0.2;
+        if (lineageContext.related_tasks.some((t) => t.task_id === task.task_id)) score += 0.2;
+      }
+      if (score <= 0) continue;
+
+      results.push({
+        source: "task_registry",
+        id: task.task_id,
+        score,
+        project_id: projectId,
+        task_id: task.task_id,
+        task_title: task.task_title,
+        tracker_issue_key: task.tracker_issue_key,
+        snippet: `task ${task.task_id}: ${task.task_title}`,
+      });
+    }
+
+    const ranked = results
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map((item) => ({ ...item, score: Number(item.score.toFixed(4)) }));
+
+    return {
+      query,
+      project_id: projectId,
+      count: ranked.length,
+      task_lineage_context: lineageContext,
+      results: ranked,
+    };
+  }
+
   // --------------------------------------------------------------------------
   // Helpers
   // --------------------------------------------------------------------------
@@ -1405,6 +1926,57 @@ export class SlotDB {
     } catch {
       return [];
     }
+  }
+
+  private normalizeStringArray(input?: string[] | null): string[] {
+    if (!Array.isArray(input)) return [];
+    return this.uniqueSorted(
+      input
+        .map((item) => String(item || "").trim())
+        .filter(Boolean),
+    );
+  }
+
+  private uniqueSorted(values: string[]): string[] {
+    return Array.from(new Set(values.map((v) => String(v || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  }
+
+  private rowToTaskRecord(row: {
+    task_id: string;
+    scope_user_id: string;
+    scope_agent_id: string;
+    project_id: string;
+    task_title: string;
+    task_type: string | null;
+    task_status: string | null;
+    parent_task_id: string | null;
+    related_task_ids: string | null;
+    files_touched: string | null;
+    symbols_touched: string | null;
+    commit_refs: string | null;
+    diff_refs: string | null;
+    decision_notes: string | null;
+    tracker_issue_key: string | null;
+    updated_at: string;
+  }): TaskRegistryRecord {
+    return {
+      task_id: row.task_id,
+      scope_user_id: row.scope_user_id,
+      scope_agent_id: row.scope_agent_id,
+      project_id: row.project_id,
+      task_title: row.task_title,
+      task_type: row.task_type,
+      task_status: row.task_status,
+      parent_task_id: row.parent_task_id,
+      related_task_ids: this.parseJsonArrayField(row.related_task_ids),
+      files_touched: this.parseJsonArrayField(row.files_touched),
+      symbols_touched: this.parseJsonArrayField(row.symbols_touched),
+      commit_refs: this.parseJsonArrayField(row.commit_refs),
+      diff_refs: this.parseJsonArrayField(row.diff_refs),
+      decision_notes: row.decision_notes,
+      tracker_issue_key: row.tracker_issue_key,
+      updated_at: row.updated_at,
+    };
   }
 
   private computeMissingRegistrationFields(project: ProjectRecord, alias: string): string[] {
