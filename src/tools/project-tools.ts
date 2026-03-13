@@ -502,6 +502,64 @@ export function registerProjectTools(
   });
 
   api.registerTool({
+    name: "project_telegram_onboarding",
+    label: "Project Telegram Onboarding",
+    description:
+      "Operator-facing Telegram onboarding helper for project registration + Jira mapping + optional index-now. Preview/confirm flow that bridges to ASM-80 command layer.",
+    parameters: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "Slash command trigger, e.g. /add_project" },
+        repo_url: { type: "string", description: "Repo URL/import source from Telegram step." },
+        project_alias: { type: "string", description: "Operator-confirmed project alias." },
+        jira_space_key: { type: "string", description: "Jira space key (uppercase format)." },
+        default_epic_key: { type: "string", description: "Default epic key, must match <SPACE>-* when provided." },
+        index_now: { type: "boolean", description: "Whether to trigger index immediately after confirm." },
+        project_name: { type: "string", description: "Optional project display name." },
+        repo_root: { type: "string", description: "Optional resolved repo root." },
+        active_version: { type: "string", description: "Optional active version." },
+        mode: { type: "string", enum: ["preview", "confirm"], description: "preview validates and returns confirm card; confirm executes." },
+      },
+    },
+    async execute(
+      _id: string,
+      params: {
+        command?: string;
+        repo_url?: string;
+        project_alias?: string;
+        jira_space_key?: string;
+        default_epic_key?: string;
+        index_now?: boolean;
+        project_name?: string;
+        repo_root?: string;
+        active_version?: string;
+        mode?: "preview" | "confirm";
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.telegram_onboarding", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_telegram_onboarding",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
     name: "project_reindex_diff",
     label: "Project Reindex Diff",
     description:

@@ -206,6 +206,47 @@ async function main() {
     assertEqual(thrown, true, "invalid jira mapping should throw");
   });
 
+  await test("project.telegram_onboarding preview validates jira mapping and returns summary card", async () => {
+    const preview = await usecase.run<any, any>("project.telegram_onboarding", {
+      ...ctx,
+      payload: {
+        command: "/add_project",
+        repo_url: "git@github.com:cong91/agent-smart-memo.git",
+        project_alias: "asm-telegram-preview",
+        jira_space_key: "asm",
+        default_epic_key: "WRONG-82",
+        index_now: false,
+        mode: "preview",
+      },
+    });
+
+    assertEqual(preview.status, "validation_error", "preview should fail invalid jira mapping");
+    assert(Array.isArray(preview.errors) && preview.errors.length >= 1, "preview should return inline errors");
+    assert(Boolean(preview.summary_card), "preview should return summary card");
+  });
+
+  await test("project.telegram_onboarding confirm bridges to ASM-80 command layer", async () => {
+    const committed = await usecase.run<any, any>("project.telegram_onboarding", {
+      ...ctx,
+      payload: {
+        command: "/add_project",
+        repo_url: "git@github.com:cong91/agent-smart-memo.git",
+        repo_root: "/tmp/asm-telegram-onboarding",
+        project_alias: "asm-telegram-onboarding",
+        jira_space_key: "ASM",
+        default_epic_key: "ASM-82",
+        index_now: true,
+        mode: "confirm",
+      },
+    });
+
+    assertEqual(committed.status, "committed", "confirm should commit onboarding");
+    assert(Boolean(committed.project_id), "confirm should return project_id");
+    assertEqual(committed.project_alias, "asm-telegram-onboarding", "alias should persist");
+    assertEqual(committed.tracker_mapping.tracker_type, "jira", "jira mapping should be linked");
+    assertEqual(committed.index_trigger.requested, true, "index_now should propagate");
+  });
+
   await test("project.list returns registry entries", async () => {
     const rows = await usecase.run<any, any[]>("project.list", {
       ...ctx,
