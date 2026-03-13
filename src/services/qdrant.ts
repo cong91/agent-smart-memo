@@ -186,6 +186,24 @@ export class QdrantClient {
     await this.createPayloadIndex("source_type", "keyword");
     await this.createPayloadIndex("timestamp", "integer");
     await this.createPayloadIndex("userId", "keyword");
+
+    // ASM-76 (v5.1) bootstrap indexes for project-aware retrieval schema
+    await this.createPayloadIndex("schema_version", "keyword");
+    await this.createPayloadIndex("project_id", "keyword");
+    await this.createPayloadIndex("chunk_id", "keyword");
+    await this.createPayloadIndex("doc_kind", "keyword");
+    await this.createPayloadIndex("relative_path", "keyword");
+    await this.createPayloadIndex("language", "keyword");
+    await this.createPayloadIndex("module", "keyword");
+    await this.createPayloadIndex("symbol_name", "keyword");
+    await this.createPayloadIndex("symbol_id", "keyword");
+    await this.createPayloadIndex("task_id", "keyword");
+    await this.createPayloadIndex("commit_sha", "keyword");
+    await this.createPayloadIndex("checksum", "keyword");
+    await this.createPayloadIndex("indexed_at", "integer");
+    await this.createPayloadIndex("tombstone_at", "keyword");
+    await this.createPayloadIndex("active", "bool");
+    await this.createPayloadIndex("index_state", "keyword");
   }
 
   async createPayloadIndex(fieldName: string, fieldType: "keyword" | "integer" | "float" | "bool"): Promise<void> {
