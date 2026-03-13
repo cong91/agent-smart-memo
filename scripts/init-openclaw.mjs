@@ -579,7 +579,7 @@ async function promptWizard(defaults) {
   }
 }
 
-export async function runInitOpenClaw({ env = process.env, interactive = true } = {}) {
+export async function runInitOpenClaw({ env = process.env, interactive = true, autoApply = false } = {}) {
   const configPath = resolveOpenClawConfigPath(env);
   const current = parseExistingConfig(configPath);
   const pluginCfg = asObj(asObj(asObj(current.plugins).entries)[PLUGIN_ID]).config || {};
@@ -623,15 +623,19 @@ export async function runInitOpenClaw({ env = process.env, interactive = true } 
   console.log("[ASM-83] Preview diff:\n");
   console.log(previewDiff(beforeText, afterText));
 
-  const rl = createInterface({ input, output });
-  try {
-    const confirm = await rl.question("\nApply changes and write config? (y/N): ");
-    if (!yesNoNormalize(confirm, false)) {
-      console.log("[ASM-83] Aborted by user. No file written.");
-      return { applied: false, configPath };
+  if (!autoApply) {
+    const rl = createInterface({ input, output });
+    try {
+      const confirm = await rl.question("\nApply changes and write config? (y/N): ");
+      if (!yesNoNormalize(confirm, false)) {
+        console.log("[ASM-83] Aborted by user. No file written.");
+        return { applied: false, configPath };
+      }
+    } finally {
+      rl.close();
     }
-  } finally {
-    rl.close();
+  } else {
+    console.log("\n[ASM-83] Auto-apply mode enabled. Writing config without confirmation prompt.");
   }
 
   mkdirSync(dirname(configPath), { recursive: true });

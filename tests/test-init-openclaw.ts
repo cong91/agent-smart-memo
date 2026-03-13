@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -14,18 +14,21 @@ function assertEqual(actual: unknown, expected: unknown, message: string): void 
   }
 }
 
-function test(name: string, fn: () => void): void {
-  try {
-    fn();
-    console.log(`✅ ${name}`);
-  } catch (error) {
-    console.error(`❌ ${name}`);
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  }
+function test(name: string, fn: () => void | Promise<void>): void {
+  Promise.resolve()
+    .then(fn)
+    .then(() => {
+      console.log(`✅ ${name}`);
+    })
+    .catch((error) => {
+      console.error(`❌ ${name}`);
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    });
 }
 
 const mod = await import("../scripts/init-openclaw.mjs");
+const originalLog = console.log;
 
 const ROOT = mkdtempSync(join(tmpdir(), "agent-smart-memo-init-openclaw-"));
 const stateDir = join(ROOT, ".openclaw");
@@ -285,12 +288,40 @@ test("buildBackupPath uses .bak timestamp suffix", () => {
   assert(sample.includes(".bak."), "backup suffix should include .bak.");
 });
 
+test("runInitOpenClaw supports non-interactive auto-apply write path", async () => {
+  const env = {
+    HOME: ROOT,
+    OPENCLAW_STATE_DIR: stateDir,
+  };
+
+  const logs: string[] = [];
+  console.log = (...args: any[]) => {
+    logs.push(args.map((item) => String(item)).join(" "));
+  };
+
+  try {
+    const result = await mod.runInitOpenClaw({ env, interactive: false, autoApply: true });
+    assertEqual(result.applied, true, "auto-apply should write config");
+
+    const updated = JSON.parse(readFileSync(configPath, "utf8"));
+    const commands =
+      updated?.channels?.telegram?.customCommands?.map((item: any) => item.command) || [];
+
+    assert(commands.includes("addproject"), "auto-apply should include /addproject in telegram customCommands");
+    assert(logs.some((line) => line.includes("Auto-apply mode enabled")), "should log auto-apply mode");
+  } finally {
+    console.log = originalLog;
+  }
+});
+
 process.on("exit", () => {
   try {
     rmSync(ROOT, { recursive: true, force: true });
   } catch {}
 });
 
-if (!process.exitCode) {
-  console.log("\n🎉 init-openclaw tests passed");
-}
+setTimeout(() => {
+  if (!process.exitCode) {
+    console.log("\n🎉 init-openclaw tests passed");
+  }
+}, 0);

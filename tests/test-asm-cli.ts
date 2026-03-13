@@ -30,7 +30,7 @@ function test(name: string, fn: () => void | Promise<void>): void {
     });
 }
 
-test("parseAsmCliArgs supports help and setup-openclaw", () => {
+test("parseAsmCliArgs supports help, setup-openclaw, and init-openclaw", () => {
   assertEqual(parseAsmCliArgs([]), { command: "help", argv: [] }, "empty should map to help");
   assertEqual(parseAsmCliArgs(["--help"]), { command: "help", argv: [] }, "--help should map to help");
   assertEqual(
@@ -42,6 +42,16 @@ test("parseAsmCliArgs supports help and setup-openclaw", () => {
     parseAsmCliArgs(["setup", "openclaw", "--x"]),
     { command: "setup-openclaw", argv: ["--x"] },
     "setup openclaw alias should parse",
+  );
+  assertEqual(
+    parseAsmCliArgs(["init-openclaw", "--non-interactive"]),
+    { command: "init-openclaw", argv: ["--non-interactive"] },
+    "init-openclaw should parse",
+  );
+  assertEqual(
+    parseAsmCliArgs(["init", "openclaw", "--non-interactive"]),
+    { command: "init-openclaw", argv: ["--non-interactive"] },
+    "init openclaw alias should parse",
   );
 });
 
@@ -105,8 +115,10 @@ test("runSetupOpenClawFlow installs plugin when missing and runs init", async ()
   };
 
   let initCalled = 0;
-  const initOpenClaw = async () => {
+  let initParams: any = null;
+  const initOpenClaw = async (params?: any) => {
     initCalled += 1;
+    initParams = params;
     return { applied: true };
   };
 
@@ -118,6 +130,7 @@ test("runSetupOpenClawFlow installs plugin when missing and runs init", async ()
 
   assertEqual(result.ok, true, "flow should succeed");
   assertEqual(initCalled, 1, "init flow should be called once");
+  assertEqual(initParams, { interactive: true, autoApply: false }, "default setup flow should remain interactive");
   assert(
     calls.some((line) => line.includes("plugins install @mrc2204/agent-smart-memo")),
     "should install plugin when missing",
@@ -127,6 +140,44 @@ test("runSetupOpenClawFlow installs plugin when missing and runs init", async ()
   assert(logLines.some((line) => line.includes("will add")), "should print will add section");
   assert(logLines.some((line) => line.includes("will update")), "should print will update section");
   assert(logLines.some((line) => line.includes("setup-openclaw completed")), "should print completion line");
+});
+
+test("runSetupOpenClawFlow supports non-interactive --yes mode", async () => {
+  const runner = (_command: string, args: string[]) => {
+    if (args[0] === "--version") {
+      return { ok: true, code: 0, stdout: "1.0.0", stderr: "", error: "" };
+    }
+
+    if (args[0] === "plugins" && args[1] === "list" && args[2] === "--json") {
+      return {
+        ok: true,
+        code: 0,
+        stdout: JSON.stringify({ plugins: [{ id: "agent-smart-memo" }] }),
+        stderr: "",
+        error: "",
+      };
+    }
+
+    if (args[0] === "plugins" && args[1] === "list") {
+      return { ok: true, code: 0, stdout: "", stderr: "", error: "" };
+    }
+
+    return { ok: false, code: 1, stdout: "", stderr: "unknown", error: "" };
+  };
+
+  let initParams: any = null;
+  const result = await runSetupOpenClawFlow({
+    runner: runner as any,
+    initOpenClaw: async (params?: any) => {
+      initParams = params;
+      return { applied: true };
+    },
+    argv: ["--yes"],
+    log: () => {},
+  });
+
+  assertEqual(result.ok, true, "flow should succeed in --yes mode");
+  assertEqual(initParams, { interactive: false, autoApply: true }, "--yes should force non-interactive apply");
 });
 
 test("runSetupOpenClawFlow fails early when openclaw missing", async () => {
