@@ -257,6 +257,251 @@ export function registerProjectTools(
   });
 
   api.registerTool({
+    name: "project_register_command",
+    label: "Project Register Command",
+    description:
+      "Canonical ASM v5.1 add/register project command flow. Supports optional Jira mapping attach and optional initial index trigger.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_alias: { type: "string" },
+        project_name: { type: "string" },
+        project_id: { type: "string" },
+        repo_root: { type: "string" },
+        repo_remote: { type: "string" },
+        active_version: { type: "string" },
+        tracker: {
+          type: "object",
+          properties: {
+            tracker_type: { type: "string", enum: ["jira", "github", "other"] },
+            tracker_space_key: { type: "string" },
+            tracker_project_id: { type: "string" },
+            default_epic_key: { type: "string" },
+            board_key: { type: "string" },
+            active_version: { type: "string" },
+            external_project_url: { type: "string" },
+          },
+        },
+        options: {
+          type: "object",
+          properties: {
+            trigger_index: { type: "boolean" },
+            allow_alias_update: { type: "boolean" },
+          },
+        },
+      },
+      required: ["project_alias"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_alias: string;
+        project_name?: string;
+        project_id?: string;
+        repo_root?: string;
+        repo_remote?: string;
+        active_version?: string;
+        tracker?: {
+          tracker_type: "jira" | "github" | "other";
+          tracker_space_key?: string;
+          tracker_project_id?: string;
+          default_epic_key?: string;
+          board_key?: string;
+          active_version?: string;
+          external_project_url?: string;
+        };
+        options?: {
+          trigger_index?: boolean;
+          allow_alias_update?: boolean;
+        };
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.register_command", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_register_command",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
+    name: "project_link_tracker",
+    label: "Project Link Tracker",
+    description: "Canonical ASM v5.1 link jira/tracker command flow by project_id or project_alias.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_ref: {
+          type: "object",
+          properties: {
+            project_id: { type: "string" },
+            project_alias: { type: "string" },
+          },
+        },
+        tracker: {
+          type: "object",
+          properties: {
+            tracker_type: { type: "string", enum: ["jira", "github", "other"] },
+            tracker_space_key: { type: "string" },
+            tracker_project_id: { type: "string" },
+            default_epic_key: { type: "string" },
+            board_key: { type: "string" },
+            active_version: { type: "string" },
+            external_project_url: { type: "string" },
+          },
+          required: ["tracker_type"],
+        },
+        mode: { type: "string", enum: ["attach_or_update"] },
+      },
+      required: ["project_ref", "tracker"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_ref: {
+          project_id?: string;
+          project_alias?: string;
+        };
+        tracker: {
+          tracker_type: "jira" | "github" | "other";
+          tracker_space_key?: string;
+          tracker_project_id?: string;
+          default_epic_key?: string;
+          board_key?: string;
+          active_version?: string;
+          external_project_url?: string;
+        };
+        mode?: "attach_or_update";
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.link_tracker", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_link_tracker",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
+    name: "project_trigger_index",
+    label: "Project Trigger Index",
+    description: "Canonical ASM v5.1 index project/index now command flow after registration/linking.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_ref: {
+          type: "object",
+          properties: {
+            project_id: { type: "string" },
+            project_alias: { type: "string" },
+          },
+        },
+        mode: { type: "string", enum: ["bootstrap", "incremental", "manual", "repair"] },
+        scope: {
+          type: "object",
+          properties: {
+            path_prefix: { type: "array", items: { type: "string" } },
+            module: { type: "array", items: { type: "string" } },
+            task_id: { type: "array", items: { type: "string" } },
+          },
+        },
+        reason: { type: "string" },
+        source_rev: { type: "string" },
+        index_profile: { type: "string" },
+        paths: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              relative_path: { type: "string" },
+              checksum: { type: "string" },
+              module: { type: "string" },
+              language: { type: "string" },
+            },
+            required: ["relative_path"],
+          },
+        },
+      },
+      required: ["project_ref"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_ref: {
+          project_id?: string;
+          project_alias?: string;
+        };
+        mode?: "bootstrap" | "incremental" | "manual" | "repair";
+        scope?: {
+          path_prefix?: string[];
+          module?: string[];
+          task_id?: string[];
+        };
+        reason?: string;
+        source_rev?: string;
+        index_profile?: string;
+        paths?: Array<{
+          relative_path: string;
+          checksum?: string;
+          module?: string;
+          language?: string;
+        }>;
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.trigger_index", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_trigger_index",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
     name: "project_reindex_diff",
     label: "Project Reindex Diff",
     description:
