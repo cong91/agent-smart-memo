@@ -51,6 +51,14 @@ export function parseAsmCliArgs(argv = []) {
     return { command: "setup-openclaw", argv: args.slice(2) };
   }
 
+  if (first === "init-openclaw") {
+    return { command: "init-openclaw", argv: args.slice(1) };
+  }
+
+  if (first === "init" && (args[1] || "") === "openclaw") {
+    return { command: "init-openclaw", argv: args.slice(2) };
+  }
+
   return { command: "unknown", argv: args };
 }
 
@@ -58,8 +66,10 @@ export function printHelp(log = console.log) {
   log("asm - Agent Smart Memo CLI");
   log("");
   log("Usage:");
-  log("  asm setup-openclaw");
-  log("  asm setup openclaw");
+  log("  asm setup-openclaw [--yes]");
+  log("  asm setup openclaw [--yes]");
+  log("  asm init-openclaw [--non-interactive]");
+  log("  asm init openclaw [--non-interactive]");
   log("  asm help");
   log("");
   log("Roadmap commands (not implemented yet):");
@@ -100,10 +110,22 @@ export function detectPluginInstalled(runner = createShellRunner()) {
   return { installed: false, source: "missing" };
 }
 
+function parseNonInteractiveFlags(argv = []) {
+  const args = Array.isArray(argv) ? argv.map((x) => String(x).trim()).filter(Boolean) : [];
+  const hasYes = args.includes("--yes") || args.includes("-y");
+  const hasNonInteractive = args.includes("--non-interactive");
+
+  return {
+    nonInteractive: hasYes || hasNonInteractive,
+    autoApply: hasYes || hasNonInteractive,
+  };
+}
+
 export async function runSetupOpenClawFlow({
   runner = createShellRunner(),
   initOpenClaw = runInitOpenClaw,
   log = console.log,
+  argv = [],
 } = {}) {
   log("[ASM-84] setup-openclaw: checking OpenClaw CLI ...");
   const openclawVersion = runner("openclaw", ["--version"]);
@@ -153,8 +175,13 @@ export async function runSetupOpenClawFlow({
     log("[ASM-84] plugin install command completed.");
   }
 
+  const mode = parseNonInteractiveFlags(argv);
+  if (mode.nonInteractive) {
+    log("[ASM-84] non-interactive mode enabled; applying defaults/merged config without prompt.");
+  }
+
   log("[ASM-84] launching init-openclaw bootstrap flow ...");
-  const result = await initOpenClaw({ interactive: true });
+  const result = await initOpenClaw({ interactive: !mode.nonInteractive, autoApply: mode.autoApply });
 
   if (!result?.applied) {
     log("[ASM-84] setup-openclaw ended without changes (aborted or no write).");
@@ -178,8 +205,19 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   if (parsed.command === "setup-openclaw") {
-    const result = await runSetupOpenClawFlow();
+    const result = await runSetupOpenClawFlow({ argv: parsed.argv });
     return result.ok ? 0 : 1;
+  }
+
+  if (parsed.command === "init-openclaw") {
+    const mode = parseNonInteractiveFlags(parsed.argv);
+    try {
+      const result = await runInitOpenClaw({ interactive: !mode.nonInteractive, autoApply: mode.autoApply });
+      return result?.applied || mode.autoApply ? 0 : 0;
+    } catch (error) {
+      console.error(`[ASM-84] init-openclaw failed: ${error instanceof Error ? error.message : String(error)}`);
+      return 1;
+    }
   }
 
   console.error(`[ASM-84] Unknown command: ${argv.join(" ") || "(empty)"}`);
