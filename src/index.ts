@@ -22,6 +22,7 @@ import { resolveSlotDbDir } from "./shared/slotdb-path.js";
 import { registerSlotTools } from "./tools/slot-tools.js";
 import { registerGraphTools } from "./tools/graph-tools.js";
 import { registerSemanticMemoryTools } from "./tools/semantic-memory-tools.js";
+import { registerProjectTools } from "./tools/project-tools.js";
 import { SemanticMemoryUseCase } from "./core/usecases/semantic-memory-usecase.js";
 
 // Hook modules
@@ -516,6 +517,11 @@ const agentMemoPlugin = {
       slotDbDir,
       semanticUseCaseFactory: (resolvedSlotDbDir) => getSemanticUseCase(resolvedSlotDbDir),
     });
+    registerProjectTools(api, {
+      stateDir,
+      slotDbDir,
+      semanticUseCaseFactory: (resolvedSlotDbDir) => getSemanticUseCase(resolvedSlotDbDir),
+    });
 
     // ----------------------------------------------------------------
     // Register lifecycle hooks
@@ -534,7 +540,7 @@ const agentMemoPlugin = {
     registerMemoryToolContextInjector(api);
 
     console.log("[AgentMemo] Plugin registered successfully");
-    console.log("[AgentMemo] Tools: memory_search, memory_store, memory_slot_*, memory_graph_*");
+    console.log("[AgentMemo] Tools: memory_search, memory_store, memory_slot_*, memory_graph_*, project_registry_*");
     console.log("[AgentMemo] Hooks: auto-recall, auto-capture, tool-context-injector");
   },
 };

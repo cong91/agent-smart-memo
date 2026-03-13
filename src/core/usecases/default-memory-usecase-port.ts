@@ -65,6 +65,42 @@ interface GraphSearchPayload {
   relation_type?: string;
 }
 
+interface ProjectRegisterPayload {
+  project_id?: string;
+  project_name?: string;
+  project_alias: string;
+  repo_root?: string;
+  repo_remote?: string;
+  active_version?: string;
+  allow_alias_update?: boolean;
+}
+
+interface ProjectGetPayload {
+  project_id?: string;
+  project_alias?: string;
+}
+
+interface ProjectSetRegistrationStatePayload {
+  project_id: string;
+  registration_status: "draft" | "registered" | "validated" | "blocked";
+  validation_status: "pending" | "ok" | "warn" | "error";
+  validation_notes?: string | null;
+  completeness_score: number;
+  missing_required_fields: string[];
+  last_validated_at?: string | null;
+}
+
+interface ProjectSetTrackerMappingPayload {
+  project_id: string;
+  tracker_type: "jira" | "github" | "other";
+  tracker_space_key?: string;
+  tracker_project_id?: string;
+  default_epic_key?: string;
+  board_key?: string;
+  active_version?: string;
+  external_project_url?: string;
+}
+
 interface ScopeIdentity {
   userId: string;
   agentId: string;
@@ -132,6 +168,16 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
         return this.handleSlotList(payload as unknown as SlotListPayload, req) as TRes;
       case "slot.delete":
         return this.handleSlotDelete(payload as unknown as SlotDeletePayload, req) as TRes;
+      case "project.register":
+        return this.handleProjectRegister(payload as unknown as ProjectRegisterPayload, req) as TRes;
+      case "project.get":
+        return this.handleProjectGet(payload as unknown as ProjectGetPayload, req) as TRes;
+      case "project.list":
+        return this.handleProjectList(req) as TRes;
+      case "project.set_registration_state":
+        return this.handleProjectSetRegistrationState(payload as unknown as ProjectSetRegistrationStatePayload, req) as TRes;
+      case "project.set_tracker_mapping":
+        return this.handleProjectSetTrackerMapping(payload as unknown as ProjectSetTrackerMappingPayload, req) as TRes;
       case "graph.entity.get":
         return this.handleGraphEntityGet(payload as unknown as GraphEntityGetPayload, req) as TRes;
       case "graph.entity.set":
@@ -266,6 +312,92 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       deleted: this.slotDb.delete(identity.userId, identity.agentId, payload.key),
       scope: identity.scope,
     };
+  }
+
+  private handleProjectRegister(payload: ProjectRegisterPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+
+    if (!payload.project_alias || typeof payload.project_alias !== "string") {
+      throw new Error("project.register requires payload.project_alias");
+    }
+
+    return this.slotDb.registerProject(identity.userId, identity.agentId, {
+      project_id: payload.project_id,
+      project_name: payload.project_name,
+      project_alias: payload.project_alias,
+      repo_root: payload.repo_root,
+      repo_remote: payload.repo_remote,
+      active_version: payload.active_version,
+      allow_alias_update: payload.allow_alias_update,
+    });
+  }
+
+  private handleProjectGet(payload: ProjectGetPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+
+    if (!payload.project_id && !payload.project_alias) {
+      throw new Error("project.get requires payload.project_id or payload.project_alias");
+    }
+
+    if (payload.project_id) {
+      const project = this.slotDb.getProjectById(identity.userId, identity.agentId, payload.project_id);
+      if (!project) return null;
+      return {
+        project,
+        registration: this.slotDb.getProjectRegistrationState(identity.userId, identity.agentId, payload.project_id),
+      };
+    }
+
+    const byAlias = this.slotDb.getProjectByAlias(identity.userId, identity.agentId, payload.project_alias!);
+    if (!byAlias) return null;
+
+    return {
+      project: byAlias.project,
+      alias: byAlias.alias,
+      registration: this.slotDb.getProjectRegistrationState(identity.userId, identity.agentId, byAlias.project.project_id),
+    };
+  }
+
+  private handleProjectList(req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+    return this.slotDb.listProjects(identity.userId, identity.agentId);
+  }
+
+  private handleProjectSetRegistrationState(payload: ProjectSetRegistrationStatePayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+
+    if (!payload.project_id) {
+      throw new Error("project.set_registration_state requires payload.project_id");
+    }
+
+    return this.slotDb.updateProjectRegistrationState(identity.userId, identity.agentId, {
+      project_id: payload.project_id,
+      registration_status: payload.registration_status,
+      validation_status: payload.validation_status,
+      validation_notes: payload.validation_notes ?? null,
+      completeness_score: payload.completeness_score,
+      missing_required_fields: payload.missing_required_fields || [],
+      last_validated_at: payload.last_validated_at,
+    });
+  }
+
+  private handleProjectSetTrackerMapping(payload: ProjectSetTrackerMappingPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+
+    if (!payload.project_id || !payload.tracker_type) {
+      throw new Error("project.set_tracker_mapping requires payload.project_id and payload.tracker_type");
+    }
+
+    return this.slotDb.setProjectTrackerMapping(identity.userId, identity.agentId, {
+      project_id: payload.project_id,
+      tracker_type: payload.tracker_type,
+      tracker_space_key: payload.tracker_space_key,
+      tracker_project_id: payload.tracker_project_id,
+      default_epic_key: payload.default_epic_key,
+      board_key: payload.board_key,
+      active_version: payload.active_version,
+      external_project_url: payload.external_project_url,
+    });
   }
 
   private handleGraphEntityGet(payload: GraphEntityGetPayload, req: CoreRequestEnvelope<unknown>) {
