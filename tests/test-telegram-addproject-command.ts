@@ -26,7 +26,7 @@ function test(name: string, fn: TestFn): void {
   tests.push({ name, fn });
 }
 
-const ROOT = mkdtempSync(join(tmpdir(), "agent-smart-memo-addproject-cmd-"));
+const ROOT = mkdtempSync(join(tmpdir(), "agent-smart-memo-project-cmd-"));
 const db = new SlotDB(ROOT, { slotDbDir: join(ROOT, "slotdb") });
 const useCasePort = new DefaultMemoryUseCasePort(db);
 
@@ -64,14 +64,14 @@ test("composeAddProjectScopeUserId includes channel/account/sender/thread for ac
     senderId: "5165741309",
     messageThreadId: 42,
     isAuthorizedSender: true,
-    commandBody: "/addproject",
+    commandBody: "/project",
     config: {},
   } as any);
 
   assertEqual(id, "telegram:account:ops:sender:5165741309:thread:42", "scope userId should include account/thread");
 });
 
-test("registerTelegramAddProjectCommand registers /addproject behavior and routes to project.telegram_onboarding", async () => {
+test("registerTelegramAddProjectCommand registers /project behavior and routes to project.telegram_onboarding", async () => {
   const { api, commands } = createApiStub();
 
   registerTelegramAddProjectCommand(api, {
@@ -80,30 +80,30 @@ test("registerTelegramAddProjectCommand registers /addproject behavior and route
   });
 
   assert(commands.length >= 1, "registerCommand should be called");
-  const addproject = commands.find((c) => c.name === "addproject");
-  assert(Boolean(addproject), "addproject command should be registered");
+  const project = commands.find((c) => c.name === "project");
+  assert(Boolean(project), "project command should be registered");
 
-  const previewRes = await addproject.handler({
+  const previewRes = await project.handler({
     channel: "telegram",
     accountId: "default",
     senderId: "5165741309",
     isAuthorizedSender: true,
     args: "git@github.com:cong91/agent-smart-memo.git alias=asm-preview jira=ASM mode=preview",
-    commandBody: "/addproject git@github.com:cong91/agent-smart-memo.git alias=asm-preview jira=ASM mode=preview",
+    commandBody: "/project git@github.com:cong91/agent-smart-memo.git alias=asm-preview jira=ASM mode=preview",
     config: {},
   });
 
   assert(typeof previewRes?.text === "string", "preview should return text payload");
-  assert(previewRes.text.includes("/addproject"), "preview text should mention /addproject");
+  assert(previewRes.text.includes("/project"), "preview text should mention /project");
   assert(previewRes.text.includes("preview") || previewRes.text.includes("validation"), "preview text should describe status");
 
-  const confirmRes = await addproject.handler({
+  const confirmRes = await project.handler({
     channel: "telegram",
     accountId: "default",
     senderId: "5165741309",
     isAuthorizedSender: true,
     args: "confirm git@github.com:cong91/agent-smart-memo.git alias=asm-confirm jira=ASM epic=ASM-82 index=true",
-    commandBody: "/addproject confirm git@github.com:cong91/agent-smart-memo.git alias=asm-confirm jira=ASM epic=ASM-82 index=true",
+    commandBody: "/project confirm git@github.com:cong91/agent-smart-memo.git alias=asm-confirm jira=ASM epic=ASM-82 index=true",
     config: {},
   });
 
@@ -131,7 +131,7 @@ async function run() {
   db.close();
   rmSync(ROOT, { recursive: true, force: true });
 
-  console.log(`\n📊 addproject command tests: ${passed} passed, ${failed} failed`);
+  console.log(`\n📊 project command tests: ${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
 }
 

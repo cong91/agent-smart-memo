@@ -56,13 +56,20 @@ function yesNoNormalize(value, fallback = true) {
 }
 
 function normalizeTelegramCommandName(value) {
-  return String(value || "")
+  const normalized = String(value || "")
     .trim()
     .replace(/^\/+/, "")
     .toLowerCase()
     .replace(/-/g, "_")
     .replace(/[^a-z0-9_]/g, "")
     .slice(0, 32);
+
+  // ASM-84 follow-up: migrate legacy /addproject command naming to /project.
+  if (normalized === "addproject" || normalized === "add_project") {
+    return "project";
+  }
+
+  return normalized;
 }
 
 function isValidTelegramCommandName(value) {
@@ -70,7 +77,7 @@ function isValidTelegramCommandName(value) {
 }
 
 function defaultTelegramCommandDescription(name) {
-  if (name === "addproject") return "Add project onboarding";
+  if (name === "project") return "Project onboarding";
   if (name === "linkjira") return "Link Jira mapping";
   if (name === "indexproject") return "Index registered project";
   return `Run /${name}`;
@@ -83,7 +90,11 @@ function mergeTelegramCustomCommands(existing, commandNames) {
 
   for (const item of current) {
     const command = normalizeTelegramCommandName(item?.command);
-    const description = String(item?.description || "").trim();
+    const rawDescription = String(item?.description || "").trim();
+    const description =
+      command === "project" && /^add\s+project\s+onboarding$/i.test(rawDescription)
+        ? defaultTelegramCommandDescription(command)
+        : rawDescription;
     if (!isValidTelegramCommandName(command) || seen.has(command)) continue;
     seen.add(command);
     out.push({ command, description: description || defaultTelegramCommandDescription(command) });
@@ -597,7 +608,7 @@ export async function runInitOpenClaw({ env = process.env, interactive = true, a
     slotDbDir: String(pluginCfg.slotDbDir || env.OPENCLAW_SLOTDB_DIR || `${env.HOME}/.openclaw/agent-memo`),
     mapMemorySlot: asObj(asObj(current.plugins).slots).memory === PLUGIN_ID,
     telegramOnboardingCommands: dedupeStringArray([
-      "addproject",
+      "project",
       ...collectTelegramCommandNames(current, { telegramOnboardingCommands: [] }),
     ]),
   };

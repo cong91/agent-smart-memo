@@ -210,7 +210,7 @@ async function main() {
     const preview = await usecase.run<any, any>("project.telegram_onboarding", {
       ...ctx,
       payload: {
-        command: "/add_project",
+        command: "/project",
         repo_url: "git@github.com:cong91/agent-smart-memo.git",
         project_alias: "asm-telegram-preview",
         jira_space_key: "asm",
@@ -229,7 +229,7 @@ async function main() {
     const committed = await usecase.run<any, any>("project.telegram_onboarding", {
       ...ctx,
       payload: {
-        command: "/add_project",
+        command: "/project",
         repo_url: "git@github.com:cong91/agent-smart-memo.git",
         repo_root: "/tmp/asm-telegram-onboarding",
         project_alias: "asm-telegram-onboarding",

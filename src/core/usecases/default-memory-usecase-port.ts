@@ -894,7 +894,7 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
     const mode = payload.mode || "preview";
 
     const draft = {
-      command: String(payload.command || "").trim() || "/add_project",
+      command: String(payload.command || "").trim() || "/project",
       repo_url: String(payload.repo_url || "").trim(),
       project_alias: String(payload.project_alias || "").trim(),
       jira_space_key: String(payload.jira_space_key || "").trim().toUpperCase(),
