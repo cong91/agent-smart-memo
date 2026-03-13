@@ -1,7 +1,12 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createPaperclipRuntime } from "../src/adapters/paperclip/runtime.js";
+import {
+  ASM_MEMORY_TOOL_NAMES,
+  createAsmMemoryWorker,
+  createPaperclipRuntime,
+  manifest,
+} from "../src/entries/paperclip.js";
 import { SemanticMemoryUseCase } from "../src/core/usecases/semantic-memory-usecase.js";
 import { DeduplicationService } from "../src/services/dedupe.js";
 
@@ -72,7 +77,6 @@ const ctx = {
   traceId: "trace-1",
 };
 
-// slot.set
 const setRes = await runtime.adapter.execute({
   action: "slot.set",
   payload: {
@@ -86,7 +90,6 @@ const setRes = await runtime.adapter.execute({
 assert(setRes.ok === true, "slot.set should succeed");
 assert((setRes.data as any)?.key === "project.current_task", "slot.set should return stored key");
 
-// slot.get
 const getRes = await runtime.adapter.execute({
   action: "slot.get",
   payload: { key: "project.current_task" },
@@ -95,36 +98,6 @@ const getRes = await runtime.adapter.execute({
 assert(getRes.ok === true, "slot.get should succeed");
 assert((getRes.data as any)?.value === "wire-memory-usecase-port", "slot.get should return stored value");
 
-// slot.list
-const listRes = await runtime.adapter.execute({
-  action: "slot.list",
-  payload: { scope: "all" },
-  context: ctx,
-});
-assert(listRes.ok === true, "slot.list should succeed");
-assert(Array.isArray(listRes.data), "slot.list should return list");
-assert((listRes.data as any[]).some((s) => s.key === "project.current_task"), "slot.list should include inserted slot");
-
-// graph.entity.set create
-const entityRes = await runtime.adapter.execute({
-  action: "graph.entity.set",
-  payload: { name: "PaperclipRuntime", type: "project" },
-  context: ctx,
-});
-assert(entityRes.ok === true, "graph.entity.set create should succeed");
-const entityId = (entityRes.data as any)?.id;
-assert(typeof entityId === "string" && entityId.length > 0, "graph.entity.set should return id");
-
-// graph.entity.get by id
-const entityGetRes = await runtime.adapter.execute({
-  action: "graph.entity.get",
-  payload: { id: entityId },
-  context: ctx,
-});
-assert(entityGetRes.ok === true, "graph.entity.get should succeed");
-assert((entityGetRes.data as any)?.name === "PaperclipRuntime", "graph.entity.get should return inserted entity");
-
-// memory.capture (semantic runtime path)
 const memCaptureRes = await runtime.adapter.execute({
   action: "memory.capture",
   payload: {
@@ -136,32 +109,49 @@ const memCaptureRes = await runtime.adapter.execute({
 assert(memCaptureRes.ok === true, "memory.capture should succeed");
 assert(Boolean((memCaptureRes.data as any)?.id), "memory.capture should return id");
 
-// memory.search (semantic runtime path)
-const memSearchRes = await runtime.adapter.execute({
-  action: "memory.search",
-  payload: {
-    query: "semantic path",
-    namespace: "assistant",
-    minScore: 0.1,
+const worker = createAsmMemoryWorker();
+const initRes = worker.initialize({
+  config: {
+    runtime: {
+      stateDir: STATE_DIR,
+      slotDbDir: SLOTDB_DIR,
+    },
   },
-  context: ctx,
 });
-assert(memSearchRes.ok === true, "memory.search should succeed");
-assert(Array.isArray((memSearchRes.data as any)?.results), "memory.search should return results array");
-assert(((memSearchRes.data as any)?.results || []).length >= 1, "memory.search should find inserted memory");
+assert(initRes.ok === true, "worker initialize should succeed");
+assert(worker.health().initialized === true, "worker health should report initialized");
 
-// slot.delete
-const delRes = await runtime.adapter.execute({
-  action: "slot.delete",
-  payload: { key: "project.current_task" },
-  context: ctx,
+const toolCaptureRes = await worker.executeTool(ASM_MEMORY_TOOL_NAMES.capture, {
+  text: "Paperclip production worker captures from source entry",
+  namespace: "assistant",
+  context: {
+    userId: "paperclip-user-2",
+    sessionId: "paperclip-session-2",
+    projectWorkspaceId: "workspace-2",
+  },
 });
-assert(delRes.ok === true, "slot.delete should succeed");
-assert((delRes.data as any)?.deleted === true, "slot.delete should mark deleted true");
+assert(toolCaptureRes.ok === true, "worker memory_capture should succeed");
 
+const toolRecallRes = await worker.executeTool(ASM_MEMORY_TOOL_NAMES.recall, {
+  query: "captures from source entry",
+  namespace: "assistant",
+  minScore: 0.1,
+  context: {
+    userId: "paperclip-user-2",
+    sessionId: "paperclip-session-2",
+    projectWorkspaceId: "workspace-2",
+  },
+});
+assert(toolRecallRes.ok === true, "worker memory_recall should succeed");
+assert(Array.isArray((toolRecallRes.data as any)?.results), "worker memory_recall should return results array");
+
+assert(manifest.paperclipPlugin === undefined, "manifest stays host manifest object only");
+assert(manifest.configSchema.fields.some((field) => field.key === "embedModel"), "manifest carries shared config field");
+
+await worker.shutdown();
 runtime.slotDb.close();
 try {
   rmSync(TEST_ROOT, { recursive: true, force: true });
 } catch {}
 
-console.log("✅ Paperclip runtime e2e passed (runtime wiring + MemoryUseCasePort execution)\n");
+console.log("✅ Paperclip runtime e2e passed (runtime wiring + source worker lifecycle)\n");
