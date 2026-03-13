@@ -81,6 +81,80 @@ export interface SlotListInput {
   prefix?: string;
 }
 
+export interface ProjectRegisterInput {
+  project_id?: string;
+  project_name?: string;
+  project_alias: string;
+  repo_root?: string;
+  repo_remote?: string;
+  active_version?: string;
+  allow_alias_update?: boolean;
+}
+
+export interface ProjectRecord {
+  project_id: string;
+  scope_user_id: string;
+  scope_agent_id: string;
+  project_name: string;
+  repo_root: string | null;
+  repo_remote_primary: string | null;
+  active_version: string | null;
+  lifecycle_status: "active" | "archived";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectAliasRecord {
+  id: string;
+  project_id: string;
+  scope_user_id: string;
+  scope_agent_id: string;
+  project_alias: string;
+  is_primary: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectTrackerMappingInput {
+  project_id: string;
+  tracker_type: "jira" | "github" | "other";
+  tracker_space_key?: string;
+  tracker_project_id?: string;
+  default_epic_key?: string;
+  board_key?: string;
+  active_version?: string;
+  external_project_url?: string;
+}
+
+export interface ProjectTrackerMappingRecord {
+  id: string;
+  project_id: string;
+  scope_user_id: string;
+  scope_agent_id: string;
+  tracker_type: "jira" | "github" | "other";
+  tracker_space_key: string | null;
+  tracker_project_id: string | null;
+  default_epic_key: string | null;
+  board_key: string | null;
+  active_version: string | null;
+  external_project_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectRegistrationStateRecord {
+  project_id: string;
+  scope_user_id: string;
+  scope_agent_id: string;
+  registration_status: "draft" | "registered" | "validated" | "blocked";
+  validation_status: "pending" | "ok" | "warn" | "error";
+  validation_notes: string | null;
+  completeness_score: number;
+  missing_required_fields: string[];
+  last_validated_at: string | null;
+  updated_at: string;
+}
+
 // ============================================================================
 // SlotDB Class
 // ============================================================================
@@ -152,6 +226,222 @@ export class SlotDB {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_slots_updated
         ON slots(updated_at DESC)
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS projects (
+        project_id TEXT NOT NULL,
+        scope_user_id TEXT NOT NULL DEFAULT '',
+        scope_agent_id TEXT NOT NULL DEFAULT '',
+        project_name TEXT NOT NULL,
+        repo_root TEXT,
+        repo_remote_primary TEXT,
+        active_version TEXT,
+        lifecycle_status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (scope_user_id, scope_agent_id, project_id)
+      )
+    `);
+
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_scope_repo_root
+      ON projects(scope_user_id, scope_agent_id, repo_root)
+      WHERE repo_root IS NOT NULL AND repo_root != ''
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS project_aliases (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        scope_user_id TEXT NOT NULL DEFAULT '',
+        scope_agent_id TEXT NOT NULL DEFAULT '',
+        project_alias TEXT NOT NULL,
+        is_primary INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(scope_user_id, scope_agent_id, project_alias)
+      )
+    `);
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_project_aliases_project
+      ON project_aliases(scope_user_id, scope_agent_id, project_id)
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS project_tracker_mappings (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        scope_user_id TEXT NOT NULL DEFAULT '',
+        scope_agent_id TEXT NOT NULL DEFAULT '',
+        tracker_type TEXT NOT NULL,
+        tracker_space_key TEXT,
+        tracker_project_id TEXT,
+        default_epic_key TEXT,
+        board_key TEXT,
+        active_version TEXT,
+        external_project_url TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(scope_user_id, scope_agent_id, project_id, tracker_type)
+      )
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS project_registration_state (
+        project_id TEXT NOT NULL,
+        scope_user_id TEXT NOT NULL DEFAULT '',
+        scope_agent_id TEXT NOT NULL DEFAULT '',
+        registration_status TEXT NOT NULL,
+        validation_status TEXT NOT NULL,
+        validation_notes TEXT,
+        completeness_score INTEGER NOT NULL DEFAULT 0,
+        missing_required_fields TEXT,
+        last_validated_at TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (scope_user_id, scope_agent_id, project_id)
+      )
+    `);
+
+    // ASM-76 (v5.1) bootstrap: metadata/control plane schema for ingest & reindex lifecycle.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS index_runs (
+        run_id TEXT NOT NULL,
+        scope_user_id TEXT NOT NULL DEFAULT '',
+        scope_agent_id TEXT NOT NULL DEFAULT '',
+        project_id TEXT NOT NULL,
+        index_profile TEXT NOT NULL,
+        trigger_type TEXT NOT NULL,
+        state TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        error_message TEXT,
+        PRIMARY KEY (scope_user_id, scope_agent_id, run_id)
+      )
+    `);
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_index_runs_project_state
+      ON index_runs(scope_user_id, scope_agent_id, project_id, state, started_at)
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS file_index_state (
+        file_id TEXT NOT NULL,
+        scope_user_id TEXT NOT NULL DEFAULT '',
+        scope_agent_id TEXT NOT NULL DEFAULT '',
+        project_id TEXT NOT NULL,
+        relative_path TEXT NOT NULL,
+        module TEXT,
+        language TEXT,
+        checksum TEXT NOT NULL,
+        last_commit_sha TEXT,
+        index_state TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        tombstone_at TEXT,
+        indexed_at TEXT,
+        PRIMARY KEY (scope_user_id, scope_agent_id, file_id),
+        UNIQUE(scope_user_id, scope_agent_id, project_id, relative_path)
+      )
+    `);
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_file_state_project_path
+      ON file_index_state(scope_user_id, scope_agent_id, project_id, relative_path)
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS chunk_registry (
+        chunk_id TEXT NOT NULL,
+        scope_user_id TEXT NOT NULL DEFAULT '',
+        scope_agent_id TEXT NOT NULL DEFAULT '',
+        project_id TEXT NOT NULL,
+        file_id TEXT,
+        relative_path TEXT,
+        chunk_kind TEXT NOT NULL,
+        symbol_id TEXT,
+        task_id TEXT,
+        checksum TEXT NOT NULL,
+        qdrant_point_id TEXT,
+        index_state TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        tombstone_at TEXT,
+        indexed_at TEXT,
+        PRIMARY KEY (scope_user_id, scope_agent_id, chunk_id)
+      )
+    `);
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_chunk_project_state
+      ON chunk_registry(scope_user_id, scope_agent_id, project_id, index_state, active)
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS symbol_registry (
+        symbol_id TEXT NOT NULL,
+        scope_user_id TEXT NOT NULL DEFAULT '',
+        scope_agent_id TEXT NOT NULL DEFAULT '',
+        project_id TEXT NOT NULL,
+        relative_path TEXT NOT NULL,
+        module TEXT,
+        language TEXT NOT NULL,
+        symbol_name TEXT NOT NULL,
+        symbol_fqn TEXT NOT NULL,
+        symbol_kind TEXT NOT NULL,
+        signature_hash TEXT,
+        index_state TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        tombstone_at TEXT,
+        indexed_at TEXT,
+        PRIMARY KEY (scope_user_id, scope_agent_id, symbol_id)
+      )
+    `);
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_symbol_project_module_name
+      ON symbol_registry(scope_user_id, scope_agent_id, project_id, module, symbol_name)
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS task_registry (
+        task_id TEXT NOT NULL,
+        scope_user_id TEXT NOT NULL DEFAULT '',
+        scope_agent_id TEXT NOT NULL DEFAULT '',
+        project_id TEXT NOT NULL,
+        task_title TEXT NOT NULL,
+        task_type TEXT,
+        task_status TEXT,
+        parent_task_id TEXT,
+        related_task_ids TEXT,
+        files_touched TEXT,
+        symbols_touched TEXT,
+        commit_refs TEXT,
+        diff_refs TEXT,
+        decision_notes TEXT,
+        tracker_issue_key TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (scope_user_id, scope_agent_id, task_id)
+      )
+    `);
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_task_project_parent
+      ON task_registry(scope_user_id, scope_agent_id, project_id, parent_task_id)
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS migration_state (
+        migration_id TEXT NOT NULL,
+        scope_user_id TEXT NOT NULL DEFAULT '',
+        scope_agent_id TEXT NOT NULL DEFAULT '',
+        schema_from TEXT NOT NULL,
+        schema_to TEXT NOT NULL,
+        applied_at TEXT NOT NULL,
+        status TEXT NOT NULL,
+        notes TEXT,
+        PRIMARY KEY (scope_user_id, scope_agent_id, migration_id)
+      )
     `);
   }
 
@@ -381,9 +671,433 @@ export class SlotDB {
     return result.cnt;
   }
 
+  registerProject(scopeUserId: string, scopeAgentId: string, input: ProjectRegisterInput): {
+    project: ProjectRecord;
+    alias: ProjectAliasRecord;
+    registration: ProjectRegistrationStateRecord;
+  } {
+    const projectAlias = this.normalizeProjectAlias(input.project_alias);
+    if (!projectAlias) {
+      throw new Error("project_alias is required");
+    }
+
+    const now = new Date().toISOString();
+    const projectId = this.normalizeProjectId(input.project_id) || randomUUID();
+    const projectName = this.normalizeProjectName(input.project_name) || projectAlias;
+    const normalizedRepoRoot = this.normalizeRepoRoot(input.repo_root);
+    const normalizedRepoRemote = this.normalizeRepoRemote(input.repo_remote);
+
+    const existingAlias = this.getProjectByAlias(scopeUserId, scopeAgentId, projectAlias);
+    if (existingAlias && existingAlias.project.project_id !== projectId && !input.allow_alias_update) {
+      throw new Error(`project_alias \"${projectAlias}\" is already mapped to another project_id`);
+    }
+
+    const existing = this.getProjectById(scopeUserId, scopeAgentId, projectId);
+    if (existing) {
+      const updateProject = this.db.prepare(
+        `UPDATE projects
+         SET project_name = ?, repo_root = ?, repo_remote_primary = ?, active_version = ?, updated_at = ?
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+      );
+      updateProject.run(
+        projectName || existing.project_name,
+        normalizedRepoRoot ?? existing.repo_root,
+        normalizedRepoRemote ?? existing.repo_remote_primary,
+        input.active_version ?? existing.active_version,
+        now,
+        scopeUserId,
+        scopeAgentId,
+        projectId,
+      );
+    } else {
+      const insertProject = this.db.prepare(
+        `INSERT INTO projects (
+          project_id, scope_user_id, scope_agent_id, project_name, repo_root, repo_remote_primary, active_version, lifecycle_status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+      );
+      insertProject.run(
+        projectId,
+        scopeUserId,
+        scopeAgentId,
+        projectName,
+        normalizedRepoRoot,
+        normalizedRepoRemote,
+        input.active_version || null,
+        now,
+        now,
+      );
+    }
+
+    this.upsertProjectAlias(scopeUserId, scopeAgentId, projectId, projectAlias, true, now, input.allow_alias_update === true);
+
+    const project = this.getProjectById(scopeUserId, scopeAgentId, projectId);
+    if (!project) throw new Error("failed to persist project registry record");
+
+    const registration = this.upsertProjectRegistrationState(scopeUserId, scopeAgentId, {
+      project_id: projectId,
+      registration_status: "registered",
+      validation_status: "ok",
+      validation_notes: null,
+      completeness_score: this.computeRegistrationCompleteness(project, projectAlias),
+      missing_required_fields: this.computeMissingRegistrationFields(project, projectAlias),
+      last_validated_at: now,
+    });
+
+    const alias = this.getProjectAlias(scopeUserId, scopeAgentId, projectAlias);
+    if (!alias) throw new Error("failed to persist project alias");
+
+    return { project, alias, registration };
+  }
+
+  getProjectById(scopeUserId: string, scopeAgentId: string, projectId: string): ProjectRecord | null {
+    const stmt = this.db.prepare(
+      `SELECT * FROM projects WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+    );
+    const row = stmt.get(scopeUserId, scopeAgentId, projectId) as ProjectRecord | undefined;
+    return row || null;
+  }
+
+  getProjectAlias(scopeUserId: string, scopeAgentId: string, projectAlias: string): ProjectAliasRecord | null {
+    const normalizedAlias = this.normalizeProjectAlias(projectAlias);
+    const stmt = this.db.prepare(
+      `SELECT * FROM project_aliases WHERE scope_user_id = ? AND scope_agent_id = ? AND project_alias = ?`,
+    );
+    const row = stmt.get(scopeUserId, scopeAgentId, normalizedAlias) as ProjectAliasRecord | undefined;
+    return row || null;
+  }
+
+  getProjectByAlias(scopeUserId: string, scopeAgentId: string, projectAlias: string): {
+    project: ProjectRecord;
+    alias: ProjectAliasRecord;
+  } | null {
+    const normalizedAlias = this.normalizeProjectAlias(projectAlias);
+    const stmt = this.db.prepare(
+      `SELECT p.project_id, p.scope_user_id, p.scope_agent_id, p.project_name, p.repo_root, p.repo_remote_primary,
+              p.active_version, p.lifecycle_status, p.created_at, p.updated_at,
+              a.id as alias_id, a.project_alias, a.is_primary, a.created_at as alias_created_at, a.updated_at as alias_updated_at
+       FROM project_aliases a
+       JOIN projects p ON p.project_id = a.project_id
+         AND p.scope_user_id = a.scope_user_id
+         AND p.scope_agent_id = a.scope_agent_id
+       WHERE a.scope_user_id = ? AND a.scope_agent_id = ? AND a.project_alias = ?`,
+    );
+    const row = stmt.get(scopeUserId, scopeAgentId, normalizedAlias) as Record<string, unknown> | undefined;
+    if (!row) return null;
+
+    return {
+      project: {
+        project_id: String(row.project_id),
+        scope_user_id: String(row.scope_user_id),
+        scope_agent_id: String(row.scope_agent_id),
+        project_name: String(row.project_name),
+        repo_root: row.repo_root ? String(row.repo_root) : null,
+        repo_remote_primary: row.repo_remote_primary ? String(row.repo_remote_primary) : null,
+        active_version: row.active_version ? String(row.active_version) : null,
+        lifecycle_status: (String(row.lifecycle_status) as "active" | "archived"),
+        created_at: String(row.created_at),
+        updated_at: String(row.updated_at),
+      },
+      alias: {
+        id: String(row.alias_id),
+        project_id: String(row.project_id),
+        scope_user_id: String(row.scope_user_id),
+        scope_agent_id: String(row.scope_agent_id),
+        project_alias: String(row.project_alias),
+        is_primary: Number(row.is_primary),
+        created_at: String(row.alias_created_at),
+        updated_at: String(row.alias_updated_at),
+      },
+    };
+  }
+
+  listProjects(scopeUserId: string, scopeAgentId: string): Array<{
+    project: ProjectRecord;
+    aliases: ProjectAliasRecord[];
+    registration: ProjectRegistrationStateRecord | null;
+  }> {
+    const projectsStmt = this.db.prepare(
+      `SELECT * FROM projects WHERE scope_user_id = ? AND scope_agent_id = ? ORDER BY updated_at DESC`,
+    );
+    const projects = projectsStmt.all(scopeUserId, scopeAgentId) as unknown as ProjectRecord[];
+
+    const aliasesStmt = this.db.prepare(
+      `SELECT * FROM project_aliases WHERE scope_user_id = ? AND scope_agent_id = ? ORDER BY is_primary DESC, project_alias ASC`,
+    );
+    const aliases = aliasesStmt.all(scopeUserId, scopeAgentId) as unknown as ProjectAliasRecord[];
+
+    const aliasesByProject = new Map<string, ProjectAliasRecord[]>();
+    for (const alias of aliases) {
+      const list = aliasesByProject.get(alias.project_id) || [];
+      list.push(alias);
+      aliasesByProject.set(alias.project_id, list);
+    }
+
+    return projects.map((project) => ({
+      project,
+      aliases: aliasesByProject.get(project.project_id) || [],
+      registration: this.getProjectRegistrationState(scopeUserId, scopeAgentId, project.project_id),
+    }));
+  }
+
+  setProjectTrackerMapping(scopeUserId: string, scopeAgentId: string, input: ProjectTrackerMappingInput): ProjectTrackerMappingRecord {
+    const now = new Date().toISOString();
+    const existing = this.getProjectTrackerMapping(scopeUserId, scopeAgentId, input.project_id, input.tracker_type);
+
+    if (existing) {
+      const stmt = this.db.prepare(
+        `UPDATE project_tracker_mappings
+         SET tracker_space_key = ?, tracker_project_id = ?, default_epic_key = ?, board_key = ?,
+             active_version = ?, external_project_url = ?, updated_at = ?
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND tracker_type = ?`,
+      );
+      stmt.run(
+        input.tracker_space_key || null,
+        input.tracker_project_id || null,
+        input.default_epic_key || null,
+        input.board_key || null,
+        input.active_version || null,
+        input.external_project_url || null,
+        now,
+        scopeUserId,
+        scopeAgentId,
+        input.project_id,
+        input.tracker_type,
+      );
+    } else {
+      const stmt = this.db.prepare(
+        `INSERT INTO project_tracker_mappings (
+          id, project_id, scope_user_id, scope_agent_id, tracker_type, tracker_space_key, tracker_project_id,
+          default_epic_key, board_key, active_version, external_project_url, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      stmt.run(
+        randomUUID(),
+        input.project_id,
+        scopeUserId,
+        scopeAgentId,
+        input.tracker_type,
+        input.tracker_space_key || null,
+        input.tracker_project_id || null,
+        input.default_epic_key || null,
+        input.board_key || null,
+        input.active_version || null,
+        input.external_project_url || null,
+        now,
+        now,
+      );
+    }
+
+    const mapping = this.getProjectTrackerMapping(scopeUserId, scopeAgentId, input.project_id, input.tracker_type);
+    if (!mapping) throw new Error("failed to persist project tracker mapping");
+    return mapping;
+  }
+
+  getProjectTrackerMapping(
+    scopeUserId: string,
+    scopeAgentId: string,
+    projectId: string,
+    trackerType: "jira" | "github" | "other",
+  ): ProjectTrackerMappingRecord | null {
+    const stmt = this.db.prepare(
+      `SELECT * FROM project_tracker_mappings WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND tracker_type = ?`,
+    );
+    const row = stmt.get(scopeUserId, scopeAgentId, projectId, trackerType) as ProjectTrackerMappingRecord | undefined;
+    return row || null;
+  }
+
+  getProjectRegistrationState(scopeUserId: string, scopeAgentId: string, projectId: string): ProjectRegistrationStateRecord | null {
+    const stmt = this.db.prepare(
+      `SELECT * FROM project_registration_state WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+    );
+    const row = stmt.get(scopeUserId, scopeAgentId, projectId) as {
+      project_id: string;
+      scope_user_id: string;
+      scope_agent_id: string;
+      registration_status: "draft" | "registered" | "validated" | "blocked";
+      validation_status: "pending" | "ok" | "warn" | "error";
+      validation_notes: string | null;
+      completeness_score: number;
+      missing_required_fields: string | null;
+      last_validated_at: string | null;
+      updated_at: string;
+    } | undefined;
+    if (!row) return null;
+    return {
+      project_id: row.project_id,
+      scope_user_id: row.scope_user_id,
+      scope_agent_id: row.scope_agent_id,
+      registration_status: row.registration_status,
+      validation_status: row.validation_status,
+      validation_notes: row.validation_notes,
+      completeness_score: row.completeness_score,
+      missing_required_fields: this.parseJsonArrayField(row.missing_required_fields),
+      last_validated_at: row.last_validated_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  updateProjectRegistrationState(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: {
+      project_id: string;
+      registration_status: "draft" | "registered" | "validated" | "blocked";
+      validation_status: "pending" | "ok" | "warn" | "error";
+      validation_notes?: string | null;
+      completeness_score: number;
+      missing_required_fields: string[];
+      last_validated_at?: string | null;
+    },
+  ): ProjectRegistrationStateRecord {
+    return this.upsertProjectRegistrationState(scopeUserId, scopeAgentId, {
+      ...input,
+      validation_notes: input.validation_notes ?? null,
+      last_validated_at: input.last_validated_at ?? new Date().toISOString(),
+    });
+  }
+
   // --------------------------------------------------------------------------
   // Helpers
   // --------------------------------------------------------------------------
+
+  private normalizeProjectAlias(alias: string | undefined): string {
+    return String(alias || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "-")
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+  }
+
+  private normalizeProjectId(projectId?: string): string {
+    return String(projectId || "").trim();
+  }
+
+  private normalizeProjectName(projectName?: string): string {
+    return String(projectName || "").trim();
+  }
+
+  private normalizeRepoRoot(repoRoot?: string): string | null {
+    const normalized = String(repoRoot || "").trim();
+    return normalized || null;
+  }
+
+  private normalizeRepoRemote(repoRemote?: string): string | null {
+    const normalized = String(repoRemote || "").trim();
+    return normalized || null;
+  }
+
+  private parseJsonArrayField(raw: string | null | undefined): string[] {
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.map((item) => String(item)) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private computeMissingRegistrationFields(project: ProjectRecord, alias: string): string[] {
+    const missing: string[] = [];
+    if (!project.project_id) missing.push("project_id");
+    if (!alias) missing.push("project_alias");
+    if (!project.project_name) missing.push("project_name");
+    return missing;
+  }
+
+  private computeRegistrationCompleteness(project: ProjectRecord, alias: string): number {
+    const requiredTotal = 3;
+    const requiredPresent = [project.project_id, alias, project.project_name].filter(Boolean).length;
+    const optionalTotal = 3;
+    const optionalPresent = [project.repo_root, project.repo_remote_primary, project.active_version].filter(Boolean).length;
+    return Math.round((requiredPresent / requiredTotal) * 80 + (optionalPresent / optionalTotal) * 20);
+  }
+
+  private upsertProjectAlias(
+    scopeUserId: string,
+    scopeAgentId: string,
+    projectId: string,
+    projectAlias: string,
+    isPrimary: boolean,
+    now: string,
+    allowAliasUpdate: boolean,
+  ): void {
+    const existingAlias = this.getProjectAlias(scopeUserId, scopeAgentId, projectAlias);
+    if (existingAlias) {
+      if (existingAlias.project_id !== projectId && !allowAliasUpdate) {
+        throw new Error(`project_alias \"${projectAlias}\" is already mapped to another project_id`);
+      }
+      const stmt = this.db.prepare(`UPDATE project_aliases SET project_id = ?, is_primary = ?, updated_at = ? WHERE id = ?`);
+      stmt.run(projectId, isPrimary ? 1 : 0, now, existingAlias.id);
+      return;
+    }
+
+    const insertStmt = this.db.prepare(
+      `INSERT INTO project_aliases (id, project_id, scope_user_id, scope_agent_id, project_alias, is_primary, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertStmt.run(randomUUID(), projectId, scopeUserId, scopeAgentId, projectAlias, isPrimary ? 1 : 0, now, now);
+  }
+
+  private upsertProjectRegistrationState(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: {
+      project_id: string;
+      registration_status: "draft" | "registered" | "validated" | "blocked";
+      validation_status: "pending" | "ok" | "warn" | "error";
+      validation_notes: string | null;
+      completeness_score: number;
+      missing_required_fields: string[];
+      last_validated_at: string | null;
+    },
+  ): ProjectRegistrationStateRecord {
+    const now = new Date().toISOString();
+    const existing = this.getProjectRegistrationState(scopeUserId, scopeAgentId, input.project_id);
+    const missingJson = JSON.stringify(input.missing_required_fields || []);
+
+    if (existing) {
+      const stmt = this.db.prepare(
+        `UPDATE project_registration_state
+         SET registration_status = ?, validation_status = ?, validation_notes = ?, completeness_score = ?, missing_required_fields = ?, last_validated_at = ?, updated_at = ?
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+      );
+      stmt.run(
+        input.registration_status,
+        input.validation_status,
+        input.validation_notes,
+        input.completeness_score,
+        missingJson,
+        input.last_validated_at,
+        now,
+        scopeUserId,
+        scopeAgentId,
+        input.project_id,
+      );
+    } else {
+      const stmt = this.db.prepare(
+        `INSERT INTO project_registration_state (project_id, scope_user_id, scope_agent_id, registration_status, validation_status, validation_notes, completeness_score, missing_required_fields, last_validated_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      stmt.run(
+        input.project_id,
+        scopeUserId,
+        scopeAgentId,
+        input.registration_status,
+        input.validation_status,
+        input.validation_notes,
+        input.completeness_score,
+        missingJson,
+        input.last_validated_at,
+        now,
+      );
+    }
+
+    const state = this.getProjectRegistrationState(scopeUserId, scopeAgentId, input.project_id);
+    if (!state) throw new Error("failed to persist project_registration_state");
+    return state;
+  }
 
   private rowToSlot(row: SlotRow): Slot {
     let parsedValue: unknown;

@@ -1,0 +1,151 @@
+import { join } from "node:path";
+import { rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+
+import { SlotDB } from "../src/db/slot-db.js";
+import { DefaultMemoryUseCasePort } from "../src/core/usecases/default-memory-usecase-port.js";
+
+const TEST_DIR = join(tmpdir(), `agent-memo-project-registry-test-${Date.now()}`);
+
+function assert(condition: boolean, message: string): void {
+  if (!condition) {
+    throw new Error(`ASSERTION FAILED: ${message}`);
+  }
+}
+
+function assertEqual(actual: unknown, expected: unknown, message: string): void {
+  const a = JSON.stringify(actual);
+  const e = JSON.stringify(expected);
+  if (a !== e) {
+    throw new Error(`ASSERTION FAILED: ${message}\n  actual:   ${a}\n  expected: ${e}`);
+  }
+}
+
+let passed = 0;
+let failed = 0;
+
+function test(name: string, fn: () => void | Promise<void>): Promise<void> {
+  return Promise.resolve()
+    .then(fn)
+    .then(() => {
+      console.log(`  ✅ ${name}`);
+      passed++;
+    })
+    .catch((error) => {
+      console.log(`  ❌ ${name}`);
+      console.log(`     ${error instanceof Error ? error.message : String(error)}`);
+      failed++;
+    });
+}
+
+async function main() {
+  console.log("\n🧪 Project Registry Tests (ASM-75)\n");
+
+  const db = new SlotDB(TEST_DIR);
+  const usecase = new DefaultMemoryUseCasePort(db);
+
+  const ctx = {
+    context: { userId: "telegram:dm:5165741309", agentId: "assistant" },
+    meta: { source: "test" as const },
+  };
+
+  await test("project.register creates project + alias + registration state", async () => {
+    const result = await usecase.run<any, any>("project.register", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo",
+        project_name: "Agent Smart Memo",
+        repo_root: "/Users/mrcagents/Work/projects/agent-smart-memo",
+        repo_remote: "git@github.com:cong91/agent-smart-memo.git",
+        active_version: "5.1",
+      },
+    });
+
+    assert(Boolean(result.project.project_id), "project_id should be generated");
+    assertEqual(result.alias.project_alias, "agent-smart-memo", "alias should be normalized");
+    assertEqual(result.registration.registration_status, "registered", "registration_status should be registered");
+    assertEqual(result.registration.validation_status, "ok", "validation_status should be ok");
+    assert(result.registration.completeness_score >= 80, "completeness should be high");
+  });
+
+  await test("project.get by alias returns project and registration", async () => {
+    const result = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo",
+      },
+    });
+
+    assert(Boolean(result.project.project_id), "should return project_id");
+    assertEqual(result.alias.project_alias, "agent-smart-memo", "alias should match");
+    assertEqual(result.registration.validation_status, "ok", "registration state should be returned");
+  });
+
+  await test("project.set_tracker_mapping upserts Jira mapping", async () => {
+    const current = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_alias: "agent-smart-memo" },
+    });
+
+    const mapping = await usecase.run<any, any>("project.set_tracker_mapping", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        tracker_type: "jira",
+        tracker_space_key: "ASM",
+        default_epic_key: "ASM-69",
+        active_version: "5.1",
+      },
+    });
+
+    assertEqual(mapping.tracker_type, "jira", "tracker type should be jira");
+    assertEqual(mapping.tracker_space_key, "ASM", "space key should be ASM");
+    assertEqual(mapping.default_epic_key, "ASM-69", "default epic should persist");
+  });
+
+  await test("project.set_registration_state updates lifecycle validation state", async () => {
+    const current = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_alias: "agent-smart-memo" },
+    });
+
+    const state = await usecase.run<any, any>("project.set_registration_state", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        registration_status: "validated",
+        validation_status: "ok",
+        validation_notes: "registry validated by asm-75 tests",
+        completeness_score: 96,
+        missing_required_fields: [],
+      },
+    });
+
+    assertEqual(state.registration_status, "validated", "registration state should become validated");
+    assertEqual(state.completeness_score, 96, "completeness score should be updated");
+  });
+
+  await test("project.list returns registry entries", async () => {
+    const rows = await usecase.run<any, any[]>("project.list", {
+      ...ctx,
+      payload: {},
+    });
+
+    assert(rows.length >= 1, "project list should not be empty");
+    assertEqual(rows[0].aliases[0].project_alias, "agent-smart-memo", "primary alias should be present");
+  });
+
+  db.close();
+  rmSync(TEST_DIR, { recursive: true, force: true });
+
+  console.log(`\n📊 Results: ${passed} passed, ${failed} failed out of ${passed + failed} tests\n`);
+  if (failed > 0) {
+    process.exit(1);
+  }
+  console.log("🎉 All tests passed!\n");
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
