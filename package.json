@@ -34,7 +34,8 @@
     "clean": "rm -rf dist dist-openclaw dist-paperclip dist-core artifacts/npm",
     "migrate:namespaces": "npx tsx scripts/migrate-namespaces.ts",
     "distill:namespaces": "npx tsx scripts/distill-by-namespace.ts",
-    "validate:ab": "npx tsx scripts/validate-ab.ts"
+    "validate:ab": "npx tsx scripts/validate-ab.ts",
+    "init-openclaw": "node scripts/init-openclaw.mjs"
   },
   "dependencies": {
     "dotenv": "^17.3.1"
