@@ -602,6 +602,54 @@ export function registerProjectTools(
   });
 
   api.registerTool({
+    name: "project_legacy_backfill",
+    label: "Project Legacy Backfill",
+    description:
+      "Run legacy compatibility migration/backfill for indexed-but-unregistered projects: alias/tracker inference, registration state normalization, migration_state upsert.",
+    parameters: {
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["dry_run", "apply"] },
+        only_project_ids: { type: "array", items: { type: "string" } },
+        only_aliases: { type: "array", items: { type: "string" } },
+        force_registration_state: { type: "boolean" },
+        source: { type: "string", enum: ["repo_root", "repo_remote", "task_registry", "mixed"] },
+      },
+    },
+    async execute(
+      _id: string,
+      params: {
+        mode?: "dry_run" | "apply";
+        only_project_ids?: string[];
+        only_aliases?: string[];
+        force_registration_state?: boolean;
+        source?: "repo_root" | "repo_remote" | "task_registry" | "mixed";
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.legacy_backfill", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_legacy_backfill",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
     name: "project_task_registry_upsert",
     label: "Project Task Registry Upsert",
     description:

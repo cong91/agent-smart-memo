@@ -38,6 +38,7 @@ export type MemoryUseCaseName =
   | "project.task_registry_upsert"
   | "project.task_lineage_context"
   | "project.hybrid_search"
+  | "project.legacy_backfill"
   | "memory.capture"
   | "memory.search"
   | "graph.entity.get"
