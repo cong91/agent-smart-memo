@@ -1210,17 +1210,13 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
         .map((line) => line.trim())
         .filter(Boolean);
 
-      const supplemental = ["distill-cron.sh", "re-embed-all.sh", "snapshots/last-distill.json"]
-        .filter((rel) => existsSync(resolve(repoRoot, rel)));
-      const merged = Array.from(new Set([...paths, ...supplemental]));
-
-      return merged
+      return paths
         .filter((p) => !p.startsWith(".git/"))
         .map((relativePath) => {
           const ext = relativePath.includes(".") ? relativePath.split(".").pop() || "" : "";
           return {
             relative_path: relativePath,
-            checksum: `${paths.includes(relativePath) ? "git" : "fs"}:${relativePath}`,
+            checksum: `git:${relativePath}`,
             module: relativePath.split("/")[0] || undefined,
             language: ext || undefined,
           };
