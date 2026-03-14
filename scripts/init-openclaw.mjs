@@ -228,6 +228,13 @@ export function validateAnswers(answers) {
 
   if (!String(answers.slotDbDir || "").trim()) errors.push("slotDbDir is required");
 
+  const projectWorkspaceRoot = String(
+    answers.projectWorkspaceRoot || answers.repoCloneRoot || "",
+  ).trim();
+  if (!projectWorkspaceRoot) {
+    errors.push("projectWorkspaceRoot (or repoCloneRoot) is required");
+  }
+
   const onboardingCommands = Array.isArray(answers.telegramOnboardingCommands)
     ? answers.telegramOnboardingCommands
     : [];
@@ -268,6 +275,8 @@ export function buildPatchedConfig(existingConfig, answers, mapMemorySlot = true
       embedModel: answers.embedModel,
       embedDimensions: answers.embedDimensions,
       slotDbDir: answers.slotDbDir,
+      projectWorkspaceRoot: answers.projectWorkspaceRoot,
+      repoCloneRoot: answers.repoCloneRoot,
     },
   };
 
@@ -404,6 +413,8 @@ export function buildSetupSummary(currentConfig, answers, nextConfig) {
     "embedModel",
     "embedDimensions",
     "slotDbDir",
+    "projectWorkspaceRoot",
+    "repoCloneRoot",
   ];
 
   for (const key of managedConfigKeys) {
@@ -557,6 +568,8 @@ async function promptWizard(defaults) {
     const embedDimensions = toIntOrDefault(await ask("Embedding dimensions", String(defaults.embedDimensions)), defaults.embedDimensions);
 
     const slotDbDir = await ask("slotDbDir", defaults.slotDbDir);
+    const projectWorkspaceRoot = await ask("projectWorkspaceRoot", defaults.projectWorkspaceRoot);
+    const repoCloneRoot = await ask("repoCloneRoot", defaults.repoCloneRoot || projectWorkspaceRoot);
 
     const mapMemorySlotRaw = await ask("Map plugins.slots.memory = agent-smart-memo? (y/n)", defaults.mapMemorySlot ? "y" : "n");
     const mapMemorySlot = yesNoNormalize(mapMemorySlotRaw, defaults.mapMemorySlot);
@@ -582,6 +595,8 @@ async function promptWizard(defaults) {
       embedModel,
       embedDimensions,
       slotDbDir,
+      projectWorkspaceRoot,
+      repoCloneRoot,
       mapMemorySlot,
       telegramOnboardingCommands,
     };
@@ -606,6 +621,22 @@ export async function runInitOpenClaw({ env = process.env, interactive = true, a
     embedModel: String(pluginCfg.embedModel || "qwen3-embedding:0.6b"),
     embedDimensions: toIntOrDefault(pluginCfg.embedDimensions, 1024),
     slotDbDir: String(pluginCfg.slotDbDir || env.OPENCLAW_SLOTDB_DIR || `${env.HOME}/.openclaw/agent-memo`),
+    projectWorkspaceRoot: String(
+      pluginCfg.projectWorkspaceRoot ||
+        pluginCfg.repoCloneRoot ||
+        env.AGENT_MEMO_PROJECT_WORKSPACE_ROOT ||
+        env.AGENT_MEMO_REPO_CLONE_ROOT ||
+        `${env.HOME}/Work/projects` ||
+        `${env.HOME}/.openclaw/workspace/projects`,
+    ),
+    repoCloneRoot: String(
+      pluginCfg.repoCloneRoot ||
+        pluginCfg.projectWorkspaceRoot ||
+        env.AGENT_MEMO_REPO_CLONE_ROOT ||
+        env.AGENT_MEMO_PROJECT_WORKSPACE_ROOT ||
+        `${env.HOME}/Work/projects` ||
+        `${env.HOME}/.openclaw/workspace/projects`,
+    ),
     mapMemorySlot: asObj(asObj(current.plugins).slots).memory === PLUGIN_ID,
     telegramOnboardingCommands: dedupeStringArray([
       "project",

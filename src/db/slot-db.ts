@@ -1559,6 +1559,23 @@ export class SlotDB {
 
     const limit = Math.min(Math.max(Number(input.limit || 10), 1), 50);
     const queryLc = query.toLowerCase();
+    const queryTokens = Array.from(new Set(queryLc.split(/[^a-z0-9._/-]+/i).map((t) => t.trim()).filter(Boolean)));
+    const tokenScore = (text: string): number => {
+      if (!queryTokens.length) return 0;
+      const hay = text.toLowerCase();
+      const words = Array.from(new Set(hay.split(/[^a-z0-9]+/i).map((t) => t.trim()).filter(Boolean)));
+      let matched = 0;
+      for (const token of queryTokens) {
+        if (hay.includes(token)) {
+          matched += 1;
+          continue;
+        }
+        if (words.some((word) => word.startsWith(token) || token.startsWith(word))) {
+          matched += 0.8;
+        }
+      }
+      return matched / queryTokens.length;
+    };
     const taskContextInput = input.task_context;
 
     let lineageContext: ProjectTaskLineageContextResult | null = null;
@@ -1609,9 +1626,12 @@ export class SlotDB {
       const text = `${relativePath} ${moduleName || ""} ${language || ""}`.toLowerCase();
       let score = 0;
       if (text.includes(queryLc)) score += 0.55;
+      score += tokenScore(text) * 0.45;
       if (lineageContext && lineageContext.touched_files.includes(relativePath)) score += 0.35;
       if (relativePath.includes("README") || relativePath.includes("docs/")) score += 0.05;
-      if (score <= 0) continue;
+      if (relativePath.includes("src/services/")) score += 0.08;
+      if (relativePath.endsWith('.service.ts')) score += 0.06;
+      if (score <= 0.12) continue;
 
       results.push({
         source: "file_index_state",
@@ -1647,9 +1667,10 @@ export class SlotDB {
       const text = `${symbolName} ${symbolFqn} ${relativePath} ${moduleName || ""} ${symbolKind}`.toLowerCase();
       let score = 0;
       if (text.includes(queryLc)) score += 0.62;
+      score += tokenScore(text) * 0.4;
       if (lineageContext && lineageContext.touched_symbols.includes(symbolName)) score += 0.3;
       if (lineageContext && lineageContext.touched_files.includes(relativePath)) score += 0.12;
-      if (score <= 0) continue;
+      if (score <= 0.15) continue;
 
       results.push({
         source: "symbol_registry",
@@ -1693,6 +1714,7 @@ export class SlotDB {
 
       let score = 0;
       if (text.includes(queryLc)) score += 0.58;
+      score += tokenScore(text) * 0.35;
       if (lexicalTaskIds.has(task.task_id)) score += 0.28;
       if (taskIssueKey && lexicalIssueKeys.has(taskIssueKey)) score += 0.28;
       if (lineageContext) {
@@ -1700,7 +1722,7 @@ export class SlotDB {
         if (lineageContext.parent_chain.some((t) => t.task_id === task.task_id)) score += 0.2;
         if (lineageContext.related_tasks.some((t) => t.task_id === task.task_id)) score += 0.2;
       }
-      if (score <= 0) continue;
+      if (score <= 0.15) continue;
 
       results.push({
         source: "task_registry",
