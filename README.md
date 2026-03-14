@@ -2,8 +2,7 @@
 
 > **ASM v5.1 super memory platform for OpenClaw agents** — unified memory for **conversation memory**, **project memory**, semantic retrieval, structured slots, graph knowledge, onboarding, and engineering context assembly.
 
-`agent-smart-memo` started as an OpenClaw memory plugin for conversation/runtime memory.
-After the **ASM-69 big update**, it should be understood as a broader **agent memory platform**:
+Originally built as an OpenClaw memory plugin for conversation/runtime memory, `agent-smart-memo` has evolved into a broader **agent memory platform**:
 
 - **conversation memory** for agent runtime continuity
 - **project memory** for repo-aware engineering context
@@ -50,7 +49,7 @@ That is why ASM now acts as:
 
 ---
 
-## 2) What ASM v5.1 adds after ASM-69 big update
+## 2) What ASM v5.1 provides today
 
 ASM-69 and follow-up waves expanded the system from memory-only into project-aware memory orchestration.
 
@@ -201,7 +200,7 @@ Artifact intent:
 
 ## 6) CLI / setup UX
 
-After ASM-84, the preferred setup path is the global CLI.
+The preferred setup path is the global CLI.
 
 ### Install globally
 ```bash
@@ -296,7 +295,7 @@ Add to `~/.openclaw/openclaw.json`:
 
 ---
 
-## 8) Project onboarding flow (ASM-84/85)
+## 8) Project onboarding flow
 
 For project-aware onboarding in OpenClaw/Telegram flows, the current slash command is:
 
