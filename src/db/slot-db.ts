@@ -89,6 +89,7 @@ export interface ProjectRegisterInput {
   repo_remote?: string;
   active_version?: string;
   allow_alias_update?: boolean;
+  reuse_existing_repo_root?: boolean;
 }
 
 export interface ProjectRecord {
@@ -885,7 +886,16 @@ export class SlotDB {
       throw new Error(`project_alias \"${projectAlias}\" is already mapped to another project_id`);
     }
 
-    const existing = this.getProjectById(scopeUserId, scopeAgentId, projectId);
+    let targetProjectId = projectId;
+    const existingByRepoRoot =
+      input.reuse_existing_repo_root && normalizedRepoRoot
+        ? this.findProjectByRepoRoot(scopeUserId, scopeAgentId, normalizedRepoRoot)
+        : null;
+    if (existingByRepoRoot) {
+      targetProjectId = existingByRepoRoot.project_id;
+    }
+
+    const existing = this.getProjectById(scopeUserId, scopeAgentId, targetProjectId);
     if (existing) {
       const updateProject = this.db.prepare(
         `UPDATE projects
@@ -900,7 +910,7 @@ export class SlotDB {
         now,
         scopeUserId,
         scopeAgentId,
-        projectId,
+        targetProjectId,
       );
     } else {
       const insertProject = this.db.prepare(
@@ -909,7 +919,7 @@ export class SlotDB {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
       );
       insertProject.run(
-        projectId,
+        targetProjectId,
         scopeUserId,
         scopeAgentId,
         projectName,
@@ -921,13 +931,13 @@ export class SlotDB {
       );
     }
 
-    this.upsertProjectAlias(scopeUserId, scopeAgentId, projectId, projectAlias, true, now, input.allow_alias_update === true);
+    this.upsertProjectAlias(scopeUserId, scopeAgentId, targetProjectId, projectAlias, true, now, input.allow_alias_update === true);
 
-    const project = this.getProjectById(scopeUserId, scopeAgentId, projectId);
+    const project = this.getProjectById(scopeUserId, scopeAgentId, targetProjectId);
     if (!project) throw new Error("failed to persist project registry record");
 
     const registration = this.upsertProjectRegistrationState(scopeUserId, scopeAgentId, {
-      project_id: projectId,
+      project_id: targetProjectId,
       registration_status: "registered",
       validation_status: "ok",
       validation_notes: null,
@@ -940,6 +950,16 @@ export class SlotDB {
     if (!alias) throw new Error("failed to persist project alias");
 
     return { project, alias, registration };
+  }
+
+  private findProjectByRepoRoot(scopeUserId: string, scopeAgentId: string, repoRoot: string): ProjectRecord | null {
+    const normalizedRepoRoot = this.normalizeRepoRoot(repoRoot);
+    if (!normalizedRepoRoot) return null;
+    const stmt = this.db.prepare(
+      `SELECT * FROM projects WHERE scope_user_id = ? AND scope_agent_id = ? AND repo_root = ? LIMIT 1`,
+    );
+    const row = stmt.get(scopeUserId, scopeAgentId, normalizedRepoRoot) as ProjectRecord | undefined;
+    return row || null;
   }
 
   getProjectById(scopeUserId: string, scopeAgentId: string, projectId: string): ProjectRecord | null {

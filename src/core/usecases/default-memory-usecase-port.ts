@@ -4,6 +4,9 @@ import type {
   MemoryUseCasePort,
 } from "../contracts/adapter-contracts.js";
 import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { SlotDB } from "../../db/slot-db.js";
 import type { SemanticMemoryUseCase } from "./semantic-memory-usecase.js";
 
@@ -108,6 +111,7 @@ interface ProjectRegisterCommandPayload {
   project_id?: string;
   repo_root?: string;
   repo_remote?: string;
+  repo_url?: string;
   active_version?: string;
   tracker?: {
     tracker_type: "jira" | "github" | "other";
@@ -161,6 +165,26 @@ interface ProjectTriggerIndexPayload {
   }>;
   source_rev?: string | null;
   index_profile?: string;
+}
+
+interface ResolvedRepoSelection {
+  repo_root?: string;
+  repo_remote?: string;
+  resolution:
+    | "explicit_repo_root"
+    | "cwd_git_root"
+    | "registered_remote_match"
+    | "cloned_from_repo_url"
+    | "imported_local_path"
+    | "repo_root_missing";
+  clone_policy?:
+    | "not_applicable"
+    | "reuse_existing_clone"
+    | "cloned_new"
+    | "cloned_to_conflict_suffix";
+  workspace_root?: string;
+  clone_target?: string;
+  notes: string[];
 }
 
 interface ProjectReindexDiffPayload {
@@ -240,6 +264,7 @@ interface ProjectTelegramOnboardingPayload {
   index_now?: boolean;
   project_name?: string;
   repo_root?: string;
+  project_workspace_root?: string;
   active_version?: string;
   mode?: "preview" | "confirm";
 }
@@ -288,6 +313,15 @@ function allScopeIdentities(ctx: { userId: string; agentId: string }): ScopeIden
     { userId: base.userId, agentId: "__team__", scope: "team" },
     { userId: "__public__", agentId: "__public__", scope: "public" },
   ];
+}
+
+function randomJobId(): string {
+  return `idxjob_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function shellEscape(value: string): string {
+  const input = String(value || "");
+  return `'${input.replace(/'/g, `'"'"'`)}'`;
 }
 
 export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
@@ -575,16 +609,30 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       throw new Error("project.register_command requires payload.project_alias");
     }
 
-    const resolvedRepoRoot = payload.repo_root || this.tryResolveRepoRootFromCwd();
+    const repoUrl = String(payload.repo_url || payload.repo_remote || "").trim() || undefined;
+    const workspaceRoot = this.resolveWorkspaceRoot(req);
+    const selection = this.resolveRepoForRegistration(
+      identity.userId,
+      identity.agentId,
+      {
+        explicitRepoRoot: payload.repo_root,
+        repoUrl,
+        workspaceRoot,
+      },
+    );
+
+    const resolvedRepoRoot = selection.repo_root;
+    const resolvedRepoRemote = payload.repo_remote || selection.repo_remote || repoUrl;
 
     const registered = this.slotDb.registerProject(identity.userId, identity.agentId, {
       project_id: payload.project_id,
       project_name: payload.project_name,
       project_alias: alias,
       repo_root: resolvedRepoRoot,
-      repo_remote: payload.repo_remote,
+      repo_remote: resolvedRepoRemote,
       active_version: payload.active_version,
       allow_alias_update: payload.options?.allow_alias_update,
+      reuse_existing_repo_root: selection.resolution === "registered_remote_match",
     });
 
     let trackerMapping: any = null;
@@ -608,9 +656,11 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
     const triggerRequested = payload.options?.trigger_index === true;
     let indexTrigger: any = {
       requested: triggerRequested,
+      accepted: false,
       enqueued: false,
       run_id: null,
-      note: triggerRequested ? "code_light: no paths provided for immediate diff indexing" : null,
+      job_id: null,
+      note: triggerRequested ? "index requested but not enqueued" : null,
     };
 
     if (triggerRequested) {
@@ -625,8 +675,10 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       );
       indexTrigger = {
         requested: true,
+        accepted: Boolean(triggerResult?.accepted),
         enqueued: Boolean(triggerResult?.enqueued),
         run_id: triggerResult?.run_id || null,
+        job_id: triggerResult?.job_id || null,
         note: triggerResult?.note || null,
       };
     }
@@ -638,6 +690,13 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       validation_status: registered.registration.validation_status,
       completeness_score: Number((registered.registration.completeness_score / 100).toFixed(2)),
       warnings: [],
+      repo_resolution: {
+        resolution: selection.resolution,
+        clone_policy: selection.clone_policy || "not_applicable",
+        workspace_root: selection.workspace_root || null,
+        clone_target: selection.clone_target || null,
+        notes: selection.notes,
+      },
       tracker_mapping: trackerMapping
         ? {
             tracker_type: trackerMapping.tracker_type,
@@ -696,40 +755,77 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
   private handleProjectTriggerIndex(payload: ProjectTriggerIndexPayload, req: CoreRequestEnvelope<unknown>) {
     const identity = normalizePrivateIdentity(req.context);
     const project = this.resolveProjectRef(identity.userId, identity.agentId, payload.project_ref);
+    const queuedAt = new Date().toISOString();
+    const jobId = randomJobId();
 
     const normalizedPaths = (payload.paths || []).filter((item) => String(item.relative_path || "").trim().length > 0);
-    if (normalizedPaths.length === 0) {
-      return {
-        project_id: project.project_id,
-        accepted: true,
-        enqueued: false,
-        run_id: null,
-        queued_at: new Date().toISOString(),
-        note: "code_light: trigger accepted but no concrete paths supplied",
-      };
-    }
 
-    const result = this.slotDb.reindexProjectByDiff(identity.userId, identity.agentId, {
-      project_id: project.project_id,
-      source_rev: payload.source_rev || null,
-      trigger_type: payload.mode || "bootstrap",
-      index_profile: payload.index_profile || "default",
+    this.scheduleProjectReindexJob({
+      scopeUserId: identity.userId,
+      scopeAgentId: identity.agentId,
+      projectId: project.project_id,
+      sourceRev: payload.source_rev || null,
+      triggerType: payload.mode || "bootstrap",
+      indexProfile: payload.index_profile || "default",
       paths: normalizedPaths,
+      jobId,
     });
 
     return {
       project_id: project.project_id,
       accepted: true,
       enqueued: true,
-      run_id: result.run_id,
-      queued_at: new Date().toISOString(),
+      detached: true,
+      run_id: null,
+      job_id: jobId,
+      queued_at: queuedAt,
       reason: payload.reason || "manual_trigger",
-      diff_summary: {
-        changed: result.changed.length,
-        unchanged: result.unchanged.length,
-        deleted: result.deleted.length,
-      },
+      path_count: normalizedPaths.length,
+      note:
+        normalizedPaths.length > 0
+          ? "index request accepted/enqueued in background mode"
+          : "index request accepted/enqueued in background mode; no concrete paths provided yet",
     };
+  }
+
+  private scheduleProjectReindexJob(input: {
+    scopeUserId: string;
+    scopeAgentId: string;
+    projectId: string;
+    sourceRev: string | null;
+    triggerType: "bootstrap" | "incremental" | "manual" | "repair";
+    indexProfile: string;
+    paths: Array<{
+      relative_path: string;
+      checksum?: string | null;
+      module?: string | null;
+      language?: string | null;
+    }>;
+    jobId: string;
+  }): void {
+    setTimeout(() => {
+      try {
+        let paths = input.paths;
+        if (paths.length === 0) {
+          const project = this.slotDb.getProjectById(input.scopeUserId, input.scopeAgentId, input.projectId);
+          if (project?.repo_root) {
+            paths = this.collectGitTrackedPaths(project.repo_root);
+          }
+        }
+
+        if (paths.length === 0) return;
+
+        this.slotDb.reindexProjectByDiff(input.scopeUserId, input.scopeAgentId, {
+          project_id: input.projectId,
+          source_rev: input.sourceRev,
+          trigger_type: input.triggerType,
+          index_profile: input.indexProfile,
+          paths,
+        });
+      } catch {
+        // Background-friendly fire-and-forget path: do not block foreground tool response.
+      }
+    }, 0);
   }
 
   private resolveProjectRef(
@@ -781,6 +877,379 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       return value || undefined;
     } catch {
       return undefined;
+    }
+  }
+
+  private resolveWorkspaceRoot(req: CoreRequestEnvelope<unknown>): string {
+    const candidates = [
+      process.env.AGENT_MEMO_PROJECT_WORKSPACE_ROOT,
+      process.env.AGENT_MEMO_REPO_CLONE_ROOT,
+      process.env.PROJECT_WORKSPACE_ROOT,
+      process.env.REPO_CLONE_ROOT,
+      (req?.meta as any)?.projectWorkspaceRoot,
+      (req?.meta as any)?.repoCloneRoot,
+      (req?.context?.metadata as any)?.projectWorkspaceRoot,
+      (req?.context?.metadata as any)?.repoCloneRoot,
+      (req?.context?.metadata as any)?.workspaceRoot,
+    ];
+
+    for (const raw of candidates) {
+      const value = String(raw || "").trim();
+      if (!value) continue;
+      const resolved = isAbsolute(value) ? resolve(value) : resolve(process.cwd(), value);
+      try {
+        mkdirSync(resolved, { recursive: true });
+      } catch {
+        // ignore and fallback
+      }
+      if (existsSync(resolved)) return resolved;
+    }
+
+    const fallback = resolve(process.env.HOME || process.cwd(), ".openclaw", "workspace", "projects");
+    mkdirSync(fallback, { recursive: true });
+    return fallback;
+  }
+
+  private resolveRepoForRegistration(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: {
+      explicitRepoRoot?: string;
+      repoUrl?: string;
+      workspaceRoot: string;
+    },
+  ): ResolvedRepoSelection {
+    const notes: string[] = [];
+
+    const explicitRepoRoot = this.normalizeRepoRootInput(input.explicitRepoRoot);
+    if (explicitRepoRoot) {
+      notes.push("repo_root provided explicitly by operator/request payload");
+      return {
+        repo_root: explicitRepoRoot,
+        repo_remote: this.tryReadGitRemote(explicitRepoRoot) || input.repoUrl,
+        resolution: "explicit_repo_root",
+        clone_policy: "not_applicable",
+        workspace_root: input.workspaceRoot,
+        notes,
+      };
+    }
+
+    const cwdRoot = this.tryResolveRepoRootFromCwd();
+    const normalizedRepoUrl = this.normalizeRepoUrl(input.repoUrl);
+    if (cwdRoot) {
+      const cwdRemote = this.tryReadGitRemote(cwdRoot);
+      const cwdMatchesRepoUrl = !normalizedRepoUrl || !cwdRemote || this.canonicalizeRemote(cwdRemote) === this.canonicalizeRemote(normalizedRepoUrl);
+      if (cwdMatchesRepoUrl) {
+        notes.push("resolved repo_root from current git working directory");
+        return {
+          repo_root: cwdRoot,
+          repo_remote: cwdRemote || normalizedRepoUrl,
+          resolution: "cwd_git_root",
+          clone_policy: "not_applicable",
+          workspace_root: input.workspaceRoot,
+          notes,
+        };
+      }
+      notes.push("current git root exists but remote does not match repo_url; skipped cwd reuse");
+    }
+
+    if (normalizedRepoUrl) {
+      const registered = this.findRegisteredProjectByRemote(scopeUserId, scopeAgentId, normalizedRepoUrl);
+      if (registered?.repo_root) {
+        notes.push("matched existing registered project by repo remote; reusing repo_root");
+        return {
+          repo_root: registered.repo_root,
+          repo_remote: registered.repo_remote_primary || normalizedRepoUrl,
+          resolution: "registered_remote_match",
+          clone_policy: "reuse_existing_clone",
+          workspace_root: input.workspaceRoot,
+          clone_target: registered.repo_root,
+          notes,
+        };
+      }
+
+      const imported = this.tryResolveLocalPathImport(normalizedRepoUrl, input.workspaceRoot);
+      if (imported) {
+        notes.push("repo_url points to a local path; imported without git clone");
+        return {
+          repo_root: imported,
+          repo_remote: this.tryReadGitRemote(imported) || normalizedRepoUrl,
+          resolution: "imported_local_path",
+          clone_policy: "not_applicable",
+          workspace_root: input.workspaceRoot,
+          clone_target: imported,
+          notes,
+        };
+      }
+
+      const cloneAttempt = this.cloneOrReuseRepo(normalizedRepoUrl, input.workspaceRoot);
+      notes.push(...cloneAttempt.notes);
+      return {
+        repo_root: cloneAttempt.repo_root,
+        repo_remote: cloneAttempt.repo_remote,
+        resolution: "cloned_from_repo_url",
+        clone_policy: cloneAttempt.clone_policy,
+        workspace_root: input.workspaceRoot,
+        clone_target: cloneAttempt.clone_target,
+        notes,
+      };
+    }
+
+    notes.push("repo root unresolved: no explicit repo_root, not inside git repo, and no repo_url provided");
+    return {
+      repo_root: undefined,
+      repo_remote: undefined,
+      resolution: "repo_root_missing",
+      clone_policy: "not_applicable",
+      workspace_root: input.workspaceRoot,
+      notes,
+    };
+  }
+
+  private normalizeRepoRootInput(repoRoot?: string): string | undefined {
+    const raw = String(repoRoot || "").trim();
+    if (!raw) return undefined;
+    const resolved = isAbsolute(raw) ? resolve(raw) : resolve(process.cwd(), raw);
+    if (!existsSync(resolved)) return resolved;
+    try {
+      if (statSync(resolved).isDirectory()) return resolved;
+    } catch {
+      // ignore
+    }
+    return resolved;
+  }
+
+  private normalizeRepoUrl(repoUrl?: string): string | undefined {
+    const value = String(repoUrl || "").trim();
+    return value || undefined;
+  }
+
+  private canonicalizeRemote(remote?: string): string | undefined {
+    const value = String(remote || "").trim();
+    if (!value) return undefined;
+    if (value.startsWith("git@")) {
+      const stripped = value.replace(/^git@/, "").replace(":", "/");
+      return stripped.toLowerCase().replace(/\.git$/i, "");
+    }
+    return value
+      .replace(/^https?:\/\//i, "")
+      .replace(/^ssh:\/\//i, "")
+      .toLowerCase()
+      .replace(/\.git$/i, "");
+  }
+
+  private findRegisteredProjectByRemote(
+    scopeUserId: string,
+    scopeAgentId: string,
+    repoUrl: string,
+  ): { repo_root: string | null; repo_remote_primary: string | null } | null {
+    const canonical = this.canonicalizeRemote(repoUrl);
+    if (!canonical) return null;
+
+    const projects = this.slotDb.listProjects(scopeUserId, scopeAgentId);
+    for (const row of projects) {
+      const remote = row.project.repo_remote_primary;
+      if (!remote) continue;
+      if (this.canonicalizeRemote(remote) === canonical) {
+        return {
+          repo_root: row.project.repo_root,
+          repo_remote_primary: row.project.repo_remote_primary,
+        };
+      }
+    }
+
+    return null;
+  }
+
+  private deriveRepoFolderName(repoUrl: string): string {
+    const cleaned = repoUrl.replace(/[#?].*$/, "").replace(/\/+$/, "");
+    const base = cleaned.split(/[/:]/).pop() || "repo";
+    const name = base.replace(/\.git$/i, "").trim() || "repo";
+    return name.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "repo";
+  }
+
+  private tryResolveLocalPathImport(repoUrl: string, workspaceRoot: string): string | undefined {
+    const looksLocal = repoUrl.startsWith("/") || repoUrl.startsWith("./") || repoUrl.startsWith("../") || repoUrl.startsWith("file://");
+    if (!looksLocal) return undefined;
+
+    const rawPath = repoUrl.startsWith("file://") ? repoUrl.slice("file://".length) : repoUrl;
+    const candidate = isAbsolute(rawPath) ? resolve(rawPath) : resolve(workspaceRoot, rawPath);
+    if (!existsSync(candidate)) return undefined;
+
+    try {
+      if (statSync(candidate).isDirectory()) {
+        return candidate;
+      }
+    } catch {
+      return undefined;
+    }
+
+    return undefined;
+  }
+
+  private cloneOrReuseRepo(
+    repoUrl: string,
+    workspaceRoot: string,
+  ): {
+    repo_root: string;
+    repo_remote: string;
+    clone_policy: "reuse_existing_clone" | "cloned_new" | "cloned_to_conflict_suffix";
+    clone_target: string;
+    notes: string[];
+  } {
+    const notes: string[] = [];
+    mkdirSync(workspaceRoot, { recursive: true });
+
+    const folderName = this.deriveRepoFolderName(repoUrl);
+    const preferredTarget = resolve(workspaceRoot, folderName);
+
+    if (this.isMatchingExistingClone(preferredTarget, repoUrl)) {
+      notes.push(`existing clone already present at ${preferredTarget}; reused`);
+      return {
+        repo_root: preferredTarget,
+        repo_remote: this.tryReadGitRemote(preferredTarget) || repoUrl,
+        clone_policy: "reuse_existing_clone",
+        clone_target: preferredTarget,
+        notes,
+      };
+    }
+
+    if (!existsSync(preferredTarget)) {
+      this.gitClone(repoUrl, preferredTarget);
+      notes.push(`cloned repo_url into workspace root at ${preferredTarget}`);
+      return {
+        repo_root: preferredTarget,
+        repo_remote: this.tryReadGitRemote(preferredTarget) || repoUrl,
+        clone_policy: "cloned_new",
+        clone_target: preferredTarget,
+        notes,
+      };
+    }
+
+    const conflictTarget = this.computeConflictCloneTarget(preferredTarget, repoUrl);
+    this.gitClone(repoUrl, conflictTarget);
+    notes.push(`preferred clone target occupied; cloned with suffix at ${conflictTarget}`);
+    return {
+      repo_root: conflictTarget,
+      repo_remote: this.tryReadGitRemote(conflictTarget) || repoUrl,
+      clone_policy: "cloned_to_conflict_suffix",
+      clone_target: conflictTarget,
+      notes,
+    };
+  }
+
+  private computeConflictCloneTarget(preferredTarget: string, repoUrl: string): string {
+    const canonical = this.canonicalizeRemote(repoUrl) || repoUrl;
+    const digest = createHash("sha1").update(canonical).digest("hex").slice(0, 8);
+    const parent = dirname(preferredTarget);
+    const base = basename(preferredTarget);
+
+    let candidate = resolve(parent, `${base}--${digest}`);
+    let index = 1;
+    while (existsSync(candidate)) {
+      if (this.isMatchingExistingClone(candidate, repoUrl)) {
+        return candidate;
+      }
+      candidate = resolve(parent, `${base}--${digest}-${index}`);
+      index += 1;
+    }
+    return candidate;
+  }
+
+  private isMatchingExistingClone(targetDir: string, repoUrl: string): boolean {
+    if (!existsSync(targetDir)) return false;
+    try {
+      if (!statSync(targetDir).isDirectory()) return false;
+    } catch {
+      return false;
+    }
+
+    if (!existsSync(resolve(targetDir, ".git"))) return false;
+
+    const existingRemote = this.tryReadGitRemote(targetDir);
+    if (!existingRemote) return false;
+
+    return this.canonicalizeRemote(existingRemote) === this.canonicalizeRemote(repoUrl);
+  }
+
+  private gitClone(repoUrl: string, targetDir: string): void {
+    execSync(`git clone ${shellEscape(repoUrl)} ${shellEscape(targetDir)}`, {
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+    });
+  }
+
+  private tryReadGitRemote(repoRoot: string): string | undefined {
+    try {
+      const output = execSync("git remote get-url origin", {
+        cwd: repoRoot,
+        stdio: ["ignore", "pipe", "ignore"],
+        encoding: "utf8",
+      });
+      const value = String(output || "").trim();
+      return value || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private collectGitTrackedPaths(repoRoot: string): Array<{
+    relative_path: string;
+    checksum: string;
+    module?: string;
+    language?: string;
+  }> {
+    try {
+      const output = execSync("git ls-files", {
+        cwd: repoRoot,
+        stdio: ["ignore", "pipe", "ignore"],
+        encoding: "utf8",
+      });
+      const paths = String(output || "")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+      return paths
+        .filter((p) => !p.startsWith(".git/"))
+        .map((relativePath) => {
+          const ext = relativePath.includes(".") ? relativePath.split(".").pop() || "" : "";
+          return {
+            relative_path: relativePath,
+            checksum: `git:${relativePath}`,
+            module: relativePath.split("/")[0] || undefined,
+            language: ext || undefined,
+          };
+        });
+    } catch {
+      // fallback for non-git local import
+      const files: string[] = [];
+      const walk = (dir: string, prefix = "") => {
+        const entries = readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.name === ".git" || entry.name === "node_modules") continue;
+          const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+          const abs = resolve(dir, entry.name);
+          if (entry.isDirectory()) {
+            walk(abs, rel);
+            continue;
+          }
+          files.push(rel);
+        }
+      };
+
+      try {
+        walk(repoRoot);
+      } catch {
+        return [];
+      }
+
+      return files.map((relativePath) => ({
+        relative_path: relativePath,
+        checksum: `fs:${relativePath}`,
+        module: relativePath.split("/")[0] || undefined,
+        language: relativePath.includes(".") ? relativePath.split(".").pop() || undefined : undefined,
+      }));
     }
   }
 
@@ -893,6 +1362,7 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
   ) {
     const mode = payload.mode || "preview";
 
+    const workspaceRoot = this.normalizeRepoRootInput(payload.project_workspace_root) || this.resolveWorkspaceRoot(req);
     const draft = {
       command: String(payload.command || "").trim() || "/project",
       repo_url: String(payload.repo_url || "").trim(),
@@ -903,6 +1373,7 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       project_name: String(payload.project_name || "").trim() || undefined,
       repo_root: String(payload.repo_root || "").trim() || undefined,
       active_version: String(payload.active_version || "").trim() || undefined,
+      project_workspace_root: workspaceRoot,
     };
 
     const errors: string[] = [];
@@ -931,18 +1402,32 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       errors.push("jira_space_key is required when default_epic_key is provided");
     }
 
+    const selectionPreview = this.resolveRepoForRegistration(
+      normalizePrivateIdentity(req.context).userId,
+      normalizePrivateIdentity(req.context).agentId,
+      {
+        explicitRepoRoot: draft.repo_root,
+        repoUrl: draft.repo_url || undefined,
+        workspaceRoot,
+      },
+    );
+
     const summaryCard = {
       title: "Project onboarding preview",
       fields: {
         command: draft.command,
         repo_url: draft.repo_url || null,
-        repo_root: draft.repo_root || null,
+        repo_root: selectionPreview.repo_root || null,
         project_alias: draft.project_alias || null,
         jira_space_key: draft.jira_space_key || null,
         default_epic_key: draft.default_epic_key || null,
         index_now: draft.index_now,
+        project_workspace_root: workspaceRoot,
+        repo_resolution: selectionPreview.resolution,
+        clone_policy: selectionPreview.clone_policy || "not_applicable",
       },
       actions: ["confirm", "edit_alias", "edit_jira", "index_now", "cancel"],
+      notes: selectionPreview.notes,
     };
 
     if (mode !== "confirm") {
@@ -973,6 +1458,7 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       project_name: draft.project_name,
       repo_root: draft.repo_root,
       repo_remote: draft.repo_url || undefined,
+      repo_url: draft.repo_url || undefined,
       active_version: draft.active_version,
       options: {
         trigger_index: draft.index_now,
@@ -994,6 +1480,7 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       project_id: registered.project_id,
       project_alias: registered.project_alias,
       tracker_mapping: registered.tracker_mapping,
+      repo_resolution: registered.repo_resolution,
       index_trigger: registered.index_trigger,
       warnings,
       used_commands: ["project.register_command", "project.link_tracker", "project.trigger_index"],
