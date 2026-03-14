@@ -48,7 +48,8 @@ function extractCodeBlocks(relativePath: string, content: string): SemanticBlock
   const blocks: SemanticBlock[] = [];
   const classRegex = /^\s*(?:export\s+)?class\s+([A-Za-z_][\w$]*)/gm;
   const functionRegex = /^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_][\w$]*)\s*\(/gm;
-  const methodRegex = /^\s{2,}(?:public\s+|private\s+|protected\s+|static\s+|async\s+)*([A-Za-z_][\w$]*)\s*\([^\)]*\)\s*\{/gm;
+  const methodRegex = /^\s{2,}(?:public\s+|private\s+|protected\s+|static\s+|async\s+)*(?!if\b|for\b|while\b|switch\b|catch\b|return\b|throw\b|else\b)([A-Za-z_][\w$]*)\s*\([^\)]*\)\s*\{/gm;
+  const disallowedMethodNames = new Set(["if", "for", "while", "switch", "catch", "return", "throw", "else"]);
 
   let match: RegExpExecArray | null;
 
@@ -84,6 +85,7 @@ function extractCodeBlocks(relativePath: string, content: string): SemanticBlock
 
   while ((match = methodRegex.exec(content))) {
     const symbolName = match[1];
+    if (disallowedMethodNames.has(symbolName)) continue;
     const start = match.index;
     const block = findBalancedBlock(content, start);
     blocks.push({

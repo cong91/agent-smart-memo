@@ -309,7 +309,7 @@ export interface ProjectHybridSearchInput {
 }
 
 export interface ProjectHybridSearchResultItem {
-  source: "file_index_state" | "symbol_registry" | "task_registry";
+  source: "file_index_state" | "symbol_registry" | "chunk_registry" | "task_registry";
   id: string;
   score: number;
   project_id: string;
@@ -1649,6 +1649,16 @@ export class SlotDB {
 
     const limit = Math.min(Math.max(Number(input.limit || 10), 1), 50);
     const queryLc = query.toLowerCase();
+    const queryTokens = Array.from(new Set(queryLc.split(/[^a-z0-9._/-]+/i).map((t) => t.trim()).filter(Boolean)));
+    const tokenScore = (text: string): number => {
+      if (!queryTokens.length) return 0;
+      const hay = text.toLowerCase();
+      let matched = 0;
+      for (const token of queryTokens) {
+        if (hay.includes(token)) matched += 1;
+      }
+      return matched / queryTokens.length;
+    };
     const taskContextInput = input.task_context;
 
     let lineageContext: ProjectTaskLineageContextResult | null = null;
@@ -1699,9 +1709,10 @@ export class SlotDB {
       const text = `${relativePath} ${moduleName || ""} ${language || ""}`.toLowerCase();
       let score = 0;
       if (text.includes(queryLc)) score += 0.55;
+      score += tokenScore(text) * 0.25;
       if (lineageContext && lineageContext.touched_files.includes(relativePath)) score += 0.35;
       if (relativePath.includes("README") || relativePath.includes("docs/")) score += 0.05;
-      if (score <= 0) continue;
+      if (score <= 0.08) continue;
 
       results.push({
         source: "file_index_state",
@@ -1737,9 +1748,10 @@ export class SlotDB {
       const text = `${symbolName} ${symbolFqn} ${relativePath} ${moduleName || ""} ${symbolKind}`.toLowerCase();
       let score = 0;
       if (text.includes(queryLc)) score += 0.62;
+      score += tokenScore(text) * 0.35;
       if (lineageContext && lineageContext.touched_symbols.includes(symbolName)) score += 0.3;
       if (lineageContext && lineageContext.touched_files.includes(relativePath)) score += 0.12;
-      if (score <= 0) continue;
+      if (score <= 0.08) continue;
 
       results.push({
         source: "symbol_registry",
@@ -1752,6 +1764,32 @@ export class SlotDB {
         symbol_name: symbolName,
         symbol_kind: symbolKind,
         snippet: `symbol ${symbolName} (${symbolKind}) in ${relativePath}`,
+      });
+    }
+
+    const chunkStmt = this.db.prepare(
+      `SELECT * FROM chunk_registry
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND active = 1`,
+    );
+    const chunkRows = chunkStmt.all(scopeUserId, scopeAgentId, projectId) as any[];
+    for (const row of chunkRows) {
+      const relativePath = String(row.relative_path || "");
+      const chunkKind = String(row.chunk_kind || "");
+      const symbolId = row.symbol_id ? String(row.symbol_id) : null;
+      if (lexicalPathPrefix.length > 0 && !lexicalPathPrefix.some((prefix) => relativePath.startsWith(prefix))) continue;
+      const text = `${relativePath} ${chunkKind} ${symbolId || ""}`.toLowerCase();
+      let score = 0;
+      if (text.includes(queryLc)) score += 0.6;
+      score += tokenScore(text) * 0.4;
+      if (lineageContext && lineageContext.touched_files.includes(relativePath)) score += 0.15;
+      if (score <= 0.08) continue;
+      results.push({
+        source: "chunk_registry",
+        id: String(row.chunk_id),
+        score,
+        project_id: projectId,
+        relative_path: relativePath,
+        snippet: `chunk ${chunkKind} in ${relativePath}`,
       });
     }
 
@@ -1783,6 +1821,7 @@ export class SlotDB {
 
       let score = 0;
       if (text.includes(queryLc)) score += 0.58;
+      score += tokenScore(text) * 0.25;
       if (lexicalTaskIds.has(task.task_id)) score += 0.28;
       if (taskIssueKey && lexicalIssueKeys.has(taskIssueKey)) score += 0.28;
       if (lineageContext) {
@@ -1790,7 +1829,7 @@ export class SlotDB {
         if (lineageContext.parent_chain.some((t) => t.task_id === task.task_id)) score += 0.2;
         if (lineageContext.related_tasks.some((t) => t.task_id === task.task_id)) score += 0.2;
       }
-      if (score <= 0) continue;
+      if (score <= 0.08) continue;
 
       results.push({
         source: "task_registry",
