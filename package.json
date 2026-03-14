@@ -1,7 +1,7 @@
 {
   "name": "@mrc2204/agent-smart-memo",
-  "version": "4.1.3",
-  "description": "Smart Memory Plugin for OpenClaw — structured slot memory with auto-capture, auto-recall, essence distillation, and Qdrant vector search",
+  "version": "5.0.0",
+  "description": "Smart Memory Plugin for OpenClaw \u2014 structured slot memory with auto-capture, auto-recall, essence distillation, and Qdrant vector search",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
