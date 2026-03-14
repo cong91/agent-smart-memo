@@ -307,7 +307,28 @@ Resolution order:
 
 ---
 
-## 10) Verification levels
+## 10) Project onboarding flow (ASM-84/85)
+
+For project-aware onboarding in OpenClaw/Telegram flows, the current slash command is:
+
+```text
+/project <repo_url>
+```
+
+Current behavior summary:
+- onboarding preview exposes resolved `repo_root` when derivable
+- preview/commit can report `repo_resolution` and `clone_policy`
+- if `repo_url` matches an already-registered remote, registration reuses the existing project identity / `repo_root`
+- if `repo_url` is a local path, it is treated as import without `git clone`
+- `project.trigger_index` is background-friendly and reports `accepted`, `enqueued`, `detached`, and `job_id`
+
+See also:
+- `docs/architecture/ASM-74-master-project-registration-ux-command-contract-jira-mapping-v5.1.md`
+- `tests/test-project-registry.ts`
+
+---
+
+## 11) Verification levels
 
 ### Build level
 Confirms code compiles:

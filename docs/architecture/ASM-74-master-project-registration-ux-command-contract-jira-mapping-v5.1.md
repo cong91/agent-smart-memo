@@ -51,7 +51,7 @@ Registration should support the minimum practical input set:
 - `active_version` (optional)
 - `default_epic_key` (optional)
 
-If `repo_root` is omitted, resolver attempts current working repository root discovery.
+If `repo_root` is omitted, resolver follows deterministic repository resolution: current working repository root, existing registered project with matching remote, local-path import from `repo_url`, then clone/import into configured workspace root.
 
 ---
 
@@ -64,6 +64,7 @@ If `repo_root` is omitted, resolver attempts current working repository root dis
   "project_alias": "agent-smart-memo",
   "repo_root": "/abs/path/or/omitted",
   "repo_remote": "git@github.com:org/repo.git",
+  "repo_url": "git@github.com:org/repo.git",
   "active_version": "5.1",
   "tracker": {
     "tracker_type": "jira",
@@ -87,6 +88,15 @@ If `repo_root` is omitted, resolver attempts current working repository root dis
   "validation_status": "ok",
   "completeness_score": 0.96,
   "warnings": [],
+  "repo_resolution": {
+    "resolution": "registered_remote_match",
+    "clone_policy": "reuse_existing_clone",
+    "workspace_root": "/workspace/projects",
+    "clone_target": "/workspace/projects/agent-smart-memo",
+    "notes": [
+      "matched existing registered project by repo remote; reusing repo_root"
+    ]
+  },
   "tracker_mapping": {
     "tracker_type": "jira",
     "tracker_space_key": "ASM",
@@ -95,8 +105,11 @@ If `repo_root` is omitted, resolver attempts current working repository root dis
   },
   "index_trigger": {
     "requested": true,
+    "accepted": true,
     "enqueued": true,
-    "run_id": "idx_01J..."
+    "detached": true,
+    "job_id": "idxjob_01J...",
+    "run_id": null
   }
 }
 ```
@@ -167,7 +180,10 @@ If `repo_root` is omitted, resolver attempts current working repository root dis
 {
   "project_id": "proj_01J...",
   "accepted": true,
-  "run_id": "idx_01J...",
+  "enqueued": true,
+  "detached": true,
+  "job_id": "idxjob_01J...",
+  "run_id": null,
   "queued_at": "2026-03-13T08:00:00Z"
 }
 ```
@@ -180,14 +196,17 @@ Resolution order:
 
 1. Explicit `repo_root` in request.
 2. Runtime working directory git root (`git rev-parse --show-toplevel`).
-3. Existing project mapping by alias/remote fingerprint.
-4. Fail with actionable validation error.
+3. Existing registered project with matching normalized remote (`registered_remote_match`) and reuse existing `repo_root` / project identity.
+4. Treat local-path `repo_url` as import (`imported_local_path`) without `git clone`.
+5. Clone/import from `repo_url` into configured workspace root when no reusable registration/local path exists.
+6. Fail with actionable validation error only when no repo root can be resolved and no import/clone path is available.
 
 Rules:
 
 - No fixed base path assumptions.
 - Normalize path + remote before uniqueness checks.
 - Persist normalized root for future deterministic reuse.
+- When remote matches an already-registered project, registration should reuse the existing project record and only add/update alias metadata instead of inserting a duplicate `repo_root` row.
 
 ---
 
