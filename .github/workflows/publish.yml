@@ -3,6 +3,7 @@ name: Build & Publish (Targeted Artifacts)
 on:
   push:
     branches: [master, work/**]
+    tags: [v*]
   pull_request:
     branches: [master]
   workflow_dispatch:
@@ -69,7 +70,7 @@ jobs:
         run: npm run test:paperclip
 
   publish-target:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     needs: build-targets
     steps:
@@ -86,17 +87,29 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Resolve publish target/mode
+        id: publish-meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "target=openclaw" >> "$GITHUB_OUTPUT"
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=${{ inputs.target }}" >> "$GITHUB_OUTPUT"
+            echo "dry_run=${{ inputs.dry_run }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Prepare selected package
         run: |
-          npm run build:${{ inputs.target }}
-          npm run package:${{ inputs.target }}
+          npm run build:${{ steps.publish-meta.outputs.target }}
+          npm run package:${{ steps.publish-meta.outputs.target }}
 
       - name: Publish selected target
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            node scripts/publish-target.mjs ${{ inputs.target }} --dry-run
+          if [ "${{ steps.publish-meta.outputs.dry_run }}" = "true" ]; then
+            node scripts/publish-target.mjs ${{ steps.publish-meta.outputs.target }} --dry-run
           else
-            node scripts/publish-target.mjs ${{ inputs.target }}
+            node scripts/publish-target.mjs ${{ steps.publish-meta.outputs.target }}
           fi
