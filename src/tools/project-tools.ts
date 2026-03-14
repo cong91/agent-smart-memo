@@ -626,6 +626,88 @@ export function registerProjectTools(
   });
 
   api.registerTool({
+    name: "project_index_event",
+    label: "Project Index Event",
+    description: "Event-driven partial project reindex using explicit changed/deleted file lists from git hooks or local automation.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        source_rev: { type: "string" },
+        event_type: { type: "string", enum: ["post_commit", "post_merge", "manual"] },
+        changed_files: { type: "array", items: { type: "string" } },
+        deleted_files: { type: "array", items: { type: "string" } },
+      },
+      required: ["project_id"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_id: string;
+        source_rev?: string;
+        event_type?: "post_commit" | "post_merge" | "manual";
+        changed_files?: string[];
+        deleted_files?: string[];
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.index_event", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_index_event",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
+    name: "project_install_hooks",
+    label: "Project Install Hooks",
+    description: "Install local git hooks for an already-registered project so commit/merge events auto-trigger ASM indexing.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+      },
+      required: ["project_id"],
+    },
+    async execute(_id: string, params: { project_id: string }, ctx: any) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.install_hooks", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_install_hooks",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
     name: "project_index_watch_get",
     label: "Project Index Watch Get",
     description: "Get current project index watch-state snapshot (last source rev + checksum map).",

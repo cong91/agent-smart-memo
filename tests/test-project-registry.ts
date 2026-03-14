@@ -183,7 +183,9 @@ async function main() {
 
     assertEqual(triggered.accepted, true, "trigger should be accepted");
     assertEqual(triggered.enqueued, true, "trigger should enqueue run when paths exist");
-    assert(Boolean(triggered.run_id), "trigger should return run_id");
+    assertEqual(triggered.detached, true, "trigger should be detached/background friendly");
+    assert(Boolean(triggered.job_id), "trigger should return background job_id");
+    assertEqual(triggered.run_id, null, "trigger should not block for foreground run_id");
   });
 
   await test("project.link_tracker validates jira space/epic mapping", async () => {

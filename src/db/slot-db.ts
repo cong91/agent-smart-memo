@@ -11,6 +11,9 @@ import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { mkdirSync, existsSync } from "node:fs";
+import { buildChunkArtifacts } from "../core/ingest/ingest-pipeline.js";
+import { extractSemanticBlocks } from "../core/ingest/semantic-block-extractor.js";
+import { buildSymbolId } from "../core/ingest/ids.js";
 import { GraphDB } from "./graph-db.js";
 import { getSlotTTL } from "../shared/memory-config.js";
 import { resolveLegacyStateDirInput, resolveSlotDbDir } from "../shared/slotdb-path.js";
@@ -161,12 +164,46 @@ export interface ProjectReindexDiffInput {
   source_rev?: string | null;
   trigger_type?: "bootstrap" | "incremental" | "manual" | "repair";
   index_profile?: string;
+  full_snapshot?: boolean;
   paths?: Array<{
     relative_path: string;
     checksum?: string | null;
     module?: string | null;
     language?: string | null;
+    content?: string | null;
   }>;
+}
+
+interface ProjectSymbolUpsertInput {
+  symbol_id: string;
+  project_id: string;
+  relative_path: string;
+  module: string | null;
+  language: string;
+  symbol_name: string;
+  symbol_fqn: string;
+  symbol_kind: string;
+  signature_hash?: string | null;
+  index_state: string;
+  active: number;
+  tombstone_at: string | null;
+  indexed_at: string | null;
+}
+
+interface ProjectChunkUpsertInput {
+  chunk_id: string;
+  project_id: string;
+  file_id: string | null;
+  relative_path: string | null;
+  chunk_kind: string;
+  symbol_id: string | null;
+  task_id?: string | null;
+  checksum: string;
+  qdrant_point_id?: string | null;
+  index_state: string;
+  active: number;
+  tombstone_at: string | null;
+  indexed_at: string | null;
 }
 
 export interface ProjectIndexWatchState {
@@ -1238,8 +1275,11 @@ export class SlotDB {
     }
 
     const deleted: string[] = [];
-    for (const prevPath of Object.keys(previousSnapshot)) {
-      if (!currentSnapshot.has(prevPath)) deleted.push(prevPath);
+    const treatAsFullSnapshot = input.full_snapshot === true || triggerType === "bootstrap";
+    if (treatAsFullSnapshot) {
+      for (const prevPath of Object.keys(previousSnapshot)) {
+        if (!currentSnapshot.has(prevPath)) deleted.push(prevPath);
+      }
     }
 
     this.insertIndexRun(scopeUserId, scopeAgentId, {
@@ -1257,12 +1297,14 @@ export class SlotDB {
       const nowIso = new Date().toISOString();
       for (const relativePath of changed) {
         const item = (input.paths || []).find((p) => this.normalizeRelativePath(p.relative_path) === relativePath);
+        const fileId = this.makeScopedId(input.project_id, relativePath);
+        const language = item?.language || null;
         this.upsertFileIndexState(scopeUserId, scopeAgentId, {
-          file_id: this.makeScopedId(input.project_id, relativePath),
+          file_id: fileId,
           project_id: input.project_id,
           relative_path: relativePath,
           module: item?.module || null,
-          language: item?.language || null,
+          language,
           checksum: currentSnapshot.get(relativePath) || "__missing__",
           last_commit_sha: sourceRev,
           index_state: "indexed",
@@ -1270,10 +1312,58 @@ export class SlotDB {
           tombstone_at: null,
           indexed_at: nowIso,
         });
+
+        this.markProjectChunksByFileDeleted(scopeUserId, scopeAgentId, input.project_id, relativePath, nowIso);
+        this.markProjectSymbolsByFileDeleted(scopeUserId, scopeAgentId, input.project_id, relativePath, nowIso);
+
+        const content = String(item?.content || "");
+        if (content.trim()) {
+          const blocks = extractSemanticBlocks({ relativePath, content });
+          const chunks = buildChunkArtifacts(input.project_id, fileId, relativePath, blocks);
+          for (const chunk of chunks) {
+            this.upsertChunkRegistry(scopeUserId, scopeAgentId, {
+              chunk_id: chunk.chunk_id,
+              project_id: input.project_id,
+              file_id: chunk.file_id,
+              relative_path: chunk.relative_path,
+              chunk_kind: chunk.chunk_kind,
+              symbol_id: chunk.symbol_id,
+              task_id: null,
+              checksum: chunk.checksum,
+              qdrant_point_id: null,
+              index_state: "indexed",
+              active: 1,
+              tombstone_at: null,
+              indexed_at: nowIso,
+            });
+          }
+
+          for (const block of blocks) {
+            if (!block.symbol_name || !["function", "class", "method"].includes(block.kind)) continue;
+            const symbolFqn = block.semantic_path || `${block.kind}:${block.symbol_name}`;
+            this.upsertSymbolRegistry(scopeUserId, scopeAgentId, {
+              symbol_id: buildSymbolId(input.project_id, relativePath, symbolFqn),
+              project_id: input.project_id,
+              relative_path: relativePath,
+              module: item?.module || null,
+              language: language || "text",
+              symbol_name: block.symbol_name,
+              symbol_fqn: symbolFqn,
+              symbol_kind: block.kind,
+              signature_hash: null,
+              index_state: "indexed",
+              active: 1,
+              tombstone_at: null,
+              indexed_at: nowIso,
+            });
+          }
+        }
       }
 
       for (const relativePath of deleted) {
         this.markFileIndexStateDeleted(scopeUserId, scopeAgentId, input.project_id, relativePath, nowIso);
+        this.markProjectChunksByFileDeleted(scopeUserId, scopeAgentId, input.project_id, relativePath, nowIso);
+        this.markProjectSymbolsByFileDeleted(scopeUserId, scopeAgentId, input.project_id, relativePath, nowIso);
       }
 
       const checksumSnapshotRecord = Object.fromEntries(currentSnapshot.entries());
@@ -2058,6 +2148,84 @@ export class SlotDB {
        WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND relative_path = ?`,
     );
     stmt.run(tombstoneAt, tombstoneAt, scopeUserId, scopeAgentId, projectId, relativePath);
+  }
+
+  private upsertChunkRegistry(scopeUserId: string, scopeAgentId: string, input: ProjectChunkUpsertInput): void {
+    const existing = this.db.prepare(
+      `SELECT chunk_id FROM chunk_registry WHERE scope_user_id = ? AND scope_agent_id = ? AND chunk_id = ?`,
+    ).get(scopeUserId, scopeAgentId, input.chunk_id) as { chunk_id: string } | undefined;
+
+    if (existing) {
+      this.db.prepare(
+        `UPDATE chunk_registry
+         SET project_id = ?, file_id = ?, relative_path = ?, chunk_kind = ?, symbol_id = ?, task_id = ?, checksum = ?, qdrant_point_id = ?, index_state = ?, active = ?, tombstone_at = ?, indexed_at = ?
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND chunk_id = ?`,
+      ).run(
+        input.project_id, input.file_id, input.relative_path, input.chunk_kind, input.symbol_id, input.task_id || null,
+        input.checksum, input.qdrant_point_id || null, input.index_state, input.active, input.tombstone_at, input.indexed_at,
+        scopeUserId, scopeAgentId, input.chunk_id,
+      );
+      return;
+    }
+
+    this.db.prepare(
+      `INSERT INTO chunk_registry (
+        chunk_id, scope_user_id, scope_agent_id, project_id, file_id, relative_path, chunk_kind, symbol_id, task_id, checksum, qdrant_point_id, index_state, active, tombstone_at, indexed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      input.chunk_id, scopeUserId, scopeAgentId, input.project_id, input.file_id, input.relative_path, input.chunk_kind, input.symbol_id,
+      input.task_id || null, input.checksum, input.qdrant_point_id || null, input.index_state, input.active, input.tombstone_at, input.indexed_at,
+    );
+  }
+
+  private upsertSymbolRegistry(scopeUserId: string, scopeAgentId: string, input: ProjectSymbolUpsertInput): void {
+    const existing = this.db.prepare(
+      `SELECT symbol_id FROM symbol_registry WHERE scope_user_id = ? AND scope_agent_id = ? AND symbol_id = ?`,
+    ).get(scopeUserId, scopeAgentId, input.symbol_id) as { symbol_id: string } | undefined;
+
+    if (existing) {
+      this.db.prepare(
+        `UPDATE symbol_registry
+         SET project_id = ?, relative_path = ?, module = ?, language = ?, symbol_name = ?, symbol_fqn = ?, symbol_kind = ?, signature_hash = ?, index_state = ?, active = ?, tombstone_at = ?, indexed_at = ?
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND symbol_id = ?`,
+      ).run(
+        input.project_id, input.relative_path, input.module, input.language, input.symbol_name, input.symbol_fqn, input.symbol_kind,
+        input.signature_hash || null, input.index_state, input.active, input.tombstone_at, input.indexed_at,
+        scopeUserId, scopeAgentId, input.symbol_id,
+      );
+      return;
+    }
+
+    this.db.prepare(
+      `INSERT INTO symbol_registry (
+        symbol_id, scope_user_id, scope_agent_id, project_id, relative_path, module, language, symbol_name, symbol_fqn, symbol_kind, signature_hash, index_state, active, tombstone_at, indexed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      input.symbol_id, scopeUserId, scopeAgentId, input.project_id, input.relative_path, input.module, input.language,
+      input.symbol_name, input.symbol_fqn, input.symbol_kind, input.signature_hash || null, input.index_state, input.active, input.tombstone_at, input.indexed_at,
+    );
+  }
+
+  private markProjectChunksByFileDeleted(scopeUserId: string, scopeAgentId: string, projectId: string, relativePath: string, tombstoneAt: string): void {
+    this.db.prepare(
+      `UPDATE chunk_registry
+       SET index_state = 'stale', active = 0, tombstone_at = ?, indexed_at = ?
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND relative_path = ?`,
+    ).run(tombstoneAt, tombstoneAt, scopeUserId, scopeAgentId, projectId, relativePath);
+  }
+
+  private markProjectSymbolsByFileDeleted(scopeUserId: string, scopeAgentId: string, projectId: string, relativePath: string, tombstoneAt: string): void {
+    this.db.prepare(
+      `UPDATE symbol_registry
+       SET index_state = 'stale', active = 0, tombstone_at = ?, indexed_at = ?
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND relative_path = ?`,
+    ).run(tombstoneAt, tombstoneAt, scopeUserId, scopeAgentId, projectId, relativePath);
+  }
+
+  markProjectFileDeletedForEvent(scopeUserId: string, scopeAgentId: string, projectId: string, relativePath: string, tombstoneAt: string): void {
+    this.markFileIndexStateDeleted(scopeUserId, scopeAgentId, projectId, relativePath, tombstoneAt);
+    this.markProjectChunksByFileDeleted(scopeUserId, scopeAgentId, projectId, relativePath, tombstoneAt);
+    this.markProjectSymbolsByFileDeleted(scopeUserId, scopeAgentId, projectId, relativePath, tombstoneAt);
   }
 
   private upsertProjectIndexWatchState(

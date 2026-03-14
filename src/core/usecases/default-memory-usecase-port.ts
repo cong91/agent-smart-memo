@@ -5,8 +5,10 @@ import type {
 } from "../contracts/adapter-contracts.js";
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
+import { buildChunkArtifacts } from "../ingest/ingest-pipeline.js";
+import { extractSemanticBlocks } from "../ingest/semantic-block-extractor.js";
 import { SlotDB } from "../../db/slot-db.js";
 import type { SemanticMemoryUseCase } from "./semantic-memory-usecase.js";
 
@@ -157,11 +159,13 @@ interface ProjectTriggerIndexPayload {
     task_id?: string[];
   };
   reason?: string;
+  full_snapshot?: boolean;
   paths?: Array<{
     relative_path: string;
     checksum?: string | null;
     module?: string | null;
     language?: string | null;
+    content?: string | null;
   }>;
   source_rev?: string | null;
   index_profile?: string;
@@ -192,12 +196,26 @@ interface ProjectReindexDiffPayload {
   source_rev?: string | null;
   trigger_type?: "bootstrap" | "incremental" | "manual" | "repair";
   index_profile?: string;
+  full_snapshot?: boolean;
   paths?: Array<{
     relative_path: string;
     checksum?: string | null;
     module?: string | null;
     language?: string | null;
+    content?: string | null;
   }>;
+}
+
+interface ProjectIndexEventPayload {
+  project_id: string;
+  source_rev?: string | null;
+  event_type?: "post_commit" | "post_merge" | "manual";
+  changed_files?: string[];
+  deleted_files?: string[];
+}
+
+interface ProjectInstallHooksPayload {
+  project_id: string;
 }
 
 interface ProjectIndexWatchGetPayload {
@@ -363,6 +381,10 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
         return this.handleProjectTriggerIndex(payload as unknown as ProjectTriggerIndexPayload, req) as TRes;
       case "project.reindex_diff":
         return this.handleProjectReindexDiff(payload as unknown as ProjectReindexDiffPayload, req) as TRes;
+      case "project.index_event":
+        return this.handleProjectIndexEvent(payload as unknown as ProjectIndexEventPayload, req) as TRes;
+      case "project.install_hooks":
+        return this.handleProjectInstallHooks(payload as unknown as ProjectInstallHooksPayload, req) as TRes;
       case "project.index_watch_get":
         return this.handleProjectIndexWatchGet(payload as unknown as ProjectIndexWatchGetPayload, req) as TRes;
       case "project.task_registry_upsert":
@@ -683,6 +705,8 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       };
     }
 
+    const autoIndexHook = this.installProjectGitHooks(registered.project.project_id, registered.project.repo_root);
+
     return {
       project_id: registered.project.project_id,
       project_alias: registered.alias.project_alias,
@@ -690,6 +714,7 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       validation_status: registered.registration.validation_status,
       completeness_score: Number((registered.registration.completeness_score / 100).toFixed(2)),
       warnings: [],
+      auto_index_hook: autoIndexHook,
       repo_resolution: {
         resolution: selection.resolution,
         clone_policy: selection.clone_policy || "not_applicable",
@@ -800,6 +825,7 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       checksum?: string | null;
       module?: string | null;
       language?: string | null;
+      content?: string | null;
     }>;
     jobId: string;
   }): void {
@@ -820,6 +846,7 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
           source_rev: input.sourceRev,
           trigger_type: input.triggerType,
           index_profile: input.indexProfile,
+          full_snapshot: input.triggerType === "bootstrap",
           paths,
         });
       } catch {
@@ -846,6 +873,32 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
     }
 
     throw new Error("project reference requires project_id or project_alias");
+  }
+
+  private installProjectGitHooks(projectId: string, repoRoot: string | null): { installed: boolean; hooks: string[]; note?: string } {
+    if (!repoRoot) return { installed: false, hooks: [], note: 'repo_root_missing' };
+    const gitDir = resolve(repoRoot, '.git');
+    const hooksDir = resolve(gitDir, 'hooks');
+    if (!existsSync(gitDir)) return { installed: false, hooks: [], note: 'git_dir_missing' };
+    mkdirSync(hooksDir, { recursive: true });
+
+    const writeHook = (name: string, eventType: 'post_commit' | 'post_merge') => {
+      const hookPath = resolve(hooksDir, name);
+      const script = `#!/bin/sh
+PROJECT_ID="${projectId}"
+REPO_ROOT="${repoRoot}"
+SOURCE_REV="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+CHANGED_FILES="$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null | paste -sd, -)"
+DELETED_FILES="$(git diff-tree --no-commit-id --name-only --diff-filter=D -r HEAD 2>/dev/null | paste -sd, -)"
+asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-type ${eventType} --source-rev "$SOURCE_REV" --changed-files "$CHANGED_FILES" --deleted-files "$DELETED_FILES" >/dev/null 2>&1 || true
+`;
+      writeFileSync(hookPath, script, 'utf8');
+      chmodSync(hookPath, 0o755);
+      return hookPath;
+    };
+
+    const hooks = [writeHook('post-commit', 'post_commit'), writeHook('post-merge', 'post_merge')];
+    return { installed: true, hooks };
   }
 
   private validateJiraTrackerFields(trackerSpaceKey?: string, defaultEpicKey?: string): void {
@@ -1198,6 +1251,7 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
     checksum: string;
     module?: string;
     language?: string;
+    content?: string;
   }> {
     try {
       const output = execSync("git ls-files", {
@@ -1214,11 +1268,19 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
         .filter((p) => !p.startsWith(".git/"))
         .map((relativePath) => {
           const ext = relativePath.includes(".") ? relativePath.split(".").pop() || "" : "";
+          const abs = resolve(repoRoot, relativePath);
+          let content: string | undefined;
+          try {
+            content = readFileSync(abs, "utf8");
+          } catch {
+            content = undefined;
+          }
           return {
             relative_path: relativePath,
             checksum: `git:${relativePath}`,
             module: relativePath.split("/")[0] || undefined,
             language: ext || undefined,
+            content,
           };
         });
     } catch {
@@ -1244,12 +1306,22 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
         return [];
       }
 
-      return files.map((relativePath) => ({
-        relative_path: relativePath,
-        checksum: `fs:${relativePath}`,
-        module: relativePath.split("/")[0] || undefined,
-        language: relativePath.includes(".") ? relativePath.split(".").pop() || undefined : undefined,
-      }));
+      return files.map((relativePath) => {
+        const abs = resolve(repoRoot, relativePath);
+        let content: string | undefined;
+        try {
+          content = readFileSync(abs, "utf8");
+        } catch {
+          content = undefined;
+        }
+        return {
+          relative_path: relativePath,
+          checksum: `fs:${relativePath}`,
+          module: relativePath.split("/")[0] || undefined,
+          language: relativePath.includes(".") ? relativePath.split(".").pop() || undefined : undefined,
+          content,
+        };
+      });
     }
   }
 
@@ -1265,8 +1337,78 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       source_rev: payload.source_rev,
       trigger_type: payload.trigger_type,
       index_profile: payload.index_profile,
+      full_snapshot: payload.full_snapshot === true,
       paths: payload.paths || [],
     });
+  }
+
+  private handleProjectIndexEvent(payload: ProjectIndexEventPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+    if (!payload.project_id) {
+      throw new Error("project.index_event requires payload.project_id");
+    }
+
+    const project = this.slotDb.getProjectById(identity.userId, identity.agentId, payload.project_id);
+    if (!project || !project.repo_root) {
+      throw new Error("project.index_event requires a registered project with repo_root");
+    }
+
+    const changedFiles = Array.from(new Set((payload.changed_files || []).map((x) => String(x || "").trim()).filter(Boolean)));
+    const deletedFiles = Array.from(new Set((payload.deleted_files || []).map((x) => String(x || "").trim()).filter(Boolean)));
+
+    const paths = changedFiles.map((relativePath) => {
+      const abs = resolve(project.repo_root as string, relativePath);
+      let content: string | null = null;
+      try {
+        content = readFileSync(abs, "utf8");
+      } catch {
+        content = null;
+      }
+      return {
+        relative_path: relativePath,
+        checksum: `event:${relativePath}:${payload.source_rev || "unknown"}`,
+        module: relativePath.split("/")[0] || undefined,
+        language: relativePath.includes(".") ? relativePath.split(".").pop() || undefined : undefined,
+        content,
+      };
+    });
+
+    const reindex = this.slotDb.reindexProjectByDiff(identity.userId, identity.agentId, {
+      project_id: payload.project_id,
+      source_rev: payload.source_rev || null,
+      trigger_type: "incremental",
+      index_profile: "default",
+      full_snapshot: false,
+      paths,
+    });
+
+    if (deletedFiles.length > 0) {
+      const tombstoneAt = new Date().toISOString();
+      for (const relativePath of deletedFiles) {
+        this.slotDb.markProjectFileDeletedForEvent(identity.userId, identity.agentId, payload.project_id, relativePath, tombstoneAt);
+      }
+    }
+
+    return {
+      project_id: payload.project_id,
+      event_type: payload.event_type || "manual",
+      source_rev: payload.source_rev || null,
+      changed_files: changedFiles,
+      deleted_files: deletedFiles,
+      reindex,
+    };
+  }
+
+  private handleProjectInstallHooks(payload: ProjectInstallHooksPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+    if (!payload.project_id) {
+      throw new Error("project.install_hooks requires payload.project_id");
+    }
+    const project = this.slotDb.getProjectById(identity.userId, identity.agentId, payload.project_id);
+    if (!project) {
+      throw new Error("project.install_hooks requires a registered project");
+    }
+    return this.installProjectGitHooks(project.project_id, project.repo_root);
   }
 
   private handleProjectIndexWatchGet(payload: ProjectIndexWatchGetPayload, req: CoreRequestEnvelope<unknown>) {

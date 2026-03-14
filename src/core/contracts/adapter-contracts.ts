@@ -34,6 +34,8 @@ export type MemoryUseCaseName =
   | "project.link_tracker"
   | "project.trigger_index"
   | "project.reindex_diff"
+  | "project.index_event"
+  | "project.install_hooks"
   | "project.index_watch_get"
   | "project.task_registry_upsert"
   | "project.task_lineage_context"
