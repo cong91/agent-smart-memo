@@ -55,6 +55,8 @@ export interface AgentMemoConfig {
   contextWindowMaxTokens?: number;
   summarizeEveryActions?: number;
   slotDbDir?: string;
+  projectWorkspaceRoot?: string;
+  repoCloneRoot?: string;
 }
 
 const CONFIG_KEY_CANDIDATES: (keyof AgentMemoConfig)[] = [
@@ -70,6 +72,8 @@ const CONFIG_KEY_CANDIDATES: (keyof AgentMemoConfig)[] = [
   "embedModel",
   "embedDimensions",
   "slotDbDir",
+  "projectWorkspaceRoot",
+  "repoCloneRoot",
   "autoCaptureEnabled",
   "autoCaptureMinConfidence",
   "contextWindowMaxTokens",
@@ -254,6 +258,14 @@ export const AGENT_MEMO_CONFIG_SCHEMA = {
       type: "string",
       description: "Absolute path for SlotDB directory. Priority: OPENCLAW_SLOTDB_DIR > config.slotDbDir > ${OPENCLAW_STATE_DIR}/agent-memo",
     },
+    projectWorkspaceRoot: {
+      type: "string",
+      description: "Default workspace root for repo clone/import onboarding resolution (fallback for project.register/project onboarding).",
+    },
+    repoCloneRoot: {
+      type: "string",
+      description: "Alias of projectWorkspaceRoot for operator familiarity; used as fallback clone root.",
+    },
     autoCaptureEnabled: {
       type: "boolean",
       description: "Enable auto-capture feature",
@@ -330,6 +342,14 @@ export const AGENT_MEMO_UI_HINTS = {
     label: "SlotDB Directory",
     placeholder: "/Users/you/.openclaw/agent-memo",
   },
+  projectWorkspaceRoot: {
+    label: "Project Workspace Root",
+    placeholder: "/Users/you/Work/projects",
+  },
+  repoCloneRoot: {
+    label: "Repo Clone Root",
+    placeholder: "/Users/you/Work/projects",
+  },
   autoCaptureEnabled: {
     label: "Auto Capture Enabled",
   },
@@ -402,6 +422,7 @@ const agentMemoPlugin = {
     const autoCaptureMinConfidence = config.autoCaptureMinConfidence || 0.7;
     const contextWindowMaxTokens = config.contextWindowMaxTokens || 12000;
     const summarizeEveryActions = config.summarizeEveryActions || 6;
+    const projectWorkspaceRoot = firstNonEmptyString(config.projectWorkspaceRoot, config.repoCloneRoot);
 
     // State directory from env or default
     const stateDir = process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
@@ -411,6 +432,11 @@ const agentMemoPlugin = {
       env: process.env,
       homeDir: process.env.HOME,
     });
+
+    if (projectWorkspaceRoot) {
+      process.env.AGENT_MEMO_PROJECT_WORKSPACE_ROOT = projectWorkspaceRoot;
+      process.env.AGENT_MEMO_REPO_CLONE_ROOT = projectWorkspaceRoot;
+    }
 
     console.log(
       `[AgentMemo] Startup config: source=${source}, resolved llmModel: ${llmModel}, fallbackUsed=${llmModelFallbackUsed}`
@@ -424,6 +450,9 @@ const agentMemoPlugin = {
     console.log(`  ContextWindow: ${contextWindowMaxTokens} tokens`);
     console.log(`  SummarizeEveryActions: ${summarizeEveryActions}`);
     console.log(`  SlotDB dir: ${slotDbDir}`);
+    if (projectWorkspaceRoot) {
+      console.log(`  ProjectWorkspaceRoot: ${projectWorkspaceRoot}`);
+    }
 
     // ----------------------------------------------------------------
     // Initialize services

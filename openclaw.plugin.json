@@ -50,7 +50,11 @@
       },
       "embedBackend": {
         "type": "string",
-        "enum": ["ollama", "openai", "docker"],
+        "enum": [
+          "ollama",
+          "openai",
+          "docker"
+        ],
         "description": "Embedding backend selector (optional). If omitted, legacy auto behavior is preserved"
       },
       "embedModel": {
@@ -64,6 +68,14 @@
       "slotDbDir": {
         "type": "string",
         "description": "Absolute path for SlotDB directory. Priority: OPENCLAW_SLOTDB_DIR > config.slotDbDir > ${OPENCLAW_STATE_DIR}/agent-memo"
+      },
+      "projectWorkspaceRoot": {
+        "type": "string",
+        "description": "Default workspace root for repo clone/import onboarding resolution"
+      },
+      "repoCloneRoot": {
+        "type": "string",
+        "description": "Alias fallback of projectWorkspaceRoot for repo clone/import onboarding"
       },
       "autoCaptureEnabled": {
         "type": "boolean",
@@ -154,6 +166,14 @@
     "summarizeEveryActions": {
       "label": "Summarize Every N Actions",
       "placeholder": "6"
+    },
+    "projectWorkspaceRoot": {
+      "label": "Project Workspace Root",
+      "placeholder": "/Users/you/Work/projects"
+    },
+    "repoCloneRoot": {
+      "label": "Repo Clone Root",
+      "placeholder": "/Users/you/Work/projects"
     }
   }
 }
