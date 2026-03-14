@@ -878,26 +878,53 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
   private installProjectGitHooks(projectId: string, repoRoot: string | null): { installed: boolean; hooks: string[]; note?: string } {
     if (!repoRoot) return { installed: false, hooks: [], note: 'repo_root_missing' };
     const gitDir = resolve(repoRoot, '.git');
-    const hooksDir = resolve(gitDir, 'hooks');
     if (!existsSync(gitDir)) return { installed: false, hooks: [], note: 'git_dir_missing' };
-    mkdirSync(hooksDir, { recursive: true });
 
-    const writeHook = (name: string, eventType: 'post_commit' | 'post_merge') => {
-      const hookPath = resolve(hooksDir, name);
-      const script = `#!/bin/sh
+    let hooksDir = resolve(gitDir, 'hooks');
+    try {
+      const hooksPath = execSync('git config --get core.hooksPath', { cwd: repoRoot, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' }).trim();
+      if (hooksPath) hooksDir = resolve(repoRoot, hooksPath);
+    } catch {}
+
+    mkdirSync(hooksDir, { recursive: true });
+    const listenerPath = resolve(hooksDir, 'asm-project-event.sh');
+    const marker = '# ASM_AUTO_INDEX_HOOK';
+
+    const listener = `#!/bin/sh
 PROJECT_ID="${projectId}"
 REPO_ROOT="${repoRoot}"
 SOURCE_REV="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 CHANGED_FILES="$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null | paste -sd, -)"
 DELETED_FILES="$(git diff-tree --no-commit-id --name-only --diff-filter=D -r HEAD 2>/dev/null | paste -sd, -)"
-asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-type ${eventType} --source-rev "$SOURCE_REV" --changed-files "$CHANGED_FILES" --deleted-files "$DELETED_FILES" >/dev/null 2>&1 || true
+asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-type "$1" --source-rev "$SOURCE_REV" --changed-files "$CHANGED_FILES" --deleted-files "$DELETED_FILES" >/dev/null 2>&1 || true
 `;
-      writeFileSync(hookPath, script, 'utf8');
+    writeFileSync(listenerPath, listener, 'utf8');
+    chmodSync(listenerPath, 0o755);
+
+    const attachHook = (name: string, eventType: 'post_commit' | 'post_merge') => {
+      const hookPath = resolve(hooksDir, name);
+      const callLine = `${marker}\n\"${listenerPath}\" ${eventType} || true`;
+      let content = existsSync(hookPath) ? readFileSync(hookPath, 'utf8') : '';
+      if (content.includes(marker)) return hookPath;
+
+      if (!content.trim()) {
+        content = `#!/bin/sh\n\n${callLine}\n`;
+      } else {
+        const backupPath = `${hookPath}.asm-backup`;
+        if (!existsSync(backupPath)) writeFileSync(backupPath, content, 'utf8');
+        if (!content.startsWith('#!')) {
+          content = `#!/bin/sh\n${content}`;
+        }
+        if (!content.endsWith('\n')) content += '\n';
+        content += `\n${callLine}\n`;
+      }
+
+      writeFileSync(hookPath, content, 'utf8');
       chmodSync(hookPath, 0o755);
       return hookPath;
     };
 
-    const hooks = [writeHook('post-commit', 'post_commit'), writeHook('post-merge', 'post_merge')];
+    const hooks = [attachHook('post-commit', 'post_commit'), attachHook('post-merge', 'post_merge'), listenerPath];
     return { installed: true, hooks };
   }
 
