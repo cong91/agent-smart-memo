@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { runInitOpenClaw } from "../scripts/init-openclaw.mjs";
 
 const ASM_PLUGIN_PACKAGE = "@mrc2204/agent-smart-memo";
@@ -59,6 +61,10 @@ export function parseAsmCliArgs(argv = []) {
     return { command: "init-openclaw", argv: args.slice(2) };
   }
 
+  if (first === "project-event") {
+    return { command: "project-event", argv: args.slice(1) };
+  }
+
   return { command: "unknown", argv: args };
 }
 
@@ -70,6 +76,7 @@ export function printHelp(log = console.log) {
   log("  asm setup openclaw [--yes]");
   log("  asm init-openclaw [--non-interactive]");
   log("  asm init openclaw [--non-interactive]");
+  log("  asm project-event --project-id <id> --repo-root <path> [--event-type post_commit|post_merge|manual] [--source-rev <sha>] [--changed-files a,b] [--deleted-files x,y]");
   log("  asm help");
   log("");
   log("Roadmap commands (not implemented yet):");
@@ -119,6 +126,29 @@ function parseNonInteractiveFlags(argv = []) {
     nonInteractive: hasYes || hasNonInteractive,
     autoApply: hasYes || hasNonInteractive,
   };
+}
+
+function parseProjectEventArgs(argv = []) {
+  const args = Array.isArray(argv) ? argv.map((x) => String(x)) : [];
+  const out = {
+    projectId: "",
+    repoRoot: "",
+    sourceRev: "",
+    eventType: "manual",
+    changedFiles: [],
+    deletedFiles: [],
+  };
+  for (let i = 0; i < args.length; i++) {
+    const cur = args[i];
+    const next = args[i + 1] || "";
+    if (cur === "--project-id") { out.projectId = next; i++; continue; }
+    if (cur === "--repo-root") { out.repoRoot = next; i++; continue; }
+    if (cur === "--source-rev") { out.sourceRev = next; i++; continue; }
+    if (cur === "--event-type") { out.eventType = next || "manual"; i++; continue; }
+    if (cur === "--changed-files") { out.changedFiles = next ? next.split(",").map((s) => s.trim()).filter(Boolean) : []; i++; continue; }
+    if (cur === "--deleted-files") { out.deletedFiles = next ? next.split(",").map((s) => s.trim()).filter(Boolean) : []; i++; continue; }
+  }
+  return out;
 }
 
 export async function runSetupOpenClawFlow({
@@ -216,6 +246,72 @@ export async function main(argv = process.argv.slice(2)) {
       return result?.applied || mode.autoApply ? 0 : 0;
     } catch (error) {
       console.error(`[ASM-84] init-openclaw failed: ${error instanceof Error ? error.message : String(error)}`);
+      return 1;
+    }
+  }
+
+  if (parsed.command === "project-event") {
+    const event = parseProjectEventArgs(parsed.argv);
+    if (!event.projectId || !event.repoRoot) {
+      console.error('[ASM-87] project-event requires --project-id and --repo-root');
+      return 1;
+    }
+    const pluginId = 'agent-smart-memo';
+    const cfgPath = resolve(process.env.HOME || '', '.openclaw', 'openclaw.json');
+    let qdrantCollection = 'mrc_bot';
+    let llmBaseUrl = 'http://localhost:8317/v1';
+    let llmApiKey = 'proxypal-local';
+    let llmModel = 'gpt-5.4';
+    let embedModel = 'qwen3-embedding:0.6b';
+    let embedDimensions = 1024;
+    let slotDbDir = resolve(process.env.HOME || '', '.openclaw', 'agent-memo');
+    try {
+      const raw = JSON.parse(readFileSync(cfgPath, 'utf8'));
+      const cfg = raw?.plugins?.entries?.[pluginId]?.config || {};
+      qdrantCollection = cfg.qdrantCollection || qdrantCollection;
+      llmBaseUrl = cfg.llmBaseUrl || llmBaseUrl;
+      llmApiKey = cfg.llmApiKey || llmApiKey;
+      llmModel = cfg.llmModel || llmModel;
+      embedModel = cfg.embedModel || embedModel;
+      embedDimensions = cfg.embedDimensions || embedDimensions;
+      slotDbDir = cfg.slotDbDir || slotDbDir;
+    } catch {}
+
+    process.env.OPENCLAW_SLOTDB_DIR = slotDbDir;
+    process.env.AGENT_MEMO_PROJECT_WORKSPACE_ROOT = event.repoRoot;
+    process.env.AGENT_MEMO_REPO_CLONE_ROOT = event.repoRoot;
+    process.env.PROJECT_WORKSPACE_ROOT = event.repoRoot;
+    process.env.REPO_CLONE_ROOT = event.repoRoot;
+    process.env.QDRANT_COLLECTION = qdrantCollection;
+    process.env.LLM_BASE_URL = llmBaseUrl;
+    process.env.LLM_API_KEY = llmApiKey;
+    process.env.LLM_MODEL = llmModel;
+    process.env.EMBED_MODEL = embedModel;
+    process.env.EMBEDDING_MODEL = embedModel;
+    process.env.EMBEDDING_DIMENSIONS = String(embedDimensions);
+
+    const { SlotDB } = await import('../dist/db/slot-db.js');
+    const { DefaultMemoryUseCasePort } = await import('../dist/core/usecases/default-memory-usecase-port.js');
+    const db = new SlotDB(slotDbDir);
+    const usecase = new DefaultMemoryUseCasePort(db);
+    try {
+      const result = await usecase.run('project.index_event', {
+        context: { userId: 'telegram:dm:5165741309', agentId: 'assistant', metadata: { projectWorkspaceRoot: event.repoRoot } },
+        meta: { source: 'cli', toolName: 'asm.project-event', projectWorkspaceRoot: event.repoRoot },
+        payload: {
+          project_id: event.projectId,
+          source_rev: event.sourceRev || null,
+          event_type: event.eventType,
+          changed_files: event.changedFiles,
+          deleted_files: event.deletedFiles,
+        },
+      });
+      console.log(JSON.stringify(result, null, 2));
+      db.close();
+      return 0;
+    } catch (error) {
+      db.close();
+      console.error(`[ASM-87] project-event failed: ${error instanceof Error ? error.message : String(error)}`);
       return 1;
     }
   }
