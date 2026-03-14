@@ -1,0 +1,450 @@
+{
+  "projectId": "7f3f2eb2-7939-4265-afed-4e51bc6c8998",
+  "installHooks": {
+    "installed": true,
+    "hooks": [
+      "/Users/mrcagents/Work/projects/agent-knowledge-distiller/.git/hooks/post-commit",
+      "/Users/mrcagents/Work/projects/agent-knowledge-distiller/.git/hooks/post-merge"
+    ]
+  },
+  "hooksExist": [
+    {
+      "path": "/Users/mrcagents/Work/projects/agent-knowledge-distiller/.git/hooks/post-commit",
+      "exists": true
+    },
+    {
+      "path": "/Users/mrcagents/Work/projects/agent-knowledge-distiller/.git/hooks/post-merge",
+      "exists": true
+    }
+  ],
+  "reindex": {
+    "run_id": "4d14732e-d693-476e-a318-38d241d83cab",
+    "project_id": "7f3f2eb2-7939-4265-afed-4e51bc6c8998",
+    "trigger_type": "bootstrap",
+    "index_profile": "default",
+    "source_rev": "asm89-bootstrap",
+    "changed": [
+      ".gitignore",
+      "README.md",
+      "distill-cron.sh",
+      "package-lock.json",
+      "package.json",
+      "re-embed-all.sh",
+      "scripts/delta_sync_reembed_qwen4b.py",
+      "scripts/test-smart-truncate.ts",
+      "src/index.ts",
+      "src/re-embed-all.ts",
+      "src/services/distiller.service.ts",
+      "src/services/embedding.service.ts",
+      "src/services/llm-scorer.service.ts",
+      "src/services/qdrant.service.ts",
+      "src/services/scorer.service.ts",
+      "src/types/index.ts",
+      "src/utils/config.ts",
+      "tsconfig.json"
+    ],
+    "unchanged": [],
+    "deleted": [],
+    "run_state": "indexed",
+    "watch_state": {
+      "last_source_rev": "asm89-bootstrap",
+      "updated_at": "2026-03-14T12:01:14.314Z"
+    }
+  },
+  "watch": {
+    "project_id": "7f3f2eb2-7939-4265-afed-4e51bc6c8998",
+    "scope_user_id": "telegram:dm:5165741309",
+    "scope_agent_id": "assistant",
+    "last_source_rev": "asm89-bootstrap",
+    "last_checksum_snapshot": {
+      ".gitignore": "asm89:.gitignore",
+      "README.md": "asm89:README.md",
+      "distill-cron.sh": "asm89:distill-cron.sh",
+      "package-lock.json": "asm89:package-lock.json",
+      "package.json": "asm89:package.json",
+      "re-embed-all.sh": "asm89:re-embed-all.sh",
+      "scripts/delta_sync_reembed_qwen4b.py": "asm89:scripts/delta_sync_reembed_qwen4b.py",
+      "scripts/test-smart-truncate.ts": "asm89:scripts/test-smart-truncate.ts",
+      "src/index.ts": "asm89:src/index.ts",
+      "src/re-embed-all.ts": "asm89:src/re-embed-all.ts",
+      "src/services/distiller.service.ts": "asm89:src/services/distiller.service.ts",
+      "src/services/embedding.service.ts": "asm89:src/services/embedding.service.ts",
+      "src/services/llm-scorer.service.ts": "asm89:src/services/llm-scorer.service.ts",
+      "src/services/qdrant.service.ts": "asm89:src/services/qdrant.service.ts",
+      "src/services/scorer.service.ts": "asm89:src/services/scorer.service.ts",
+      "src/types/index.ts": "asm89:src/types/index.ts",
+      "src/utils/config.ts": "asm89:src/utils/config.ts",
+      "tsconfig.json": "asm89:tsconfig.json"
+    },
+    "updated_at": "2026-03-14T12:01:14.314Z"
+  },
+  "counts": {
+    "fileCount": 18,
+    "chunkCount": 126,
+    "symbolCount": 43,
+    "sampleSymbols": [
+      {
+        "symbol_name": "ProgressCheckpoint",
+        "symbol_kind": "class",
+        "relative_path": "scripts/delta_sync_reembed_qwen4b.py"
+      },
+      {
+        "symbol_name": "for",
+        "symbol_kind": "method",
+        "relative_path": "scripts/test-smart-truncate.ts"
+      },
+      {
+        "symbol_name": "generateLongText",
+        "symbol_kind": "function",
+        "relative_path": "scripts/test-smart-truncate.ts"
+      },
+      {
+        "symbol_name": "if",
+        "symbol_kind": "method",
+        "relative_path": "scripts/test-smart-truncate.ts"
+      },
+      {
+        "symbol_name": "testSmartTruncate",
+        "symbol_kind": "function",
+        "relative_path": "scripts/test-smart-truncate.ts"
+      },
+      {
+        "symbol_name": "for",
+        "symbol_kind": "method",
+        "relative_path": "src/index.ts"
+      },
+      {
+        "symbol_name": "if",
+        "symbol_kind": "method",
+        "relative_path": "src/index.ts"
+      },
+      {
+        "symbol_name": "parseNumber",
+        "symbol_kind": "function",
+        "relative_path": "src/index.ts"
+      },
+      {
+        "symbol_name": "printReport",
+        "symbol_kind": "function",
+        "relative_path": "src/index.ts"
+      },
+      {
+        "symbol_name": "setupEnv",
+        "symbol_kind": "function",
+        "relative_path": "src/index.ts"
+      },
+      {
+        "symbol_name": "embed",
+        "symbol_kind": "function",
+        "relative_path": "src/re-embed-all.ts"
+      },
+      {
+        "symbol_name": "for",
+        "symbol_kind": "method",
+        "relative_path": "src/re-embed-all.ts"
+      },
+      {
+        "symbol_name": "if",
+        "symbol_kind": "method",
+        "relative_path": "src/re-embed-all.ts"
+      },
+      {
+        "symbol_name": "main",
+        "symbol_kind": "function",
+        "relative_path": "src/re-embed-all.ts"
+      },
+      {
+        "symbol_name": "while",
+        "symbol_kind": "method",
+        "relative_path": "src/re-embed-all.ts"
+      },
+      {
+        "symbol_name": "DistillerService",
+        "symbol_kind": "class",
+        "relative_path": "src/services/distiller.service.ts"
+      },
+      {
+        "symbol_name": "constructor",
+        "symbol_kind": "method",
+        "relative_path": "src/services/distiller.service.ts"
+      },
+      {
+        "symbol_name": "for",
+        "symbol_kind": "method",
+        "relative_path": "src/services/distiller.service.ts"
+      },
+      {
+        "symbol_name": "if",
+        "symbol_kind": "method",
+        "relative_path": "src/services/distiller.service.ts"
+      },
+      {
+        "symbol_name": "truncate",
+        "symbol_kind": "function",
+        "relative_path": "src/services/distiller.service.ts"
+      }
+    ]
+  },
+  "searchResults": [
+    {
+      "query": "distiller service qdrant service",
+      "top": [
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/distiller.service.ts",
+          "score": 0.2667,
+          "snippet": "chunk class in src/services/distiller.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/distiller.service.ts",
+          "score": 0.2667,
+          "snippet": "chunk method in src/services/distiller.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/distiller.service.ts",
+          "score": 0.2667,
+          "snippet": "chunk method in src/services/distiller.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/distiller.service.ts",
+          "score": 0.2667,
+          "snippet": "chunk method in src/services/distiller.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/distiller.service.ts",
+          "score": 0.2667,
+          "snippet": "chunk method in src/services/distiller.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/distiller.service.ts",
+          "score": 0.2667,
+          "snippet": "chunk method in src/services/distiller.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/distiller.service.ts",
+          "score": 0.2667,
+          "snippet": "chunk method in src/services/distiller.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/distiller.service.ts",
+          "score": 0.2667,
+          "snippet": "chunk method in src/services/distiller.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/distiller.service.ts",
+          "score": 0.2667,
+          "snippet": "chunk function in src/services/distiller.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/qdrant.service.ts",
+          "score": 0.2667,
+          "snippet": "chunk class in src/services/qdrant.service.ts"
+        }
+      ]
+    },
+    {
+      "query": "incremental distill snapshot report",
+      "top": [
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/distiller.service.ts",
+          "score": 0.1,
+          "snippet": "chunk class in src/services/distiller.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/distiller.service.ts",
+          "score": 0.1,
+          "snippet": "chunk method in src/services/distiller.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/distiller.service.ts",
+          "score": 0.1,
+          "snippet": "chunk method in src/services/distiller.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/distiller.service.ts",
+          "score": 0.1,
+          "snippet": "chunk method in src/services/distiller.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/distiller.service.ts",
+          "score": 0.1,
+          "snippet": "chunk method in src/services/distiller.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/distiller.service.ts",
+          "score": 0.1,
+          "snippet": "chunk method in src/services/distiller.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/distiller.service.ts",
+          "score": 0.1,
+          "snippet": "chunk method in src/services/distiller.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/distiller.service.ts",
+          "score": 0.1,
+          "snippet": "chunk method in src/services/distiller.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/distiller.service.ts",
+          "score": 0.1,
+          "snippet": "chunk function in src/services/distiller.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "distill-cron.sh",
+          "score": 0.1,
+          "snippet": "chunk doc_section in distill-cron.sh"
+        }
+      ]
+    },
+    {
+      "query": "re-embed vector qdrant",
+      "top": [
+        {
+          "source": "chunk_registry",
+          "relative_path": "re-embed-all.sh",
+          "score": 0.1333,
+          "snippet": "chunk doc_section in re-embed-all.sh"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "re-embed-all.sh",
+          "score": 0.1333,
+          "snippet": "chunk doc_section in re-embed-all.sh"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "re-embed-all.sh",
+          "score": 0.1333,
+          "snippet": "chunk doc_section in re-embed-all.sh"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "re-embed-all.sh",
+          "score": 0.1333,
+          "snippet": "chunk doc_section in re-embed-all.sh"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/re-embed-all.ts",
+          "score": 0.1333,
+          "snippet": "chunk function in src/re-embed-all.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/re-embed-all.ts",
+          "score": 0.1333,
+          "snippet": "chunk function in src/re-embed-all.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/re-embed-all.ts",
+          "score": 0.1333,
+          "snippet": "chunk method in src/re-embed-all.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/re-embed-all.ts",
+          "score": 0.1333,
+          "snippet": "chunk method in src/re-embed-all.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/re-embed-all.ts",
+          "score": 0.1333,
+          "snippet": "chunk method in src/re-embed-all.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/qdrant.service.ts",
+          "score": 0.1333,
+          "snippet": "chunk class in src/services/qdrant.service.ts"
+        }
+      ]
+    },
+    {
+      "query": "llm scorer embedding service",
+      "top": [
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/llm-scorer.service.ts",
+          "score": 0.3,
+          "snippet": "chunk class in src/services/llm-scorer.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/llm-scorer.service.ts",
+          "score": 0.3,
+          "snippet": "chunk method in src/services/llm-scorer.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/llm-scorer.service.ts",
+          "score": 0.3,
+          "snippet": "chunk method in src/services/llm-scorer.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/llm-scorer.service.ts",
+          "score": 0.3,
+          "snippet": "chunk method in src/services/llm-scorer.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/llm-scorer.service.ts",
+          "score": 0.3,
+          "snippet": "chunk method in src/services/llm-scorer.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/llm-scorer.service.ts",
+          "score": 0.3,
+          "snippet": "chunk method in src/services/llm-scorer.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/llm-scorer.service.ts",
+          "score": 0.3,
+          "snippet": "chunk method in src/services/llm-scorer.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/llm-scorer.service.ts",
+          "score": 0.3,
+          "snippet": "chunk method in src/services/llm-scorer.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/llm-scorer.service.ts",
+          "score": 0.3,
+          "snippet": "chunk method in src/services/llm-scorer.service.ts"
+        },
+        {
+          "source": "chunk_registry",
+          "relative_path": "src/services/llm-scorer.service.ts",
+          "score": 0.3,
+          "snippet": "chunk function in src/services/llm-scorer.service.ts"
+        }
+      ]
+    }
+  ]
+}
