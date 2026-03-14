@@ -1,115 +1,265 @@
 # Agent Smart Memo
 
-> **Shared Agent Memory Platform** with runtime adapters for **OpenClaw**, **Paperclip**, and future agent systems.
+> **ASM v5.1 super memory platform for OpenClaw agents** — unified memory for **conversation memory**, **project memory**, semantic retrieval, structured slots, graph knowledge, onboarding, and engineering context assembly.
 
-`agent-smart-memo` started as an OpenClaw memory plugin. It is now evolving into a **moduleized memory platform**:
+`agent-smart-memo` started as an OpenClaw memory plugin for conversation/runtime memory.
+After the **ASM-69 big update**, it should be understood as a broader **agent memory platform**:
 
-- **core** → contracts, use-cases, namespace policy, error model
-- **adapter-openclaw** → plugin entry, tool registration, hook wiring, runtime bridge
-- **adapter-paperclip** → runtime wrapper, caller integration, compatibility mapping
-- **shared infra** → Qdrant, embeddings, SlotDB, GraphDB, packaging scripts
+- **conversation memory** for agent runtime continuity
+- **project memory** for repo-aware engineering context
+- **semantic memory** via vector retrieval
+- **structured slot memory** via SQLite
+- **graph memory** for entities/relationships
+- **operator onboarding** for project registration + Jira mapping + indexing
+- **CLI/setup flows** for OpenClaw installation and bootstrap
 
-That means this repository should no longer be understood as *only* an OpenClaw plugin repo.
-It is a **shared memory engine with target-specific artifacts**.
+This repo is still packaged for **OpenClaw first**, but its practical role is now:
 
----
+- a **super memory layer** for agents
+- a **project-aware engineering memory system**
+- an **operator-friendly onboarding/runtime package**
 
-## 1) What this project does
-
-Agent Smart Memo provides a unified memory stack for AI agents:
-
-- **Semantic memory** via Qdrant (`memory_search`, `memory_store`)
-- **Structured slot memory** via SQLite (`memory_slot_*`)
-- **Graph memory** for entity/relationship retrieval (`memory_graph_*`)
-- **Auto-capture / auto-recall** for OpenClaw runtime
-- **Shared runtime contracts** for multi-system memory callers
-- **Target-based packaging** so each runtime only consumes the artifact it needs
+It is no longer accurate to describe ASM as only a small conversation-memory plugin.
 
 ---
 
-## 2) Runtime targets
+## 1) What ASM v5.1 is
+
+ASM v5.1 combines two big memory domains.
+
+### A. Conversation memory
+Used for ongoing agent continuity and runtime recall:
+- semantic memory (`memory_search`, `memory_store`)
+- structured slot memory (`memory_slot_*`)
+- graph memory (`memory_graph_*`)
+- auto-capture / auto-recall support
+- namespace-aware memory behavior
+
+### B. Project memory
+Used for engineering/project-aware workflows:
+- project registry and aliasing
+- repo root / repo remote identity
+- Jira mapping and tracker linkage
+- onboarding flows for new repos
+- project indexing / reindexing
+- hybrid retrieval with file / symbol / task lineage
+
+That is why ASM now acts as:
+
+> **conversation memory + project memory + retrieval/control plane in one agent-facing platform**
+
+---
+
+## 2) What ASM v5.1 adds after ASM-69 big update
+
+ASM-69 and follow-up waves expanded the system from memory-only into project-aware memory orchestration.
+
+### Project-aware memory model
+Agents can now reason about:
+- `project_id`
+- project alias
+- `repo_root`
+- `repo_remote`
+- Jira space / epic mapping
+- registration / validation state
+
+### Ingest + semantic block extraction
+Codebases can be transformed into retrievable structures using:
+- file planning
+- semantic block extraction
+- deterministic file/chunk/symbol IDs
+- diff-aware indexing primitives
+
+### Incremental reindex
+Instead of rebuilding everything blindly, ASM now supports:
+- changed / unchanged / deleted diffing
+- watch-state snapshotting
+- checksum-driven reindex control
+- background-friendly trigger flow
+
+### Hybrid retrieval + task lineage
+ASM is not just vector search anymore.
+It can combine:
+- semantic recall
+- lexical/project filters
+- file/symbol/task context
+- parent/related/touched lineage context
+
+### Operator onboarding
+Operators can onboard a project with repo + alias + Jira mapping + optional index trigger using project-aware command flows.
+
+### Setup CLI
+OpenClaw setup is now easier through the global CLI:
+- `asm setup-openclaw`
+- `asm setup openclaw`
+- legacy-compatible `npm run init-openclaw`
+
+---
+
+## 3) Scope of this repository
+
+This repository now spans multiple practical layers.
+
+### OpenClaw runtime/plugin layer
+Includes:
+- plugin entry
+- tool registration
+- runtime hooks
+- OpenClaw packaging/build flow
+- setup/bootstrap CLI flow
+
+### Shared memory platform layer
+Includes:
+- SlotDB
+- semantic memory use-cases
+- graph/registry logic
+- shared contracts and runtime abstractions
+
+### Project-aware engineering memory layer
+Includes:
+- project registry
+- onboarding use-cases
+- tracker mapping
+- indexing/reindexing primitives
+- lineage-aware retrieval
+
+So the best mental model is:
+
+> **an OpenClaw-delivered super memory platform with both conversation memory and project memory**
+
+---
+
+## 4) Runtime targets
 
 ### OpenClaw target
-Use this when you want Agent Smart Memo as an OpenClaw memory plugin.
+Use this when you want ASM as the main OpenClaw memory/runtime plugin.
 
 Contains:
-- core
-- required infra
+- core memory platform
 - OpenClaw adapter
 - plugin entry / hooks / tool registration
+- operator onboarding command surfaces
 
 Artifact intent:
 - **OpenClaw plugin artifact**
 
 ### Paperclip target
-Use this when you want a Paperclip runtime caller over the same memory core.
+Use this when you want Paperclip to consume the same shared memory core/runtime behavior.
 
 Contains:
-- core
-- required infra
-- Paperclip adapter
-- runtime wrapper / compatibility mapper
+- core memory platform
+- Paperclip adapter/runtime wrapper
+- compatibility mapping
 
 Artifact intent:
 - **Paperclip runtime package**
 
 ### Core target
-Use this when you only want shared contracts/use-cases for future systems.
+Use this when you want the shared contracts/use-cases without OpenClaw/Paperclip-specific delivery.
 
 Contains:
-- core contracts
-- use-case abstractions
-- shared platform rules
+- shared contracts
+- shared use-cases
+- shared memory/platform rules
 
 Artifact intent:
 - **runtime-agnostic shared memory core**
 
 ---
 
-## 3) Architecture principles
+## 5) Main capability areas
 
-### Compatibility-first
-Current OpenClaw behavior must not break while module boundaries are extracted.
+### Conversation memory capabilities
+- `memory_search`
+- `memory_store`
+- `memory_slot_get`
+- `memory_slot_set`
+- `memory_slot_delete`
+- `memory_slot_list`
+- `memory_graph_*`
+- auto-capture / auto-recall
 
-### Target-based packaging
-Do **not** treat the whole repository output as one OpenClaw-only artifact.
+### Project memory capabilities
+- `project.register`
+- `project.get`
+- `project.list`
+- `project.link_tracker`
+- `project.trigger_index`
+- `project.reindex_diff`
+- `project.index_watch_get`
+- `project.legacy_backfill`
+- Telegram/operator onboarding surfaces
 
-- OpenClaw artifact should contain only what OpenClaw needs
-- Paperclip artifact should contain only what Paperclip needs
-- Core artifact should stay reusable for future systems
-
-### Shared contracts
-The following should be shared across runtimes:
-- namespace policy
-- actor context contract
-- error model
-- use-case interfaces
-- rollout guardrails
+### Retrieval/engineering context capabilities
+- semantic retrieval
+- lexical/project filtering
+- project-aware context assembly
+- file / symbol / task lineage
+- repo-aware indexing and reindexing
 
 ---
 
-## 4) Quick start for OpenClaw
+## 6) CLI / setup UX
 
-If your current goal is still **“install the memory plugin into OpenClaw”**, use this section.
+After ASM-84, the preferred setup path is the global CLI.
 
-### Install
+### Install globally
+```bash
+npm install -g @mrc2204/agent-smart-memo
+```
 
+### Preferred setup flow
+```bash
+asm setup-openclaw
+```
+
+Also supported:
+```bash
+asm setup openclaw
+```
+
+Legacy-compatible flow:
+```bash
+npm run init-openclaw
+```
+
+### What `asm setup-openclaw` does
+1. checks that `openclaw` CLI exists
+2. installs `@mrc2204/agent-smart-memo` if missing
+3. runs OpenClaw bootstrap/init flow
+4. patches config with preview + backup behavior
+5. prints next-step verification guidance
+
+This is the fastest path for operators who want ASM enabled in OpenClaw without manual config editing first.
+
+---
+
+## 7) Quick start for OpenClaw
+
+If your current goal is still “install and run ASM in OpenClaw”, use this section.
+
+### Install plugin directly
 ```bash
 openclaw plugins install @mrc2204/agent-smart-memo
 ```
 
-### Prerequisites
+### Or install locally from source
+```bash
+npm install
+npm run build
+openclaw plugins install -l .
+```
 
-You need these services running:
+### Prerequisites
+You typically need:
 
 | Service | Purpose | Example |
 |---|---|---|
-| Qdrant | Semantic vector memory | `docker run -d -p 6333:6333 qdrant/qdrant` |
-| Embedding backend | Embeddings for semantic memory | Ollama / OpenAI-compatible / docker adapter |
-| LLM endpoint | Fact extraction / auto-capture | Any OpenAI-compatible API |
+| Qdrant | Semantic/vector memory | `docker run -d -p 6333:6333 qdrant/qdrant` |
+| Embedding backend | Embeddings for semantic recall | Ollama / OpenAI-compatible / docker adapter |
+| LLM endpoint | Fact extraction / auto-capture | OpenAI-compatible API |
 
-### OpenClaw config example
-
+### Example OpenClaw config
 Add to `~/.openclaw/openclaw.json`:
 
 ```json5
@@ -144,22 +294,48 @@ Add to `~/.openclaw/openclaw.json`:
 }
 ```
 
-### OpenClaw target commands
+---
 
-```bash
-npm install
-npm run build
-openclaw plugins install -l .
+## 8) Project onboarding flow (ASM-84/85)
+
+For project-aware onboarding in OpenClaw/Telegram flows, the current slash command is:
+
+```text
+/project <repo_url>
 ```
+
+### Current behavior summary
+- onboarding preview exposes resolved `repo_root` when derivable
+- preview/commit can report `repo_resolution` and `clone_policy`
+- if `repo_url` matches an already-registered remote, registration reuses the existing project identity / `repo_root`
+- if `repo_url` is a local path, it is treated as import without `git clone`
+- `project.trigger_index` is background-friendly and reports:
+  - `accepted`
+  - `enqueued`
+  - `detached`
+  - `job_id`
+
+### Typical onboarding path
+1. operator starts with `/project <repo_url>`
+2. bot prepares preview
+3. preview shows alias/Jira/index choices and repo resolution hints
+4. operator confirms
+5. flow bridges into:
+   - `project_register_command`
+   - `project_link_tracker`
+   - `project_trigger_index`
+
+See also:
+- `docs/architecture/ASM-74-master-project-registration-ux-command-contract-jira-mapping-v5.1.md`
+- `tests/test-project-registry.ts`
 
 ---
 
-## 5) Quick start for Paperclip
+## 9) Quick start for Paperclip
 
 If your goal is to let **Paperclip** consume the same memory core:
 
 ### Build the Paperclip target
-
 ```bash
 npm install
 npm run build:paperclip
@@ -184,10 +360,9 @@ But README intentionally does **not** overclaim this as full production-grade mu
 
 ---
 
-## 6) Build targets
+## 10) Build targets
 
 ### Default build
-
 ```bash
 npm run build
 ```
@@ -195,7 +370,6 @@ npm run build
 Default build remains **OpenClaw-compatible** for backward compatibility.
 
 ### Explicit targets
-
 ```bash
 npm run build:openclaw
 npm run build:paperclip
@@ -204,7 +378,6 @@ npm run build:all
 ```
 
 ### Packaging
-
 ```bash
 npm run package:openclaw
 npm run package:paperclip
@@ -212,7 +385,6 @@ npm run package:core
 ```
 
 ### Pack tarballs
-
 ```bash
 npm run pack:openclaw
 npm run pack:paperclip
@@ -220,7 +392,6 @@ npm run pack:core
 ```
 
 ### Publish targets
-
 ```bash
 npm run publish:openclaw
 npm run publish:paperclip
@@ -231,7 +402,7 @@ npm run publish:core
 
 ---
 
-## 7) CI/CD model
+## 11) CI/CD model
 
 GitHub Actions workflow: `.github/workflows/publish.yml`
 
@@ -245,9 +416,9 @@ Current flow:
 
 ### Important distinction
 A `work/...` branch is for:
-- **CI checks**
-- **PR review**
-- **dry-run readiness**
+- CI checks
+- PR review
+- dry-run readiness
 
 It is **not** the same as:
 - production deploy
@@ -262,34 +433,7 @@ work/... push -> CI checks -> PR review -> approve -> merge default branch -> pu
 
 ---
 
-## 8) Memory capabilities
-
-### Semantic memory
-- `memory_search`
-- `memory_store`
-- namespace-aware retrieval
-- registry-aware alias normalization
-- explicit unknown namespace validation
-
-### Slot memory
-- `memory_slot_get`
-- `memory_slot_set`
-- `memory_slot_delete`
-- `memory_slot_list`
-
-### Graph memory
-- entity create/get/search
-- relationship add/remove
-- scoped traversal
-
-### Runtime automation
-- auto-capture
-- auto-recall
-- runtime identity injection where supported
-
----
-
-## 9) Configuration notes
+## 12) Configuration notes
 
 ### Embedding backend mapping
 When `embedBackend` is set:
@@ -307,28 +451,7 @@ Resolution order:
 
 ---
 
-## 10) Project onboarding flow (ASM-84/85)
-
-For project-aware onboarding in OpenClaw/Telegram flows, the current slash command is:
-
-```text
-/project <repo_url>
-```
-
-Current behavior summary:
-- onboarding preview exposes resolved `repo_root` when derivable
-- preview/commit can report `repo_resolution` and `clone_policy`
-- if `repo_url` matches an already-registered remote, registration reuses the existing project identity / `repo_root`
-- if `repo_url` is a local path, it is treated as import without `git clone`
-- `project.trigger_index` is background-friendly and reports `accepted`, `enqueued`, `detached`, and `job_id`
-
-See also:
-- `docs/architecture/ASM-74-master-project-registration-ux-command-contract-jira-mapping-v5.1.md`
-- `tests/test-project-registry.ts`
-
----
-
-## 11) Verification levels
+## 13) Verification levels
 
 ### Build level
 Confirms code compiles:
@@ -339,11 +462,18 @@ npm run build:all
 ```
 
 ### Contract / integration level
-
 ```bash
 npm test
 npm run test:openclaw
 npm run test:paperclip
+```
+
+### Project-aware targeted verification
+```bash
+npx tsx tests/test-project-registry.ts
+npx tsx tests/test-project-reindex-diff.ts
+npx tsx tests/test-project-hybrid-lineage.ts
+npx tsx tests/test-project-legacy-backfill.ts
 ```
 
 ### Production-like runtime verification
@@ -352,17 +482,16 @@ Examples already added in this repo include:
 - OpenClaw anti-regression integration
 - production-like smoke parity harness
 
-This is stronger than mock-only testing, but still distinct from a full production deployment.
-
 ---
 
-## 11) Repository layout (high level)
+## 14) Repository layout (high level)
 
 ```text
 src/
   core/
     contracts/
     usecases/
+    ingest/
   adapters/
     openclaw/
     paperclip/
@@ -380,50 +509,23 @@ docs/architecture/
 
 ---
 
-## 12) Current project status
+## 15) Current mental model
 
-Current repo status after ASM-43 work:
-- architecture pack completed
-- implementation pack substantially advanced
-- runtime wiring exists for OpenClaw and Paperclip paths
-- production-like smoke parity evidence exists
-- target-based packaging/build pipeline exists
+If you only remember one thing, remember this:
 
-Still be precise about claims:
-- strong progress beyond scaffold ✅
-- compatibility-first runtime wiring ✅
-- full production-grade multi-runtime completion should only be claimed with full runtime-host evidence and approved release flow
+> **ASM v5.1 is a super memory platform for agents: conversation memory + project memory + retrieval/control-plane capabilities.**
 
----
-
-## 13) Useful commands
-
-```bash
-# install dependencies
-npm install
-
-# default build (OpenClaw target)
-npm run build
-
-# build all targets
-npm run build:all
-
-# test
-npm test
-npm run test:openclaw
-npm run test:paperclip
-
-# package / pack
-npm run package:openclaw
-npm run package:paperclip
-npm run package:core
-npm run pack:openclaw
-npm run pack:paperclip
-npm run pack:core
-```
+It helps agents:
+- remember ongoing runtime/conversation context
+- store/retrieve structured and semantic knowledge
+- register and map projects
+- index and reindex repos
+- retrieve engineering context with lineage
+- onboard projects with operator-friendly flows
+- bootstrap OpenClaw faster through the CLI
 
 ---
 
-## 14) License
+## 16) License
 
 MIT © [mrc2204](https://github.com/cong91)
