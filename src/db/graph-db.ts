@@ -63,11 +63,29 @@ export interface EntityCreateInput {
   properties?: Record<string, unknown>;
 }
 
+export interface EntityUpsertInput extends EntityCreateInput {
+  id: string;
+}
+
 export interface RelationshipCreateInput {
   source_entity_id: string;
   target_entity_id: string;
   relation_type: string;
   weight?: number;
+  properties?: Record<string, unknown>;
+}
+
+export interface CodeGraphRelationUpsertInput {
+  source_node_id: string;
+  target_node_id: string;
+  relation_type: string;
+  provenance: {
+    adapter_kind: string;
+    confidence: number;
+    evidence_path?: string;
+    evidence_start_line?: number;
+    evidence_end_line?: number;
+  };
   properties?: Record<string, unknown>;
 }
 
@@ -142,16 +160,30 @@ export class GraphDB {
   ): Entity {
     const now = new Date().toISOString();
     const id = this.generateUUID();
+    return this.createEntityWithId(scopeUserId, scopeAgentId, {
+      id,
+      name: input.name,
+      type: input.type,
+      properties: input.properties,
+    }, now);
+  }
+
+  createEntityWithId(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: EntityUpsertInput,
+    now: string = new Date().toISOString(),
+  ): Entity {
     const propertiesJson = JSON.stringify(input.properties || {});
 
     const insertStmt = this.db.prepare(
       `INSERT INTO entities (id, name, type, properties, scope_user_id, scope_agent_id, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
-    insertStmt.run(id, input.name, input.type, propertiesJson, scopeUserId, scopeAgentId, now, now);
+    insertStmt.run(input.id, input.name, input.type, propertiesJson, scopeUserId, scopeAgentId, now, now);
 
     return {
-      id,
+      id: input.id,
       name: input.name,
       type: input.type,
       properties: input.properties || {},
@@ -337,6 +369,107 @@ export class GraphDB {
   // ==========================================================================
   // Graph Traversal
   // ==========================================================================
+
+  getCodeAwareRelationships(
+    scopeUserId: string,
+    scopeAgentId: string,
+    entityId: string,
+    direction: RelationDirection = "both",
+    relationType?: string,
+  ): Relationship[] {
+    return this.getRelationships(scopeUserId, scopeAgentId, entityId, direction).filter((rel) => {
+      if (relationType && rel.relation_type !== relationType) return false;
+      const graphModel = rel.properties?.graph_model;
+      return graphModel === "universal-v1";
+    });
+  }
+
+  deleteCodeAwareRelationshipsByEvidencePath(
+    scopeUserId: string,
+    scopeAgentId: string,
+    evidencePath: string,
+  ): number {
+    const normalized = String(evidencePath || "").trim();
+    if (!normalized) return 0;
+
+    const stmt = this.db.prepare(
+      `DELETE FROM relationships
+       WHERE scope_user_id = ?
+         AND scope_agent_id = ?
+         AND relation_type IN ('defines', 'imports', 'calls', 'routes_to', 'scheduled_as', 'depends_on')
+         AND json_extract(properties, '$.graph_model') = 'universal-v1'
+         AND json_extract(properties, '$.evidence_path') = ?`,
+    );
+    const result = stmt.run(scopeUserId, scopeAgentId, normalized);
+    return Number(result.changes || 0);
+  }
+
+  upsertCodeGraphRelation(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: CodeGraphRelationUpsertInput,
+  ): Relationship {
+    const confidence = Number.isFinite(input.provenance?.confidence)
+      ? Math.min(1, Math.max(0, Number(input.provenance.confidence)))
+      : 0;
+
+    return this.createRelationship(scopeUserId, scopeAgentId, {
+      source_entity_id: input.source_node_id,
+      target_entity_id: input.target_node_id,
+      relation_type: input.relation_type,
+      weight: confidence,
+      properties: {
+        ...(input.properties || {}),
+        graph_model: "universal-v1",
+        adapter_kind: String(input.provenance?.adapter_kind || "unknown"),
+        confidence,
+        evidence_path: input.provenance?.evidence_path,
+        evidence_start_line: input.provenance?.evidence_start_line,
+        evidence_end_line: input.provenance?.evidence_end_line,
+      },
+    });
+  }
+
+  traverseCodeGraph(
+    scopeUserId: string,
+    scopeAgentId: string,
+    startEntityId: string,
+    maxDepth: number = 2,
+    relationType?: string,
+  ): { entities: Entity[]; relationships: Relationship[] } {
+    const entities = new Map<string, Entity>();
+    const relationships = new Map<string, Relationship>();
+    const visited = new Set<string>();
+    let currentLevel = [startEntityId];
+
+    for (let depth = 0; depth < maxDepth && currentLevel.length > 0; depth++) {
+      const nextLevel: string[] = [];
+
+      for (const entityId of currentLevel) {
+        if (visited.has(entityId)) continue;
+        visited.add(entityId);
+
+        const entity = this.getEntity(scopeUserId, scopeAgentId, entityId);
+        if (!entity) continue;
+
+        entities.set(entityId, entity);
+
+        const rels = this.getCodeAwareRelationships(scopeUserId, scopeAgentId, entityId, "both", relationType);
+        for (const rel of rels) {
+          relationships.set(rel.id, rel);
+          const otherId = rel.source_entity_id === entityId ? rel.target_entity_id : rel.source_entity_id;
+          if (!visited.has(otherId)) nextLevel.push(otherId);
+        }
+      }
+
+      currentLevel = nextLevel;
+    }
+
+    return {
+      entities: Array.from(entities.values()),
+      relationships: Array.from(relationships.values()),
+    };
+  }
 
   traverseGraph(
     scopeUserId: string,

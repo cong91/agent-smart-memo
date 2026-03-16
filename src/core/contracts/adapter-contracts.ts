@@ -40,15 +40,21 @@ export type MemoryUseCaseName =
   | "project.task_registry_upsert"
   | "project.task_lineage_context"
   | "project.hybrid_search"
+  | "project.change_overlay.query"
   | "project.legacy_backfill"
   | "project.telegram_onboarding"
+  | "project.feature_pack.generate"
+  | "project.feature_pack.query"
+  | "project.developer_query"
   | "memory.capture"
   | "memory.search"
   | "graph.entity.get"
   | "graph.entity.set"
   | "graph.rel.add"
   | "graph.rel.remove"
-  | "graph.search";
+  | "graph.search"
+  | "graph.code.upsert"
+  | "graph.code.chain";
 
 export interface MemoryUseCasePort {
   run<TReq, TRes>(

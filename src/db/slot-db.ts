@@ -14,6 +14,7 @@ import { mkdirSync, existsSync } from "node:fs";
 import { buildChunkArtifacts } from "../core/ingest/ingest-pipeline.js";
 import { extractSemanticBlocks } from "../core/ingest/semantic-block-extractor.js";
 import { buildSymbolId } from "../core/ingest/ids.js";
+import { populateUniversalCodeGraphForFile } from "../core/graph/code-graph-populator.js";
 import { GraphDB } from "./graph-db.js";
 import { getSlotTTL } from "../shared/memory-config.js";
 import { resolveLegacyStateDirInput, resolveSlotDbDir } from "../shared/slotdb-path.js";
@@ -386,6 +387,68 @@ export interface ProjectLegacyBackfillResult {
   updated_registration_states: number;
   migration_state_upserts: number;
   items: ProjectLegacyBackfillItem[];
+}
+
+export interface ProjectChangeOverlayQueryInput {
+  project_id: string;
+  task_id?: string;
+  tracker_issue_key?: string;
+  task_title?: string;
+  feature_key?: "project_onboarding_registration_indexing" | "code_aware_retrieval" | "heartbeat_health_runtime_integrity" | "change_aware_impact" | "post_entry_review_decision_support";
+  feature_name?: string;
+  include_related?: boolean;
+  include_parent_chain?: boolean;
+}
+
+export interface ProjectChangeOverlaySymbol {
+  symbol_name: string;
+  symbol_kind?: string;
+  symbol_fqn?: string;
+  relative_path?: string;
+  source: "task_registry" | "symbol_registry";
+}
+
+export interface ProjectChangeOverlayResult {
+  project_id: string;
+  focus: {
+    task_id: string;
+    task_title: string;
+    tracker_issue_key: string | null;
+  };
+  changed_files: string[];
+  related_symbols: ProjectChangeOverlaySymbol[];
+  commit_refs: string[];
+}
+
+export interface ProjectFeaturePackProjectOnboardingIndexingSnapshot {
+  project: ProjectRecord;
+  aliases: ProjectAliasRecord[];
+  registration: ProjectRegistrationStateRecord | null;
+  tracker_mappings: ProjectTrackerMappingRecord[];
+  recent_files: Array<{
+    relative_path: string;
+    module: string | null;
+    language: string | null;
+  }>;
+  recent_symbols: Array<{
+    symbol_name: string;
+    symbol_kind: string;
+    symbol_fqn: string;
+    relative_path: string;
+  }>;
+  recent_tasks: Array<{
+    task_id: string;
+    task_title: string;
+    tracker_issue_key: string | null;
+    task_status: string | null;
+  }>;
+  recent_index_runs: Array<{
+    run_id: string;
+    trigger_type: string;
+    state: string;
+    started_at: string;
+    finished_at: string | null;
+  }>;
 }
 
 // ============================================================================
@@ -1377,6 +1440,15 @@ export class SlotDB {
               indexed_at: nowIso,
             });
           }
+
+          populateUniversalCodeGraphForFile(this.graph, scopeUserId, scopeAgentId, {
+            projectId: input.project_id,
+            relativePath,
+            module: item?.module || null,
+            language: language || "text",
+            content,
+            blocks,
+          });
         }
       }
 
@@ -1993,6 +2065,185 @@ export class SlotDB {
             },
           }
         : undefined,
+    };
+  }
+
+  queryProjectChangeOverlay(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: ProjectChangeOverlayQueryInput,
+  ): ProjectChangeOverlayResult {
+    const lineage = this.getTaskLineageContext(scopeUserId, scopeAgentId, {
+      project_id: input.project_id,
+      task_id: input.task_id,
+      tracker_issue_key: input.tracker_issue_key,
+      task_title: input.task_title,
+      include_related: input.include_related,
+      include_parent_chain: input.include_parent_chain,
+    });
+
+    const changedFiles = this.uniqueSorted(
+      (lineage.touched_files || []).map((p) => this.normalizeRelativePath(p)).filter(Boolean),
+    );
+
+    const relatedSymbolsMap = new Map<string, ProjectChangeOverlaySymbol>();
+
+    for (const symbolName of lineage.touched_symbols || []) {
+      const normalized = String(symbolName || "").trim();
+      if (!normalized) continue;
+      const key = `task_registry:${normalized}`;
+      if (!relatedSymbolsMap.has(key)) {
+        relatedSymbolsMap.set(key, {
+          symbol_name: normalized,
+          source: "task_registry",
+        });
+      }
+    }
+
+    if (changedFiles.length > 0) {
+      const placeholders = changedFiles.map(() => "?").join(",");
+      const stmt = this.db.prepare(
+        `SELECT symbol_name, symbol_kind, symbol_fqn, relative_path
+         FROM symbol_registry
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND active = 1
+           AND relative_path IN (${placeholders})
+         ORDER BY indexed_at DESC, symbol_name ASC`,
+      );
+      const rows = stmt.all(scopeUserId, scopeAgentId, input.project_id, ...changedFiles) as Array<{
+        symbol_name: string;
+        symbol_kind: string | null;
+        symbol_fqn: string | null;
+        relative_path: string | null;
+      }>;
+
+      for (const row of rows) {
+        const symbolName = String(row.symbol_name || "").trim();
+        if (!symbolName) continue;
+        const relPath = row.relative_path ? String(row.relative_path) : undefined;
+        const symbolFqn = row.symbol_fqn ? String(row.symbol_fqn) : undefined;
+        const key = `symbol_registry:${symbolName}:${symbolFqn || ""}:${relPath || ""}`;
+        if (!relatedSymbolsMap.has(key)) {
+          relatedSymbolsMap.set(key, {
+            symbol_name: symbolName,
+            symbol_kind: row.symbol_kind ? String(row.symbol_kind) : undefined,
+            symbol_fqn: symbolFqn,
+            relative_path: relPath,
+            source: "symbol_registry",
+          });
+        }
+      }
+    }
+
+    return {
+      project_id: input.project_id,
+      focus: lineage.focus,
+      changed_files: changedFiles,
+      related_symbols: Array.from(relatedSymbolsMap.values()),
+      commit_refs: this.uniqueSorted(lineage.commit_refs || []),
+    };
+  }
+
+  getProjectFeaturePackProjectOnboardingIndexingSnapshot(
+    scopeUserId: string,
+    scopeAgentId: string,
+    projectId: string,
+  ): ProjectFeaturePackProjectOnboardingIndexingSnapshot {
+    const project = this.getProjectById(scopeUserId, scopeAgentId, projectId);
+    if (!project) {
+      throw new Error(`project_id '${projectId}' is not registered`);
+    }
+
+    const aliases = this.listProjects(scopeUserId, scopeAgentId)
+      .find((row) => row.project.project_id === projectId)?.aliases || [];
+
+    const registration = this.getProjectRegistrationState(scopeUserId, scopeAgentId, projectId);
+
+    const trackerStmt = this.db.prepare(
+      `SELECT * FROM project_tracker_mappings
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?
+       ORDER BY updated_at DESC`,
+    );
+    const trackerMappings = (trackerStmt.all(scopeUserId, scopeAgentId, projectId) as Array<any>).map((row) => ({
+      id: String(row.id),
+      project_id: String(row.project_id),
+      scope_user_id: String(row.scope_user_id),
+      scope_agent_id: String(row.scope_agent_id),
+      tracker_type: String(row.tracker_type) as "jira" | "github" | "other",
+      tracker_space_key: row.tracker_space_key ? String(row.tracker_space_key) : null,
+      tracker_project_id: row.tracker_project_id ? String(row.tracker_project_id) : null,
+      default_epic_key: row.default_epic_key ? String(row.default_epic_key) : null,
+      board_key: row.board_key ? String(row.board_key) : null,
+      active_version: row.active_version ? String(row.active_version) : null,
+      external_project_url: row.external_project_url ? String(row.external_project_url) : null,
+      created_at: String(row.created_at),
+      updated_at: String(row.updated_at),
+    }));
+
+    const fileStmt = this.db.prepare(
+      `SELECT relative_path, module, language
+       FROM file_index_state
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND active = 1
+       ORDER BY indexed_at DESC, relative_path ASC
+       LIMIT 12`,
+    );
+    const recentFiles = (fileStmt.all(scopeUserId, scopeAgentId, projectId) as Array<any>).map((row) => ({
+      relative_path: String(row.relative_path),
+      module: row.module ? String(row.module) : null,
+      language: row.language ? String(row.language) : null,
+    }));
+
+    const symbolStmt = this.db.prepare(
+      `SELECT symbol_name, symbol_kind, symbol_fqn, relative_path
+       FROM symbol_registry
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND active = 1
+       ORDER BY indexed_at DESC, symbol_name ASC
+       LIMIT 16`,
+    );
+    const recentSymbols = (symbolStmt.all(scopeUserId, scopeAgentId, projectId) as Array<any>).map((row) => ({
+      symbol_name: String(row.symbol_name),
+      symbol_kind: String(row.symbol_kind),
+      symbol_fqn: String(row.symbol_fqn),
+      relative_path: String(row.relative_path),
+    }));
+
+    const taskStmt = this.db.prepare(
+      `SELECT task_id, task_title, tracker_issue_key, task_status
+       FROM task_registry
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?
+       ORDER BY updated_at DESC
+       LIMIT 12`,
+    );
+    const recentTasks = (taskStmt.all(scopeUserId, scopeAgentId, projectId) as Array<any>).map((row) => ({
+      task_id: String(row.task_id),
+      task_title: String(row.task_title),
+      tracker_issue_key: row.tracker_issue_key ? String(row.tracker_issue_key) : null,
+      task_status: row.task_status ? String(row.task_status) : null,
+    }));
+
+    const runStmt = this.db.prepare(
+      `SELECT run_id, trigger_type, state, started_at, finished_at
+       FROM index_runs
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?
+       ORDER BY started_at DESC
+       LIMIT 8`,
+    );
+    const recentIndexRuns = (runStmt.all(scopeUserId, scopeAgentId, projectId) as Array<any>).map((row) => ({
+      run_id: String(row.run_id),
+      trigger_type: String(row.trigger_type),
+      state: String(row.state),
+      started_at: String(row.started_at),
+      finished_at: row.finished_at ? String(row.finished_at) : null,
+    }));
+
+    return {
+      project,
+      aliases,
+      registration,
+      tracker_mappings: trackerMappings,
+      recent_files: recentFiles,
+      recent_symbols: recentSymbols,
+      recent_tasks: recentTasks,
+      recent_index_runs: recentIndexRuns,
     };
   }
 

@@ -56,7 +56,6 @@ export interface AgentMemoConfig {
   summarizeEveryActions?: number;
   slotDbDir?: string;
   projectWorkspaceRoot?: string;
-  repoCloneRoot?: string;
 }
 
 const CONFIG_KEY_CANDIDATES: (keyof AgentMemoConfig)[] = [
@@ -73,7 +72,6 @@ const CONFIG_KEY_CANDIDATES: (keyof AgentMemoConfig)[] = [
   "embedDimensions",
   "slotDbDir",
   "projectWorkspaceRoot",
-  "repoCloneRoot",
   "autoCaptureEnabled",
   "autoCaptureMinConfidence",
   "contextWindowMaxTokens",
@@ -260,11 +258,7 @@ export const AGENT_MEMO_CONFIG_SCHEMA = {
     },
     projectWorkspaceRoot: {
       type: "string",
-      description: "Default workspace root for repo clone/import onboarding resolution (fallback for project.register/project onboarding).",
-    },
-    repoCloneRoot: {
-      type: "string",
-      description: "Alias of projectWorkspaceRoot for operator familiarity; used as fallback clone root.",
+      description: "Default workspace root for repo clone/import onboarding resolution (used for project.register/project onboarding).",
     },
     autoCaptureEnabled: {
       type: "boolean",
@@ -346,10 +340,6 @@ export const AGENT_MEMO_UI_HINTS = {
     label: "Project Workspace Root",
     placeholder: "/Users/you/Work/projects",
   },
-  repoCloneRoot: {
-    label: "Repo Clone Root",
-    placeholder: "/Users/you/Work/projects",
-  },
   autoCaptureEnabled: {
     label: "Auto Capture Enabled",
   },
@@ -422,7 +412,7 @@ const agentMemoPlugin = {
     const autoCaptureMinConfidence = config.autoCaptureMinConfidence || 0.7;
     const contextWindowMaxTokens = config.contextWindowMaxTokens || 12000;
     const summarizeEveryActions = config.summarizeEveryActions || 6;
-    const projectWorkspaceRoot = firstNonEmptyString(config.projectWorkspaceRoot, config.repoCloneRoot);
+    const projectWorkspaceRoot = firstNonEmptyString(config.projectWorkspaceRoot);
 
     // State directory from env or default
     const stateDir = process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;

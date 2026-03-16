@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 
 import { SlotDB } from "../src/db/slot-db.js";
 import { DefaultMemoryUseCasePort } from "../src/core/usecases/default-memory-usecase-port.js";
+import { buildCodeGraphFileNodeId } from "../src/core/graph/code-graph-populator.js";
 
 const TEST_DIR = join(tmpdir(), `agent-memo-project-reindex-test-${Date.now()}`);
 
@@ -104,7 +105,7 @@ async function main() {
       payload: {
         project_id: projectId,
         source_rev: "abc125",
-        trigger_type: "incremental",
+        trigger_type: "bootstrap",
         paths: [
           { relative_path: "src/index.ts", checksum: "c1-updated", module: "src", language: "ts" },
         ],
@@ -128,6 +129,67 @@ async function main() {
       "watch checksum snapshot should reflect latest file-set",
     );
     assertEqual(watch.last_checksum_snapshot["src/index.ts"], "c1-updated", "watch checksum should persist latest checksum");
+  });
+
+  await test("project.reindex_diff populates universal code graph relations from indexed code artifacts", async () => {
+    const relationProjectId = projectId;
+    const source = [
+      'import { helper } from "./helper";',
+      'import express from "express";',
+      '',
+      'export function helper() {',
+      '  return "ok";',
+      '}',
+      '',
+      'export function startServer() {',
+      '  helper();',
+      '  const app = express();',
+      '  app.get("/health", helper);',
+      '  cron.schedule("*/5 * * * *", helper);',
+      '}',
+    ].join("\n");
+
+    await usecase.run<any, any>("project.reindex_diff", {
+      ...ctx,
+      payload: {
+        project_id: relationProjectId,
+        source_rev: "graph001",
+        trigger_type: "bootstrap",
+        paths: [
+          {
+            relative_path: "src/server.ts",
+            checksum: "g1",
+            module: "src",
+            language: "ts",
+            content: source,
+          },
+        ],
+      },
+    });
+
+    const chain = await usecase.run<any, any>("graph.code.chain", {
+      ...ctx,
+      payload: {
+        node_id: buildCodeGraphFileNodeId(relationProjectId, "src/server.ts"),
+        depth: 3,
+      },
+    });
+
+    const relationTypes = chain.relationships.map((rel: any) => rel.relation_type);
+    assert(relationTypes.includes("defines"), "should populate defines relation");
+    assert(relationTypes.includes("imports"), "should populate imports relation");
+    assert(relationTypes.includes("depends_on"), "should populate depends_on relation");
+    assert(relationTypes.includes("routes_to"), "should populate routes_to relation");
+    assert(relationTypes.includes("scheduled_as"), "should populate scheduled_as relation");
+    assert(relationTypes.includes("calls"), "should populate calls relation");
+
+    const importedCall = chain.relationships.find(
+      (rel: any) => rel.relation_type === "calls" && rel.properties?.target_kind === "imported_binding",
+    );
+    assert(Boolean(importedCall), "should populate calls relation from local symbol to imported binding symbol");
+
+    const importEdge = chain.relationships.find((rel: any) => rel.relation_type === "imports");
+    assert(Boolean(importEdge?.properties?.evidence_start_line), "imports relation should carry evidence_start_line");
   });
 
   db.close();

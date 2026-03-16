@@ -249,6 +249,355 @@ async function main() {
     assertEqual(committed.index_trigger.requested, true, "index_now should propagate");
   });
 
+  await test("project.feature_pack.generate builds onboarding/registration/indexing pack", async () => {
+    const current = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_alias: "agent-smart-memo-cmd" },
+    });
+
+    await usecase.run<any, any>("project.task_registry_upsert", {
+      ...ctx,
+      payload: {
+        task_id: "task-onboarding-1",
+        project_id: current.project.project_id,
+        task_title: "Project onboarding registration indexing flow",
+        tracker_issue_key: "ASM-93",
+        task_status: "done",
+        files_touched: ["src/tools/project-tools.ts", "src/core/usecases/default-memory-usecase-port.ts"],
+        symbols_touched: ["project.register_command", "project.trigger_index"],
+      },
+    });
+
+    await usecase.run<any, any>("project.task_registry_upsert", {
+      ...ctx,
+      payload: {
+        task_id: "task-retrieval-1",
+        project_id: current.project.project_id,
+        task_title: "Code aware retrieval hybrid search and symbol graph",
+        tracker_issue_key: "ASM-92",
+        task_status: "done",
+        files_touched: ["src/db/slot-db.ts", "src/tools/project-tools.ts"],
+        symbols_touched: ["project.hybrid_search", "graph.code.chain"],
+      },
+    });
+
+    await usecase.run<any, any>("project.task_registry_upsert", {
+      ...ctx,
+      payload: {
+        task_id: "task-health-1",
+        project_id: current.project.project_id,
+        task_title: "Runtime health integrity and heartbeat watch state",
+        tracker_issue_key: "ASM-78",
+        task_status: "done",
+        files_touched: ["src/db/slot-db.ts"],
+        symbols_touched: ["project.index_watch_get", "project.trigger_index"],
+      },
+    });
+
+    await usecase.run<any, any>("project.task_registry_upsert", {
+      ...ctx,
+      payload: {
+        task_id: "task-impact-1",
+        project_id: current.project.project_id,
+        task_title: "Change aware impact via reindex diff and task lineage",
+        tracker_issue_key: "ASM-78",
+        task_status: "done",
+        files_touched: ["src/db/slot-db.ts", "src/core/usecases/default-memory-usecase-port.ts"],
+        symbols_touched: ["project.reindex_diff", "project.task_lineage_context"],
+      },
+    });
+
+    await usecase.run<any, any>("project.task_registry_upsert", {
+      ...ctx,
+      payload: {
+        task_id: "task-post-entry-1",
+        project_id: current.project.project_id,
+        task_title: "Post-entry review decision support trace coverage",
+        tracker_issue_key: "TAA-123",
+        task_status: "done",
+        files_touched: ["src/trading/post-entry-review.service.ts"],
+        symbols_touched: ["PostEntryReviewService.reviewOutcome"],
+      },
+    });
+
+    await usecase.run<any, any>("project.reindex_diff", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        source_rev: "asm-93-pack-test",
+        trigger_type: "bootstrap",
+        paths: [
+          {
+            relative_path: "src/tools/project-tools.ts",
+            module: "tools",
+            language: "ts",
+            content: "export function registerProjectTools() {}\nexport async function project_hybrid_search() {}",
+          },
+          {
+            relative_path: "src/commands/telegram-addproject-command.ts",
+            module: "commands",
+            language: "ts",
+            content: "export function registerTelegramAddProjectCommand() {}",
+          },
+          {
+            relative_path: "src/db/slot-db.ts",
+            module: "db",
+            language: "ts",
+            content: "export function getProjectFeaturePackProjectOnboardingIndexingSnapshot() {}\nexport function hybridSearchProjectContext() {}",
+          },
+        ],
+      },
+    });
+
+    const onboardingPack = await usecase.run<any, any>("project.feature_pack.generate", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        feature_key: "project_onboarding_registration_indexing",
+      },
+    });
+
+    assertEqual(onboardingPack.feature_key, "project_onboarding_registration_indexing", "feature key should match");
+    assert(onboardingPack.primary_files.includes("src/tools/project-tools.ts"), "pack should include project tool file");
+    assert(onboardingPack.primary_symbols.includes("project.register_command"), "pack should include registration symbol");
+    assert(onboardingPack.flow_steps.length >= 4, "pack should include minimal flow steps");
+    assert(onboardingPack.related_tasks.includes("ASM-93") || onboardingPack.related_tasks.includes("task-onboarding-1"), "pack should include related task evidence");
+    assert(onboardingPack.evidence.some((item: any) => item.type === "index"), "pack should include index evidence");
+
+    const retrievalPack = await usecase.run<any, any>("project.feature_pack.generate", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        feature_key: "code_aware_retrieval",
+      },
+    });
+    assertEqual(retrievalPack.feature_key, "code_aware_retrieval", "retrieval feature key should match");
+    assert(retrievalPack.primary_symbols.includes("project.hybrid_search"), "retrieval pack should include hybrid search symbol");
+
+    const heartbeatPack = await usecase.run<any, any>("project.feature_pack.generate", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        feature_key: "heartbeat_health_runtime_integrity",
+      },
+    });
+    assertEqual(heartbeatPack.feature_key, "heartbeat_health_runtime_integrity", "heartbeat feature key should match");
+    assert(heartbeatPack.evidence.some((item: any) => item.type === "registration" || item.type === "index"), "heartbeat pack should include integrity evidence");
+
+    const impactPack = await usecase.run<any, any>("project.feature_pack.generate", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        feature_key: "change_aware_impact",
+      },
+    });
+    assertEqual(impactPack.feature_key, "change_aware_impact", "impact feature key should match");
+    assert(impactPack.primary_symbols.includes("project.reindex_diff"), "impact pack should include reindex diff symbol");
+
+    const postEntryPack = await usecase.run<any, any>("project.feature_pack.generate", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        feature_key: "post_entry_review_decision_support",
+      },
+    });
+    assertEqual(postEntryPack.feature_key, "post_entry_review_decision_support", "post-entry feature key should match");
+    assert(postEntryPack.related_tasks.includes("TAA-123") || postEntryPack.related_tasks.includes("task-post-entry-1"), "post-entry pack should include decision-support task evidence");
+
+    const queryByKey = await usecase.run<any, any>("project.feature_pack.query", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        feature_key: "code_aware_retrieval",
+      },
+    });
+    assertEqual(queryByKey.feature_key, "code_aware_retrieval", "query by key should resolve retrieval pack");
+    assertEqual(queryByKey.pack.feature_key, "code_aware_retrieval", "query result pack should align with key");
+
+    const queryByName = await usecase.run<any, any>("project.feature_pack.query", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        feature_name: "post entry review decision support",
+      },
+    });
+    assertEqual(queryByName.feature_key, "post_entry_review_decision_support", "query by feature_name should normalize selector");
+    assertEqual(queryByName.pack.feature_key, "post_entry_review_decision_support", "query by name should return post-entry pack");
+  });
+
+  await test("project.developer_query benchmark/hardening covers 5 developer query groups", async () => {
+    const locate = await usecase.run<any, any>("project.developer_query", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        query: "project_hybrid_search",
+        intent: "locate",
+        limit: 5,
+      },
+    });
+
+    assertEqual(locate.intent, "locate", "locate intent should be preserved");
+    assert(Array.isArray(locate.primary_results) && locate.primary_results.length >= 1, "locate should return primary results");
+    assert(Array.isArray(locate.files), "locate response should expose files[] contract");
+    assert(Array.isArray(locate.symbols), "locate response should expose symbols[] contract");
+    assertEqual(locate.generator_version, "asm-95-slice3", "locate response generator should match slice3");
+    assert(Array.isArray(locate.assembly_sources), "locate response should expose assembly_sources");
+    assert(locate.assembly_sources.includes("file") || locate.assembly_sources.includes("symbol"), "locate should include file/symbol assembly source");
+    assert(locate.confidence.reason.includes("intent=locate"), "locate confidence reason should include intent marker");
+
+    const traceFlow = await usecase.run<any, any>("project.developer_query", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        query: "trace flow ASM-78 from reindex to overlay",
+        intent: "trace_flow",
+      },
+    });
+
+    assertEqual(traceFlow.intent, "trace_flow", "trace_flow intent should be preserved");
+    assert(traceFlow.assembly_sources.includes("change_overlay"), "trace_flow should include change_overlay assembly source");
+    assert(traceFlow.change_context.includes("ASM-78"), "trace_flow should include tracker issue context");
+    assert(traceFlow.why_this_result.some((line: string) => line.includes("task_context applied")), "trace_flow should apply task_context when possible");
+
+    const impact = await usecase.run<any, any>("project.developer_query", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        query: "impact of ASM-78 reindex diff changes",
+        intent: "impact",
+      },
+    });
+
+    assertEqual(impact.intent, "impact", "impact intent should be preserved");
+    assert(Array.isArray(impact.feature_packs) && impact.feature_packs.length >= 1, "impact should attach at least one feature pack");
+    assertEqual(impact.feature_packs[0].feature_key, "change_aware_impact", "impact should default to change_aware_impact pack");
+    assert(impact.assembly_sources.includes("change_overlay"), "impact should include overlay source");
+
+    const changeAware = await usecase.run<any, any>("project.developer_query", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        query: "change-aware lookup for ASM-78 overlay",
+        intent: "change_aware_lookup",
+      },
+    });
+
+    assertEqual(changeAware.intent, "change_aware_lookup", "change-aware intent should be preserved");
+    assert(changeAware.assembly_sources.includes("change_overlay"), "change-aware lookup should include change_overlay source");
+    assert(changeAware.assembly_sources.includes("feature_pack"), "change-aware lookup should include feature_pack source");
+    assert(changeAware.primary_results.some((item: any) => item.type === "symbol"), "change-aware lookup should prioritize symbol-level results");
+
+    const feature = await usecase.run<any, any>("project.developer_query", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        query: "code aware retrieval",
+        intent: "feature_understanding",
+      },
+    });
+
+    assertEqual(feature.intent, "feature_understanding", "feature intent should be preserved");
+    assert(Array.isArray(feature.feature_packs) && feature.feature_packs.length === 1, "feature query should return one feature pack");
+    assertEqual(feature.feature_packs[0].feature_key, "code_aware_retrieval", "feature query should resolve retrieval pack");
+    assert(Array.isArray(feature.primary_results) && feature.primary_results[0]?.type === "feature_pack", "feature query primary result should be feature_pack");
+    assertEqual(feature.generator_version, "asm-95-slice3", "feature response generator should match slice3");
+    assert(Array.isArray(feature.assembly_sources), "feature response should expose assembly_sources");
+    assert(feature.assembly_sources.includes("feature_pack"), "feature response should include feature_pack assembly source");
+  });
+
+  await test("project.change_overlay.query maps overlay -> feature packs with confidence ordering", async () => {
+    const current = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_alias: "agent-smart-memo-cmd" },
+    });
+
+    await usecase.run<any, any>("project.task_registry_upsert", {
+      ...ctx,
+      payload: {
+        task_id: "task-overlay-1",
+        project_id: current.project.project_id,
+        task_title: "Change aware impact via reindex diff and task lineage",
+        tracker_issue_key: "ASM-78",
+        task_status: "done",
+        files_touched: ["src/tools/project-tools.ts", "src/db/slot-db.ts"],
+        symbols_touched: ["project.change_overlay.query", "queryProjectChangeOverlay"],
+        commit_refs: ["abc1234"],
+      },
+    });
+
+    await usecase.run<any, any>("project.reindex_diff", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        source_rev: "asm-94-overlay-test",
+        trigger_type: "incremental",
+        paths: [
+          {
+            relative_path: "src/tools/project-tools.ts",
+            module: "tools",
+            language: "ts",
+            content: "export function registerProjectTools() {}\nexport async function project_change_overlay_query() {}",
+          },
+          {
+            relative_path: "src/db/slot-db.ts",
+            module: "db",
+            language: "ts",
+            content: "export function queryProjectChangeOverlay() {}",
+          },
+        ],
+      },
+    });
+
+    const overlay = await usecase.run<any, any>("project.change_overlay.query", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        tracker_issue_key: "ASM-78",
+      },
+    });
+
+    assertEqual(overlay.generator_version, "asm-94-slice3", "overlay version should match ASM-94 slice3");
+    assertEqual(overlay.focus.tracker_issue_key, "ASM-78", "focus tracker should match");
+    assert(overlay.changed_files.includes("src/tools/project-tools.ts"), "overlay should include changed file from task lineage");
+    assert(overlay.related_symbols.some((s: any) => s.symbol_name === "queryProjectChangeOverlay"), "overlay should include related symbols");
+    assert(overlay.related_symbols.length >= 1, "overlay should expose at least one related symbol");
+    assert(overlay.commit_refs.includes("abc1234"), "overlay should expose commit refs");
+    assert(Array.isArray(overlay.feature_packs), "overlay should include feature pack matches");
+    assert(overlay.feature_packs.some((p: any) => p.feature_key === "change_aware_impact"), "overlay should map to change_aware_impact when evidence exists");
+    assert(overlay.feature_packs.every((p: any) => Number(p.confidence) >= 0.25), "feature pack matches should be confidence-scored");
+    assert(typeof overlay.confidence?.overall === "number" && overlay.confidence.overall > 0, "overlay should expose overall confidence");
+    assert(
+      overlay.related_symbols.every((s: any) => typeof s.confidence === "number"),
+      "related symbols should be enriched with confidence",
+    );
+    const symbolConfidences = overlay.related_symbols.map((s: any) => Number(s.confidence || 0));
+    for (let i = 1; i < symbolConfidences.length; i += 1) {
+      assert(symbolConfidences[i - 1] >= symbolConfidences[i], "related symbols should be sorted by confidence desc");
+    }
+
+    const overlayByFeatureKey = await usecase.run<any, any>("project.change_overlay.query", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        tracker_issue_key: "ASM-78",
+        feature_key: "change_aware_impact",
+      },
+    });
+    assertEqual(overlayByFeatureKey.feature_packs.length, 1, "feature_key should narrow overlay to one matched feature pack");
+    assertEqual(overlayByFeatureKey.feature_packs[0].feature_key, "change_aware_impact", "feature_key selection should be applied");
+
+    const overlayByFeatureName = await usecase.run<any, any>("project.change_overlay.query", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        tracker_issue_key: "ASM-78",
+        feature_name: "change aware impact",
+      },
+    });
+    assertEqual(overlayByFeatureName.feature_packs.length, 1, "feature_name should narrow overlay to one matched feature pack");
+    assertEqual(overlayByFeatureName.feature_packs[0].feature_key, "change_aware_impact", "feature_name normalization should be applied");
+  });
+
   await test("project.list returns registry entries", async () => {
     const rows = await usecase.run<any, any[]>("project.list", {
       ...ctx,

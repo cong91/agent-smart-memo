@@ -11,6 +11,37 @@ import { buildChunkArtifacts } from "../ingest/ingest-pipeline.js";
 import { extractSemanticBlocks } from "../ingest/semantic-block-extractor.js";
 import { SlotDB } from "../../db/slot-db.js";
 import type { SemanticMemoryUseCase } from "./semantic-memory-usecase.js";
+import {
+  UNIVERSAL_GRAPH_MODEL_VERSION,
+  isUniversalGraphNodeType,
+  isUniversalGraphRelationType,
+  isValidUniversalGraphProvenance,
+  type UniversalGraphNodeInput,
+  type UniversalGraphRelationInput,
+} from "../graph/contracts.js";
+import {
+  upsertUniversalGraphNode,
+  upsertUniversalGraphRelation,
+} from "../graph/code-graph-model.js";
+import {
+  FEATURE_PACK_KEYS,
+  type FeaturePackKey,
+  type FeaturePackV1,
+  type ProjectFeaturePackGeneratePayload,
+} from "../contracts/feature-pack-contracts.js";
+import type {
+  ProjectChangeOverlayConfidence,
+  ProjectChangeOverlayEvidenceItem,
+  ProjectChangeOverlayFeaturePackMatch,
+  ProjectChangeOverlayQueryPayload,
+  ProjectChangeOverlayV1,
+} from "../contracts/change-overlay-contracts.js";
+import type {
+  ProjectDeveloperQueryIntent,
+  ProjectDeveloperQueryPayload,
+  ProjectDeveloperQueryPrimaryResult,
+  ProjectDeveloperQueryResponseV1,
+} from "../contracts/project-query-contracts.js";
 
 interface SlotGetPayload {
   key?: string;
@@ -67,6 +98,17 @@ interface GraphRelRemovePayload {
 
 interface GraphSearchPayload {
   entity_id: string;
+  depth?: number;
+  relation_type?: string;
+}
+
+interface GraphCodeUpsertPayload {
+  nodes: UniversalGraphNodeInput[];
+  relations: UniversalGraphRelationInput[];
+}
+
+interface GraphCodeChainPayload {
+  node_id: string;
   depth?: number;
   relation_type?: string;
 }
@@ -266,6 +308,15 @@ interface ProjectHybridSearchPayload {
   };
 }
 
+interface ProjectFeaturePackQueryPayload {
+  project_id?: string;
+  project_alias?: string;
+  feature_key?: FeaturePackKey;
+  feature_name?: string;
+}
+
+type ProjectChangeOverlayQueryUseCasePayload = ProjectChangeOverlayQueryPayload;
+
 interface ProjectLegacyBackfillPayload {
   mode?: "dry_run" | "apply";
   only_project_ids?: string[];
@@ -399,10 +450,18 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
         return this.handleProjectTaskLineageContext(payload as unknown as ProjectTaskLineageContextPayload, req) as TRes;
       case "project.hybrid_search":
         return this.handleProjectHybridSearch(payload as unknown as ProjectHybridSearchPayload, req) as TRes;
+      case "project.change_overlay.query":
+        return this.handleProjectChangeOverlayQuery(payload as unknown as ProjectChangeOverlayQueryUseCasePayload, req) as TRes;
       case "project.legacy_backfill":
         return this.handleProjectLegacyBackfill(payload as unknown as ProjectLegacyBackfillPayload, req) as TRes;
       case "project.telegram_onboarding":
         return this.handleProjectTelegramOnboarding(payload as unknown as ProjectTelegramOnboardingPayload, req) as TRes;
+      case "project.feature_pack.generate":
+        return this.handleProjectFeaturePackGenerate(payload as unknown as ProjectFeaturePackGeneratePayload, req) as TRes;
+      case "project.feature_pack.query":
+        return this.handleProjectFeaturePackQuery(payload as unknown as ProjectFeaturePackQueryPayload, req) as TRes;
+      case "project.developer_query":
+        return this.handleProjectDeveloperQuery(payload as unknown as ProjectDeveloperQueryPayload, req) as TRes;
       case "graph.entity.get":
         return this.handleGraphEntityGet(payload as unknown as GraphEntityGetPayload, req) as TRes;
       case "graph.entity.set":
@@ -413,6 +472,10 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
         return this.handleGraphRelRemove(payload as unknown as GraphRelRemovePayload, req) as TRes;
       case "graph.search":
         return this.handleGraphSearch(payload as unknown as GraphSearchPayload, req) as TRes;
+      case "graph.code.upsert":
+        return this.handleGraphCodeUpsert(payload as unknown as GraphCodeUpsertPayload, req) as TRes;
+      case "graph.code.chain":
+        return this.handleGraphCodeChain(payload as unknown as GraphCodeChainPayload, req) as TRes;
       case "memory.capture":
         return this.handleMemoryCapture(payload, req) as TRes;
       case "memory.search":
@@ -978,9 +1041,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       process.env.PROJECT_WORKSPACE_ROOT,
       process.env.REPO_CLONE_ROOT,
       (req?.meta as any)?.projectWorkspaceRoot,
-      (req?.meta as any)?.repoCloneRoot,
       (req?.context?.metadata as any)?.projectWorkspaceRoot,
-      (req?.context?.metadata as any)?.repoCloneRoot,
       (req?.context?.metadata as any)?.workspaceRoot,
     ];
 
@@ -1558,6 +1619,202 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
     });
   }
 
+  private handleProjectChangeOverlayQuery(
+    payload: ProjectChangeOverlayQueryUseCasePayload,
+    req: CoreRequestEnvelope<unknown>,
+  ): ProjectChangeOverlayV1 {
+    const identity = normalizePrivateIdentity(req.context);
+
+    if (!payload.project_id) {
+      throw new Error("project.change_overlay.query requires payload.project_id");
+    }
+    if (!payload.task_id && !payload.tracker_issue_key && !payload.task_title) {
+      throw new Error("project.change_overlay.query requires one selector: task_id|tracker_issue_key|task_title");
+    }
+
+    const requestedFeature = payload.feature_key
+      ? payload.feature_key
+      : (payload.feature_name ? this.resolveFeatureKeyInput(undefined, payload.feature_name) : undefined);
+
+    const result = this.slotDb.queryProjectChangeOverlay(identity.userId, identity.agentId, {
+      project_id: payload.project_id,
+      task_id: payload.task_id,
+      tracker_issue_key: payload.tracker_issue_key,
+      task_title: payload.task_title,
+      feature_key: requestedFeature,
+      feature_name: payload.feature_name,
+      include_related: payload.include_related,
+      include_parent_chain: payload.include_parent_chain,
+    });
+
+    const baseEvidence: ProjectChangeOverlayEvidenceItem[] = [
+      { type: "task", ref: result.focus.task_id, note: result.focus.task_title },
+      ...(result.focus.tracker_issue_key
+        ? [{ type: "tracker_issue" as const, ref: result.focus.tracker_issue_key }]
+        : []),
+      ...result.changed_files.map((file) => ({ type: "file" as const, ref: file })),
+      ...result.related_symbols.slice(0, 20).map((symbol) => ({
+        type: "symbol" as const,
+        ref: symbol.symbol_fqn || symbol.symbol_name,
+        note: symbol.relative_path,
+      })),
+      ...result.commit_refs.map((ref) => ({ type: "commit_ref" as const, ref })),
+    ];
+
+    const featurePackCandidates: FeaturePackKey[] = requestedFeature
+      ? [requestedFeature]
+      : [
+          "project_onboarding_registration_indexing",
+          "code_aware_retrieval",
+          "heartbeat_health_runtime_integrity",
+          "change_aware_impact",
+          "post_entry_review_decision_support",
+        ];
+
+    const featurePackMatches: ProjectChangeOverlayFeaturePackMatch[] = [];
+    for (const featureKey of featurePackCandidates) {
+      let pack: FeaturePackV1 | null = null;
+      try {
+        pack = this.handleProjectFeaturePackGenerate(
+          {
+            project_id: result.project_id,
+            feature_key: featureKey,
+          },
+          req,
+        );
+      } catch {
+        // Optional mapping: skip packs without enough evidence/context for this project.
+        continue;
+      }
+
+      const packEvidenceSet = new Set(
+        (pack.evidence || []).map((item) => `${item.type}:${String(item.ref || "").toLowerCase()}`),
+      );
+      const matchedEvidence = baseEvidence.filter((item) =>
+        packEvidenceSet.has(`${item.type}:${String(item.ref || "").toLowerCase()}`),
+      );
+
+      if (matchedEvidence.length === 0) {
+        continue;
+      }
+
+      const trackerHit =
+        Boolean(result.focus.tracker_issue_key) &&
+        pack.evidence.some(
+          (item) => item.type === "task" && String(item.ref || "") === String(result.focus.tracker_issue_key || ""),
+        );
+      const taskHit = pack.evidence.some(
+        (item) => item.type === "task" && String(item.ref || "") === String(result.focus.task_id),
+      );
+      const commitHitCount = result.commit_refs.filter((ref) =>
+        pack.related_commits.some((hint) => hint.toLowerCase().includes(String(ref || "").toLowerCase())),
+      ).length;
+
+      const overlapRatio = matchedEvidence.length / Math.max(baseEvidence.length, 1);
+      const confidenceRaw =
+        Math.min(1, overlapRatio * 0.75) +
+        (trackerHit ? 0.12 : 0) +
+        (taskHit ? 0.08 : 0) +
+        Math.min(0.1, commitHitCount * 0.05);
+      const confidence = Number(Math.min(1, confidenceRaw).toFixed(2));
+
+      if (confidence < 0.25) {
+        continue;
+      }
+
+      featurePackMatches.push({
+        feature_key: featureKey,
+        title: pack.title,
+        confidence,
+        matched_evidence: matchedEvidence.slice(0, 10),
+        note: `matched ${matchedEvidence.length} evidence items`,
+      });
+    }
+
+    featurePackMatches.sort((a, b) => b.confidence - a.confidence);
+
+    const symbolsByPath = new Map<string, number>();
+    for (const path of result.changed_files) {
+      symbolsByPath.set(path, 0);
+    }
+    for (const symbol of result.related_symbols) {
+      if (symbol.relative_path && symbolsByPath.has(symbol.relative_path)) {
+        symbolsByPath.set(symbol.relative_path, Number(symbolsByPath.get(symbol.relative_path) || 0) + 1);
+      }
+    }
+
+    const enrichedSymbols = result.related_symbols
+      .map((symbol) => {
+        const hasPath = Boolean(symbol.relative_path && result.changed_files.includes(symbol.relative_path));
+        const pathDensity = hasPath
+          ? Math.min(1, Number(symbolsByPath.get(symbol.relative_path || "") || 0) / 4)
+          : 0;
+        const name = String(symbol.symbol_name || "");
+        const nameLower = name.toLowerCase();
+        const symbolFromTask = result.focus.task_title
+          .toLowerCase()
+          .split(/[^a-z0-9_]+/)
+          .filter((token) => token.length >= 3)
+          .some((token) => nameLower.includes(token));
+
+        const confidence = Number(
+          Math.min(
+            1,
+            (symbol.source === "task_registry" ? 0.45 : 0.35) +
+              (hasPath ? 0.25 : 0) +
+              pathDensity * 0.2 +
+              (symbolFromTask ? 0.1 : 0),
+          ).toFixed(2),
+        );
+
+        return {
+          ...symbol,
+          confidence,
+          evidence_refs: [
+            ...(symbol.relative_path ? [`file:${symbol.relative_path}`] : []),
+            ...(symbol.symbol_fqn ? [`symbol:${symbol.symbol_fqn}`] : [`symbol:${symbol.symbol_name}`]),
+          ],
+        };
+      })
+      .sort((a, b) => {
+        const confidenceDiff = Number((b.confidence || 0) - (a.confidence || 0));
+        if (confidenceDiff !== 0) return confidenceDiff;
+        return String(a.symbol_name).localeCompare(String(b.symbol_name));
+      });
+
+    const confidence: ProjectChangeOverlayConfidence = {
+      overall: Number(
+        Math.min(
+          1,
+          (result.changed_files.length > 0 ? 0.3 : 0) +
+            Math.min(0.25, result.related_symbols.length * 0.03) +
+            Math.min(0.15, result.commit_refs.length * 0.05) +
+            Math.min(0.3, featurePackMatches.length * 0.1),
+        ).toFixed(2),
+      ),
+      signals: {
+        changed_files: result.changed_files.length,
+        related_symbols: result.related_symbols.length,
+        commit_refs: result.commit_refs.length,
+        feature_pack_matches: featurePackMatches.length,
+      },
+    };
+
+    return {
+      overlay_id: `change-overlay:${result.project_id}:${result.focus.task_id}${requestedFeature ? `:${requestedFeature}` : ""}`,
+      project_id: result.project_id,
+      focus: result.focus,
+      changed_files: result.changed_files,
+      related_symbols: enrichedSymbols,
+      commit_refs: result.commit_refs,
+      feature_packs: featurePackMatches,
+      evidence: baseEvidence,
+      confidence,
+      generated_at: new Date().toISOString(),
+      generator_version: "asm-94-slice3",
+    };
+  }
+
   private handleProjectLegacyBackfill(payload: ProjectLegacyBackfillPayload, req: CoreRequestEnvelope<unknown>) {
     const identity = normalizePrivateIdentity(req.context);
 
@@ -1701,6 +1958,941 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
     };
   }
 
+  private handleProjectFeaturePackGenerate(
+    payload: ProjectFeaturePackGeneratePayload,
+    req: CoreRequestEnvelope<unknown>,
+  ): FeaturePackV1 {
+    const identity = normalizePrivateIdentity(req.context);
+    const featureKey = payload.feature_key || "project_onboarding_registration_indexing";
+
+    const project = this.resolveProjectRef(identity.userId, identity.agentId, {
+      project_id: payload.project_id,
+      project_alias: payload.project_alias,
+    });
+
+    const snapshot = this.slotDb.getProjectFeaturePackProjectOnboardingIndexingSnapshot(
+      identity.userId,
+      identity.agentId,
+      project.project_id,
+    );
+
+    const primaryAlias =
+      snapshot.aliases.find((item) => item.is_primary === 1)?.project_alias || payload.project_alias || project.project_name;
+
+    switch (featureKey) {
+      case "project_onboarding_registration_indexing":
+        return this.buildProjectOnboardingRegistrationIndexingPack(snapshot, project.project_id, primaryAlias);
+      case "code_aware_retrieval":
+        return this.buildCodeAwareRetrievalPack(snapshot, project.project_id, primaryAlias);
+      case "heartbeat_health_runtime_integrity":
+        return this.buildHeartbeatHealthRuntimeIntegrityPack(snapshot, project.project_id, primaryAlias);
+      case "change_aware_impact":
+        return this.buildChangeAwareImpactPack(snapshot, project.project_id, primaryAlias);
+      case "post_entry_review_decision_support":
+        return this.buildPostEntryReviewDecisionSupportPack(snapshot, project.project_id, primaryAlias);
+      default:
+        throw new Error(`Unsupported feature_key: ${featureKey}`);
+    }
+  }
+
+  private handleProjectFeaturePackQuery(
+    payload: ProjectFeaturePackQueryPayload,
+    req: CoreRequestEnvelope<unknown>,
+  ): { project_id: string; project_alias: string | null; feature_key: FeaturePackKey; pack: FeaturePackV1 } {
+    const identity = normalizePrivateIdentity(req.context);
+    const project = this.resolveProjectRef(identity.userId, identity.agentId, {
+      project_id: payload.project_id,
+      project_alias: payload.project_alias,
+    });
+
+    const requestedFeature = this.resolveFeatureKeyInput(payload.feature_key, payload.feature_name);
+
+    const pack = this.handleProjectFeaturePackGenerate(
+      {
+        project_id: project.project_id,
+        project_alias: payload.project_alias,
+        feature_key: requestedFeature,
+      },
+      req,
+    );
+
+    return {
+      project_id: project.project_id,
+      project_alias: payload.project_alias || null,
+      feature_key: requestedFeature,
+      pack,
+    };
+  }
+
+  private handleProjectDeveloperQuery(
+    payload: ProjectDeveloperQueryPayload,
+    req: CoreRequestEnvelope<unknown>,
+  ): ProjectDeveloperQueryResponseV1 {
+    const identity = normalizePrivateIdentity(req.context);
+    const initialRequestedFeature = this.pickFeatureKeyForIntent(
+      payload.intent || "feature_understanding",
+      payload.feature_key,
+      payload.feature_name,
+      String(payload.query || "").trim(),
+    );
+    const query = String(payload.query || payload.feature_name || initialRequestedFeature || "").trim();
+    if (!query) {
+      throw new Error("project.developer_query requires payload.query or a resolvable feature selector");
+    }
+
+    const project = this.resolveProjectRef(identity.userId, identity.agentId, {
+      project_id: payload.project_id,
+      project_alias: payload.project_alias,
+    });
+
+    const inferredIntent: ProjectDeveloperQueryIntent = this.inferDeveloperQueryIntent(
+      payload.intent || "feature_understanding",
+      query,
+      Boolean(payload.feature_key || payload.feature_name),
+    );
+
+    const queryId = `pdevq:${project.project_id}:${Date.now().toString(36)}`;
+    const locateLimit = Math.min(Math.max(Number(payload.limit || 8), 1), 20);
+    const trackerIssueHint = query.match(/\b[A-Z][A-Z0-9_]+-\d+\b/)?.[0];
+
+    const hybridTaskContext =
+      inferredIntent === "trace_flow"
+        ? {
+            tracker_issue_key: trackerIssueHint,
+            include_related: true,
+            include_parent_chain: true,
+          }
+        : inferredIntent === "impact" || inferredIntent === "change_aware_lookup"
+          ? {
+              tracker_issue_key: trackerIssueHint,
+              include_related: true,
+              include_parent_chain: false,
+            }
+          : undefined;
+
+    let locate = this.handleProjectHybridSearch(
+      {
+        project_id: project.project_id,
+        query,
+        limit: locateLimit,
+        debug: false,
+        ...(hybridTaskContext ? { task_context: hybridTaskContext } : {}),
+      },
+      req,
+    );
+
+    let locateFallbackUsed = false;
+    if (locate.results.length === 0 && hybridTaskContext) {
+      locate = this.handleProjectHybridSearch(
+        {
+          project_id: project.project_id,
+          query,
+          limit: locateLimit,
+          debug: false,
+        },
+        req,
+      );
+      locateFallbackUsed = true;
+    }
+
+    const locatePrimary: ProjectDeveloperQueryPrimaryResult[] = locate.results.map((item) => ({
+      type:
+        item.source === "file_index_state"
+          ? "file"
+          : item.source === "symbol_registry"
+            ? "symbol"
+            : item.source === "chunk_registry"
+              ? "chunk"
+              : "task",
+      id: item.id,
+      title: item.symbol_name
+        ? `${item.symbol_name}${item.relative_path ? ` (${item.relative_path})` : ""}`
+        : item.relative_path || item.task_title || item.id,
+      score: item.score,
+      relative_path: item.relative_path,
+      symbol_name: item.symbol_name,
+      snippet: item.snippet,
+    }));
+
+    const requestedFeature = this.pickFeatureKeyForIntent(
+      inferredIntent,
+      payload.feature_key,
+      payload.feature_name,
+      query,
+    );
+    const shouldAttachFeaturePack =
+      inferredIntent === "feature_understanding"
+      || inferredIntent === "impact"
+      || inferredIntent === "change_aware_lookup"
+      || Boolean(payload.feature_key || payload.feature_name);
+
+    let featurePacks: FeaturePackV1[] = [];
+    if (shouldAttachFeaturePack && requestedFeature) {
+      try {
+        const featureQuery = this.handleProjectFeaturePackQuery(
+          {
+            project_id: project.project_id,
+            feature_key: requestedFeature,
+          },
+          req,
+        );
+        featurePacks = [featureQuery.pack];
+      } catch {
+        featurePacks = [];
+      }
+    }
+
+    const overlaySelector = this.pickOverlaySelectorFromLocate(locate.results);
+    const shouldAttachOverlay =
+      inferredIntent === "trace_flow"
+      || inferredIntent === "impact"
+      || inferredIntent === "change_aware_lookup"
+      || inferredIntent === "feature_understanding";
+    let overlay: ProjectChangeOverlayV1 | null = null;
+    if (shouldAttachOverlay && (overlaySelector.task_id || overlaySelector.tracker_issue_key)) {
+      try {
+        overlay = this.handleProjectChangeOverlayQuery(
+          {
+            project_id: project.project_id,
+            task_id: overlaySelector.task_id,
+            tracker_issue_key: overlaySelector.tracker_issue_key,
+            feature_key: requestedFeature || undefined,
+            include_related: true,
+            include_parent_chain: true,
+          },
+          req,
+        );
+      } catch {
+        overlay = null;
+      }
+    }
+
+    const featurePrimary: ProjectDeveloperQueryPrimaryResult[] = featurePacks.map((pack) => ({
+      type: "feature_pack",
+      id: pack.pack_id,
+      title: pack.title,
+      score: 1,
+      snippet: pack.summary,
+    }));
+
+    const mergedPrimary = [
+      ...(inferredIntent === "feature_understanding" ? featurePrimary : []),
+      ...(inferredIntent === "change_aware_lookup" || inferredIntent === "impact"
+        ? (overlay?.related_symbols || []).slice(0, 3).map((symbol) => ({
+            type: "symbol" as const,
+            id: symbol.symbol_fqn || symbol.symbol_name,
+            title: `${symbol.symbol_name}${symbol.relative_path ? ` (${symbol.relative_path})` : ""}`,
+            score: symbol.confidence,
+            relative_path: symbol.relative_path,
+            symbol_name: symbol.symbol_name,
+          }))
+        : []),
+      ...locatePrimary,
+      ...(inferredIntent !== "feature_understanding" ? featurePrimary : []),
+    ].slice(0, 12);
+
+    const files = Array.from(
+      new Set([
+        ...locate.results.map((item) => item.relative_path).filter(Boolean) as string[],
+        ...(overlay?.changed_files || []),
+        ...featurePacks.flatMap((pack) => pack.primary_files || []),
+      ]),
+    ).slice(0, 12);
+
+    const symbols = Array.from(
+      new Set([
+        ...locate.results.map((item) => item.symbol_name).filter(Boolean) as string[],
+        ...(overlay?.related_symbols || []).map((item) => item.symbol_fqn || item.symbol_name).filter(Boolean) as string[],
+        ...featurePacks.flatMap((pack) => pack.primary_symbols || []),
+      ]),
+    ).slice(0, 16);
+
+    const snippets = Array.from(
+      new Set([
+        ...locate.results.map((item) => String(item.snippet || "").trim()).filter(Boolean),
+        ...featurePacks.map((pack) => pack.summary).filter(Boolean),
+        ...(overlay
+          ? [
+              `overlay focus ${overlay.focus.task_id}${overlay.focus.tracker_issue_key ? ` (${overlay.focus.tracker_issue_key})` : ""}`,
+              ...overlay.feature_packs.slice(0, 2).map((pack) => `${pack.feature_key}: ${pack.note || "overlay match"}`),
+            ]
+          : []),
+      ]),
+    ).slice(0, 10);
+
+    const graphPaths = overlay
+      ? overlay.related_symbols
+          .slice(0, 8)
+          .map((item) => `${item.relative_path || "unknown"}::${item.symbol_fqn || item.symbol_name}`)
+      : [];
+
+    const changeContext = Array.from(
+      new Set([
+        ...locate.results
+          .map((item) => item.task_id || item.tracker_issue_key)
+          .filter((value): value is string => Boolean(value)),
+        ...(overlay ? [overlay.focus.task_id, ...(overlay.focus.tracker_issue_key ? [overlay.focus.tracker_issue_key] : [])] : []),
+        ...featurePacks.flatMap((pack) => pack.related_tasks || []),
+      ]),
+    ).slice(0, 8);
+
+    const assemblySources = Array.from(
+      new Set([
+        ...(files.length > 0 ? (["file"] as const) : []),
+        ...(symbols.length > 0 ? (["symbol"] as const) : []),
+        ...(featurePacks.length > 0 ? (["feature_pack"] as const) : []),
+        ...(overlay ? (["change_overlay"] as const) : []),
+      ]),
+    );
+
+    const confidenceOverall = Number(
+      Math.min(
+        0.97,
+        (locate.results.length > 0 ? 0.45 : 0.1)
+          + (featurePacks.length > 0 ? 0.2 : 0)
+          + (overlay ? 0.2 : 0)
+          + ((inferredIntent === "impact" || inferredIntent === "change_aware_lookup") && overlay ? 0.07 : 0)
+          + (inferredIntent === "trace_flow" && !locateFallbackUsed ? 0.03 : 0)
+          + Math.min(0.07, snippets.length * 0.01),
+      ).toFixed(2),
+    );
+
+    const confidenceReasonParts: string[] = [];
+    confidenceReasonParts.push(`intent=${inferredIntent}`);
+    confidenceReasonParts.push(`locate_hits=${locate.results.length}`);
+    if (featurePacks.length > 0) confidenceReasonParts.push(`feature_pack=${featurePacks[0].feature_key}`);
+    if (overlay) confidenceReasonParts.push(`overlay_focus=${overlay.focus.task_id}`);
+    if (locateFallbackUsed) confidenceReasonParts.push("trace_task_context_fallback=true");
+
+    const whyThisResult = [
+      "resolved via project.hybrid_search",
+      ...(hybridTaskContext ? ["intent-aware task_context applied"] : []),
+      ...(featurePacks.length > 0 ? ["enriched via project.feature_pack.query"] : []),
+      ...(overlay ? ["enriched via project.change_overlay.query"] : []),
+      `result_count=${locate.count}`,
+    ];
+
+    return {
+      query_id: queryId,
+      intent: inferredIntent,
+      project_id: project.project_id,
+      project_alias: payload.project_alias || null,
+      query,
+      primary_results: mergedPrimary,
+      files,
+      symbols,
+      snippets,
+      graph_paths: graphPaths,
+      feature_packs: featurePacks,
+      change_context: changeContext,
+      assembly_sources: assemblySources,
+      confidence: {
+        overall: confidenceOverall,
+        reason: confidenceReasonParts.join("; ") || "minimal evidence",
+      },
+      why_this_result: whyThisResult,
+      generated_at: new Date().toISOString(),
+      generator_version: "asm-95-slice3",
+    };
+  }
+
+  private inferDeveloperQueryIntent(
+    intent: ProjectDeveloperQueryIntent | undefined,
+    query: string,
+    hasFeatureSelector: boolean,
+  ): ProjectDeveloperQueryIntent {
+    if (intent) return intent;
+
+    const lowered = query.toLowerCase();
+    if (hasFeatureSelector || /feature|capability|pack|understand/.test(lowered)) {
+      return "feature_understanding";
+    }
+    if (/trace|flow|path|sequence|chain/.test(lowered)) {
+      return "trace_flow";
+    }
+    if (/impact|blast radius|affected|affect/.test(lowered)) {
+      return "impact";
+    }
+    if (/change-aware|change aware|overlay|recent change|lookup/.test(lowered)) {
+      return "change_aware_lookup";
+    }
+
+    return "locate";
+  }
+
+  private pickFeatureKeyForIntent(
+    intent: ProjectDeveloperQueryIntent,
+    featureKey?: FeaturePackKey,
+    featureName?: string,
+    query?: string,
+  ): FeaturePackKey | null {
+    if (featureKey || featureName) {
+      const resolved = this.tryResolveFeatureKeyInput(featureKey, featureName);
+      if (resolved) return resolved;
+    }
+
+    if (intent === "impact" || intent === "change_aware_lookup") {
+      return "change_aware_impact";
+    }
+
+    if (intent === "feature_understanding" && query) {
+      return this.tryResolveFeatureKeyInput(undefined, query);
+    }
+
+    return null;
+  }
+
+  private tryResolveFeatureKeyInput(featureKey?: FeaturePackKey, featureName?: string): FeaturePackKey | null {
+    try {
+      return this.resolveFeatureKeyInput(featureKey, featureName);
+    } catch {
+      return null;
+    }
+  }
+
+  private pickOverlaySelectorFromLocate(
+    items: Array<{ task_id?: string; tracker_issue_key?: string | null }>,
+  ): { task_id?: string; tracker_issue_key?: string } {
+    const firstTaskId = items.map((item) => item.task_id).find((value): value is string => Boolean(value));
+    const firstIssue = items
+      .map((item) => item.tracker_issue_key)
+      .find((value): value is string => Boolean(value));
+
+    return {
+      task_id: firstTaskId,
+      tracker_issue_key: firstIssue,
+    };
+  }
+
+  private resolveFeatureKeyInput(featureKey?: FeaturePackKey, featureName?: string): FeaturePackKey {
+    if (featureKey) return featureKey;
+
+    const raw = String(featureName || "").trim().toLowerCase();
+    if (!raw) return "project_onboarding_registration_indexing";
+
+    if (FEATURE_PACK_KEYS.includes(raw as FeaturePackKey)) {
+      return raw as FeaturePackKey;
+    }
+
+    const compact = raw.replace(/[^a-z0-9]+/g, " ").trim();
+    const has = (token: string) => compact.includes(token);
+
+    if ((has("onboarding") || has("registration") || has("index")) && !has("retrieval")) {
+      return "project_onboarding_registration_indexing";
+    }
+    if (has("retrieval") || has("code aware") || has("hybrid")) {
+      return "code_aware_retrieval";
+    }
+    if (has("heartbeat") || has("health") || has("integrity") || has("runtime")) {
+      return "heartbeat_health_runtime_integrity";
+    }
+    if (has("impact") || has("change aware") || has("change")) {
+      return "change_aware_impact";
+    }
+    if (has("post entry") || has("post-entry") || has("review") || has("decision")) {
+      return "post_entry_review_decision_support";
+    }
+
+    throw new Error(
+      `Unsupported feature selector '${featureName}'. Supported keys: ${FEATURE_PACK_KEYS.join(", ")}`,
+    );
+  }
+
+  private buildProjectOnboardingRegistrationIndexingPack(
+    snapshot: ReturnType<SlotDB["getProjectFeaturePackProjectOnboardingIndexingSnapshot"]>,
+    projectId: string,
+    primaryAlias: string,
+  ): FeaturePackV1 {
+    const latestRun = snapshot.recent_index_runs[0] || null;
+
+    const primaryFiles = Array.from(
+      new Set(
+        [
+          "src/commands/telegram-addproject-command.ts",
+          "src/tools/project-tools.ts",
+          "src/core/usecases/default-memory-usecase-port.ts",
+          ...snapshot.recent_files.map((item) => item.relative_path),
+        ].filter(Boolean),
+      ),
+    ).slice(0, 12);
+
+    const primarySymbols = this.rankPrimarySymbols(snapshot, [
+      "project.telegram_onboarding",
+      "project.register_command",
+      "project.link_tracker",
+      "project.trigger_index",
+      "project.reindex_diff",
+      "registerTelegramAddProjectCommand",
+      "registerProjectTools",
+      "handleProjectRegisterCommand",
+      "handleProjectTriggerIndex",
+    ]);
+
+    return {
+      pack_id: `feature-pack:project_onboarding_registration_indexing:${projectId}`,
+      title: "Project onboarding / registration / indexing",
+      feature_key: "project_onboarding_registration_indexing",
+      summary:
+        `Covers the cross-agent project setup flow from /project onboarding through registry persistence, optional tracker linking, and index/reindex execution for project '${primaryAlias}'.`,
+      primary_files: primaryFiles,
+      primary_symbols: primarySymbols,
+      flow_steps: [
+        {
+          step: 1,
+          title: "Operator enters onboarding",
+          details: "Telegram /project command and project onboarding helper collect repo, alias, Jira, and index-now intent.",
+          related_files: ["src/commands/telegram-addproject-command.ts", "src/tools/project-tools.ts"],
+          related_symbols: ["registerTelegramAddProjectCommand", "project.telegram_onboarding"],
+        },
+        {
+          step: 2,
+          title: "Registration command resolves repo and persists registry state",
+          details: `project.register_command normalizes alias '${primaryAlias}', resolves repo root/remote, writes project + alias + registration state, and can attach tracker mapping.`,
+          related_files: ["src/core/usecases/default-memory-usecase-port.ts", "src/db/slot-db.ts"],
+          related_symbols: ["handleProjectRegisterCommand", "project.register_command"],
+        },
+        {
+          step: 3,
+          title: "Tracker linking enriches project identity",
+          details: "jira/github/other mapping is stored in project tracker mappings so later agents can navigate issue space consistently.",
+          related_files: ["src/core/usecases/default-memory-usecase-port.ts", "src/tools/project-tools.ts"],
+          related_symbols: ["handleProjectLinkTracker", "project.link_tracker"],
+        },
+        {
+          step: 4,
+          title: "Index bootstrap or reindex updates searchable project context",
+          details: `latest known index state is '${latestRun?.state || "not_yet_indexed"}' via ${latestRun?.trigger_type || "bootstrap/manual"} path; background trigger and diff reindex feed file/symbol/chunk registries.`,
+          related_files: ["src/core/usecases/default-memory-usecase-port.ts", "src/db/slot-db.ts"],
+          related_symbols: ["handleProjectTriggerIndex", "project.trigger_index", "project.reindex_diff"],
+        },
+      ],
+      risk_points: [
+        "Repo resolution can bind to wrong working tree if repo_root/repo_url selection is inconsistent.",
+        "Invalid Jira space/default epic pairing blocks confirm flow.",
+        "Index trigger may be accepted before concrete paths exist, so first pack consumers should inspect recent index run/watch state.",
+      ],
+      test_points: [
+        "project.telegram_onboarding preview rejects invalid Jira mapping and returns summary card.",
+        "project.register_command persists project, alias, registration, and optional tracker mapping.",
+        "project.trigger_index or project.reindex_diff updates index_runs and file/symbol registries for the target project.",
+      ],
+      related_tasks: this.collectRelatedTasks(snapshot),
+      related_commits: this.collectRelatedCommitHints(snapshot, ["register", "index", "onboarding"]),
+      related_prs: [],
+      evidence: this.buildEvidenceOrdered(snapshot, {
+        includeRegistration: true,
+        includeTracker: true,
+        includeIndexRuns: 2,
+        includeTasks: 4,
+        includeFiles: 4,
+        includeSymbols: 4,
+      }),
+      generated_at: new Date().toISOString(),
+      generator_version: "asm-93-slice2",
+    };
+  }
+
+  private buildCodeAwareRetrievalPack(
+    snapshot: ReturnType<SlotDB["getProjectFeaturePackProjectOnboardingIndexingSnapshot"]>,
+    projectId: string,
+    primaryAlias: string,
+  ): FeaturePackV1 {
+    const primaryFiles = Array.from(
+      new Set(
+        [
+          "src/db/slot-db.ts",
+          "src/core/usecases/default-memory-usecase-port.ts",
+          "src/tools/project-tools.ts",
+          ...snapshot.recent_files.map((item) => item.relative_path),
+        ].filter(Boolean),
+      ),
+    ).slice(0, 12);
+
+    const primarySymbols = this.rankPrimarySymbols(snapshot, [
+      "project.hybrid_search",
+      "project.task_lineage_context",
+      "graph.code.upsert",
+      "graph.code.chain",
+      "project.reindex_diff",
+    ]);
+
+    return {
+      pack_id: `feature-pack:code_aware_retrieval:${projectId}`,
+      title: "Code-aware retrieval",
+      feature_key: "code_aware_retrieval",
+      summary:
+        `Covers retrieving actionable code context for project '${primaryAlias}' from indexed files/symbols/chunks/tasks with optional lineage expansion and code-graph traversal signals.`,
+      primary_files: primaryFiles,
+      primary_symbols: primarySymbols,
+      flow_steps: [
+        {
+          step: 1,
+          title: "Ingest/reindex populates retrieval registries",
+          details: "project.reindex_diff writes file_index_state, symbol_registry, and chunk_registry with active entries for changed files.",
+          related_files: ["src/db/slot-db.ts", "src/core/usecases/default-memory-usecase-port.ts"],
+          related_symbols: ["project.reindex_diff", "handleProjectReindexDiff"],
+        },
+        {
+          step: 2,
+          title: "Task lineage context narrows retrieval intent",
+          details: "project.task_lineage_context assembles focus task, parent chain, related tasks, and touched symbols/files before ranking.",
+          related_files: ["src/db/slot-db.ts", "src/core/usecases/default-memory-usecase-port.ts"],
+          related_symbols: ["project.task_lineage_context", "handleProjectTaskLineageContext"],
+        },
+        {
+          step: 3,
+          title: "Hybrid retrieval ranks candidates across registries",
+          details: "project.hybrid_search blends file/symbol/chunk/task candidates and supports debug candidate buckets for conformance checks.",
+          related_files: ["src/db/slot-db.ts", "src/tools/project-tools.ts"],
+          related_symbols: ["project.hybrid_search", "handleProjectHybridSearch"],
+        },
+        {
+          step: 4,
+          title: "Code graph traversal augments symbol relations",
+          details: "graph.code.upsert / graph.code.chain provide relation-level traversal for dependency/call chains when symbol-level context is needed.",
+          related_files: ["src/core/usecases/default-memory-usecase-port.ts", "src/tools/graph-tools.ts"],
+          related_symbols: ["graph.code.upsert", "graph.code.chain"],
+        },
+      ],
+      risk_points: [
+        "Hybrid retrieval quality depends on freshness of reindex runs and active symbol/chunk state.",
+        "Weak or missing task metadata can reduce lineage-assisted ranking quality.",
+      ],
+      test_points: [
+        "project.reindex_diff persists symbols/chunks for changed files.",
+        "project.task_lineage_context returns parent/related context for known task ids.",
+        "project.hybrid_search returns ranked results with debug buckets when requested.",
+      ],
+      related_tasks: this.collectRelatedTasks(snapshot),
+      related_commits: this.collectRelatedCommitHints(snapshot, ["hybrid", "retrieval", "reindex", "graph", "symbol"]),
+      related_prs: [],
+      evidence: this.buildEvidenceOrdered(snapshot, {
+        includeRegistration: false,
+        includeTracker: false,
+        includeIndexRuns: 2,
+        includeTasks: 6,
+        includeFiles: 6,
+        includeSymbols: 8,
+      }),
+      generated_at: new Date().toISOString(),
+      generator_version: "asm-93-slice2",
+    };
+  }
+
+  private buildHeartbeatHealthRuntimeIntegrityPack(
+    snapshot: ReturnType<SlotDB["getProjectFeaturePackProjectOnboardingIndexingSnapshot"]>,
+    projectId: string,
+    primaryAlias: string,
+  ): FeaturePackV1 {
+    const latestRun = snapshot.recent_index_runs[0] || null;
+
+    return {
+      pack_id: `feature-pack:heartbeat_health_runtime_integrity:${projectId}`,
+      title: "Heartbeat / health / runtime integrity",
+      feature_key: "heartbeat_health_runtime_integrity",
+      summary:
+        `Covers runtime integrity signals for project '${primaryAlias}' via registration validation state, tracker linkage consistency, and latest index run heartbeat evidence.`,
+      primary_files: Array.from(
+        new Set([
+          "src/core/usecases/default-memory-usecase-port.ts",
+          "src/db/slot-db.ts",
+          "src/tools/project-tools.ts",
+          ...snapshot.recent_files.map((item) => item.relative_path),
+        ]),
+      ).slice(0, 10),
+      primary_symbols: this.rankPrimarySymbols(snapshot, [
+        "project.get",
+        "project.set_registration_state",
+        "project.link_tracker",
+        "project.trigger_index",
+        "project.index_watch_get",
+      ]),
+      flow_steps: [
+        {
+          step: 1,
+          title: "Registration lifecycle state is the control baseline",
+          details: "project registration_status + validation_status represent current readiness and integrity posture.",
+          related_files: ["src/db/slot-db.ts"],
+          related_symbols: ["project.set_registration_state", "project.get"],
+        },
+        {
+          step: 2,
+          title: "Tracker mapping coherence is validated",
+          details: "Jira/GitHub tracker mappings are validated and persisted, reducing cross-agent drift in runtime operations.",
+          related_files: ["src/core/usecases/default-memory-usecase-port.ts"],
+          related_symbols: ["project.link_tracker", "handleProjectLinkTracker"],
+        },
+        {
+          step: 3,
+          title: "Index runs provide heartbeat for data-plane readiness",
+          details: `latest run is '${latestRun?.state || "none"}' (${latestRun?.trigger_type || "n/a"}); index_runs are used as runtime heartbeat checkpoints.`,
+          related_files: ["src/db/slot-db.ts"],
+          related_symbols: ["project.trigger_index", "project.index_watch_get"],
+        },
+      ],
+      risk_points: [
+        "No recent index run can indicate stale runtime context even if registration is valid.",
+        "Validation status can be stale if lifecycle updates are not maintained after tracker/repo changes.",
+      ],
+      test_points: [
+        "project.get exposes registration + tracker mapping state for an alias/project id.",
+        "project.trigger_index updates index_runs and can be used as heartbeat signal.",
+        "project.index_watch_get returns checksum/revision watch state for integrity checks.",
+      ],
+      related_tasks: this.collectRelatedTasks(snapshot),
+      related_commits: this.collectRelatedCommitHints(snapshot, ["health", "integrity", "watch", "registration", "index"]),
+      related_prs: [],
+      evidence: this.buildEvidenceOrdered(snapshot, {
+        includeRegistration: true,
+        includeTracker: true,
+        includeIndexRuns: 3,
+        includeTasks: 3,
+        includeFiles: 3,
+        includeSymbols: 3,
+      }),
+      generated_at: new Date().toISOString(),
+      generator_version: "asm-93-slice2",
+    };
+  }
+
+  private buildChangeAwareImpactPack(
+    snapshot: ReturnType<SlotDB["getProjectFeaturePackProjectOnboardingIndexingSnapshot"]>,
+    projectId: string,
+    primaryAlias: string,
+  ): FeaturePackV1 {
+    const latestRun = snapshot.recent_index_runs[0] || null;
+
+    return {
+      pack_id: `feature-pack:change_aware_impact:${projectId}`,
+      title: "Change-aware impact",
+      feature_key: "change_aware_impact",
+      summary:
+        `Covers impact-oriented flow for project '${primaryAlias}' where changed files/symbols are reindexed and then consumed by lineage/hybrid retrieval to estimate downstream effect scope.`,
+      primary_files: Array.from(
+        new Set([
+          "src/db/slot-db.ts",
+          "src/core/usecases/default-memory-usecase-port.ts",
+          "src/tools/project-tools.ts",
+          ...snapshot.recent_files.map((item) => item.relative_path),
+        ]),
+      ).slice(0, 12),
+      primary_symbols: this.rankPrimarySymbols(snapshot, [
+        "project.reindex_diff",
+        "project.index_event",
+        "project.index_watch_get",
+        "project.task_registry_upsert",
+        "project.task_lineage_context",
+        "project.hybrid_search",
+      ]),
+      flow_steps: [
+        {
+          step: 1,
+          title: "Diff/event ingestion captures changed paths",
+          details: "project.reindex_diff (or project.index_event) accepts changed/deleted files and updates index/watch state.",
+          related_files: ["src/db/slot-db.ts", "src/core/usecases/default-memory-usecase-port.ts"],
+          related_symbols: ["project.reindex_diff", "project.index_event", "project.index_watch_get"],
+        },
+        {
+          step: 2,
+          title: "Task lineage stores declared impact hints",
+          details: "project.task_registry_upsert tracks files_touched/symbols_touched/related tasks to enrich later impact analysis.",
+          related_files: ["src/db/slot-db.ts"],
+          related_symbols: ["project.task_registry_upsert", "project.task_lineage_context"],
+        },
+        {
+          step: 3,
+          title: "Hybrid retrieval assembles impact candidates",
+          details: "project.hybrid_search combines changed files/symbols and lineage context to return practical impact candidates.",
+          related_files: ["src/db/slot-db.ts", "src/tools/project-tools.ts"],
+          related_symbols: ["project.hybrid_search"],
+        },
+      ],
+      risk_points: [
+        "Placeholder checksums or stale watch state can hide true file deltas.",
+        "Impact accuracy depends on discipline in task_registry_upsert metadata quality.",
+      ],
+      test_points: [
+        "project.reindex_diff updates file index and watch state for changed/deleted paths.",
+        "project.task_registry_upsert captures files_touched and symbols_touched.",
+        "project.hybrid_search can be constrained by task context for impact-oriented queries.",
+      ],
+      related_tasks: this.collectRelatedTasks(snapshot),
+      related_commits: this.collectRelatedCommitHints(snapshot, ["reindex", "diff", "impact", "lineage", "watch"]),
+      related_prs: [],
+      evidence: this.buildEvidenceOrdered(snapshot, {
+        includeRegistration: false,
+        includeTracker: false,
+        includeIndexRuns: 3,
+        includeTasks: 6,
+        includeFiles: 8,
+        includeSymbols: 6,
+      }),
+      generated_at: new Date().toISOString(),
+      generator_version: "asm-93-slice2",
+    };
+  }
+
+  private buildPostEntryReviewDecisionSupportPack(
+    snapshot: ReturnType<SlotDB["getProjectFeaturePackProjectOnboardingIndexingSnapshot"]>,
+    projectId: string,
+    primaryAlias: string,
+  ): FeaturePackV1 {
+    const keywordMatchers = ["post-entry", "post entry", "review", "decision", "outcome", "policy", "trace"];
+    const matchingTasks = snapshot.recent_tasks.filter((task) => {
+      const title = task.task_title.toLowerCase();
+      return keywordMatchers.some((kw) => title.includes(kw));
+    });
+    const matchingSymbols = snapshot.recent_symbols.filter((symbol) => {
+      const s = `${symbol.symbol_name} ${symbol.symbol_fqn}`.toLowerCase();
+      return keywordMatchers.some((kw) => s.includes(kw));
+    });
+
+    if (matchingTasks.length === 0 && matchingSymbols.length === 0) {
+      throw new Error(
+        "feature_key post_entry_review_decision_support does not have enough indexed evidence yet (need task/symbol signals for post-entry/review/decision).",
+      );
+    }
+
+    return {
+      pack_id: `feature-pack:post_entry_review_decision_support:${projectId}`,
+      title: "Post-entry review decision support",
+      feature_key: "post_entry_review_decision_support",
+      summary:
+        `Covers post-entry decision support for project '${primaryAlias}' by prioritizing review/outcome evidence from task + symbol history and mapping it into retrieval-ready surfaces.`,
+      primary_files: Array.from(
+        new Set([
+          ...matchingSymbols.map((item) => item.relative_path),
+          ...snapshot.recent_files.map((item) => item.relative_path),
+          "src/core/usecases/default-memory-usecase-port.ts",
+          "src/db/slot-db.ts",
+        ].filter(Boolean)),
+      ).slice(0, 10),
+      primary_symbols: this.rankPrimarySymbols(snapshot, [
+        "project.task_registry_upsert",
+        "project.task_lineage_context",
+        "project.hybrid_search",
+        ...matchingSymbols.map((item) => item.symbol_fqn || item.symbol_name),
+      ]),
+      flow_steps: [
+        {
+          step: 1,
+          title: "Review/decision traces are captured in task metadata",
+          details: "task_registry entries store decision_notes, task_status, tracker key, and touched files/symbols to preserve post-entry context.",
+          related_files: ["src/db/slot-db.ts"],
+          related_symbols: ["project.task_registry_upsert"],
+        },
+        {
+          step: 2,
+          title: "Lineage context reconstructs decision chain",
+          details: "project.task_lineage_context can reconstruct parent/related chain to explain why a post-entry action was taken.",
+          related_files: ["src/core/usecases/default-memory-usecase-port.ts"],
+          related_symbols: ["project.task_lineage_context"],
+        },
+        {
+          step: 3,
+          title: "Hybrid retrieval surfaces decision-support evidence",
+          details: "project.hybrid_search ranks symbols/files/tasks so agents can consume review evidence with minimal manual browsing.",
+          related_files: ["src/db/slot-db.ts", "src/tools/project-tools.ts"],
+          related_symbols: ["project.hybrid_search"],
+        },
+      ],
+      risk_points: [
+        "If task titles/notes do not contain explicit review/decision markers, this pack can become too weak.",
+        "Without indexed symbols related to review/outcome logic, evidence may skew toward generic tasks.",
+      ],
+      test_points: [
+        "project.task_registry_upsert stores decision-oriented metadata for review tasks.",
+        "project.task_lineage_context returns parent/related chain for decision tasks.",
+        "project.hybrid_search retrieves decision keywords from task/symbol/file registries.",
+      ],
+      related_tasks: Array.from(
+        new Set(
+          matchingTasks
+            .flatMap((task) => [task.tracker_issue_key, task.task_id])
+            .filter(Boolean) as string[],
+        ),
+      ).slice(0, 12),
+      related_commits: this.collectRelatedCommitHints(snapshot, ["post-entry", "review", "decision", "outcome", "trace"]),
+      related_prs: [],
+      evidence: this.buildEvidenceOrdered(snapshot, {
+        includeRegistration: false,
+        includeTracker: false,
+        includeIndexRuns: 2,
+        includeTasks: 8,
+        includeFiles: 6,
+        includeSymbols: 8,
+      }),
+      generated_at: new Date().toISOString(),
+      generator_version: "asm-93-slice2",
+    };
+  }
+
+  private rankPrimarySymbols(
+    snapshot: ReturnType<SlotDB["getProjectFeaturePackProjectOnboardingIndexingSnapshot"]>,
+    preferred: string[],
+  ): string[] {
+    const snapshotSymbols = snapshot.recent_symbols.flatMap((item) => [item.symbol_fqn, item.symbol_name]);
+    return Array.from(new Set([...preferred, ...snapshotSymbols].filter(Boolean))).slice(0, 16);
+  }
+
+  private collectRelatedTasks(snapshot: ReturnType<SlotDB["getProjectFeaturePackProjectOnboardingIndexingSnapshot"]>): string[] {
+    return Array.from(
+      new Set(
+        snapshot.recent_tasks
+          .flatMap((task) => [task.tracker_issue_key, task.task_id])
+          .filter(Boolean) as string[],
+      ),
+    ).slice(0, 12);
+  }
+
+  private collectRelatedCommitHints(
+    snapshot: ReturnType<SlotDB["getProjectFeaturePackProjectOnboardingIndexingSnapshot"]>,
+    keywords: string[],
+  ): string[] {
+    const lowered = keywords.map((kw) => kw.toLowerCase());
+    return Array.from(
+      new Set(
+        snapshot.recent_tasks
+          .map((task) => {
+            const title = task.task_title.toLowerCase();
+            const hit = lowered.find((kw) => title.includes(kw));
+            return hit ? `task:${hit.replace(/\s+/g, "-")}` : null;
+          })
+          .filter(Boolean) as string[],
+      ),
+    );
+  }
+
+  private buildEvidenceOrdered(
+    snapshot: ReturnType<SlotDB["getProjectFeaturePackProjectOnboardingIndexingSnapshot"]>,
+    options: {
+      includeRegistration: boolean;
+      includeTracker: boolean;
+      includeIndexRuns: number;
+      includeTasks: number;
+      includeFiles: number;
+      includeSymbols: number;
+    },
+  ): FeaturePackV1["evidence"] {
+    const registrationState = snapshot.registration;
+    const jiraMapping = snapshot.tracker_mappings.find((item) => item.tracker_type === "jira") || snapshot.tracker_mappings[0] || null;
+
+    return [
+      { type: "project", ref: snapshot.project.project_id, note: snapshot.project.project_name },
+      ...snapshot.aliases.slice(0, 3).map((item) => ({ type: "project" as const, ref: item.project_alias, note: item.is_primary === 1 ? "primary_alias" : "alias" })),
+      ...(options.includeRegistration && registrationState
+        ? [{ type: "registration" as const, ref: registrationState.registration_status, note: registrationState.validation_status }]
+        : []),
+      ...(options.includeTracker && jiraMapping
+        ? [{ type: "tracker" as const, ref: jiraMapping.tracker_type, note: jiraMapping.tracker_space_key || jiraMapping.default_epic_key || undefined }]
+        : []),
+      ...snapshot.recent_index_runs.slice(0, options.includeIndexRuns).map((item) => ({ type: "index" as const, ref: item.run_id, note: `${item.trigger_type}:${item.state}` })),
+      ...snapshot.recent_tasks.slice(0, options.includeTasks).map((item) => ({ type: "task" as const, ref: item.tracker_issue_key || item.task_id, note: item.task_title })),
+      ...snapshot.recent_files.slice(0, options.includeFiles).map((item) => ({ type: "file" as const, ref: item.relative_path })),
+      ...snapshot.recent_symbols.slice(0, options.includeSymbols).map((item) => ({ type: "symbol" as const, ref: item.symbol_fqn || item.symbol_name, note: item.relative_path })),
+    ];
+  }
+
   private handleGraphEntityGet(payload: GraphEntityGetPayload, req: CoreRequestEnvelope<unknown>) {
     const identity = normalizePrivateIdentity(req.context);
 
@@ -1816,6 +3008,78 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
     return {
       entities: traversed.entities,
       relationships: traversed.relationships.filter((rel) => rel.relation_type === payload.relation_type),
+    };
+  }
+
+  private handleGraphCodeUpsert(payload: GraphCodeUpsertPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+    const nodes = Array.isArray(payload.nodes) ? payload.nodes : [];
+    const relations = Array.isArray(payload.relations) ? payload.relations : [];
+
+    if (nodes.length === 0) {
+      throw new Error("graph.code.upsert requires non-empty nodes");
+    }
+
+    for (const node of nodes) {
+      if (!node.node_id || !isUniversalGraphNodeType(node.node_type) || !node.name) {
+        throw new Error("graph.code.upsert node invalid: require node_id, node_type, name");
+      }
+      upsertUniversalGraphNode(this.slotDb.graph, identity.userId, identity.agentId, node);
+    }
+
+    for (const relation of relations) {
+      if (
+        !relation.source_node_id ||
+        !relation.target_node_id ||
+        !isUniversalGraphRelationType(relation.relation_type) ||
+        !isValidUniversalGraphProvenance(relation.provenance)
+      ) {
+        throw new Error("graph.code.upsert relation invalid: require source_node_id, target_node_id, relation_type, provenance");
+      }
+
+      const source = this.slotDb.graph.getEntity(identity.userId, identity.agentId, relation.source_node_id);
+      if (!source) {
+        throw new Error(`graph.code.upsert relation source '${relation.source_node_id}' not found`);
+      }
+      const target = this.slotDb.graph.getEntity(identity.userId, identity.agentId, relation.target_node_id);
+      if (!target) {
+        throw new Error(`graph.code.upsert relation target '${relation.target_node_id}' not found`);
+      }
+
+      upsertUniversalGraphRelation(this.slotDb.graph, identity.userId, identity.agentId, relation);
+    }
+
+    return {
+      graph_model: UNIVERSAL_GRAPH_MODEL_VERSION,
+      nodes_upserted: nodes.length,
+      relations_upserted: relations.length,
+    };
+  }
+
+  private handleGraphCodeChain(payload: GraphCodeChainPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+    const nodeId = String(payload.node_id || "").trim();
+    if (!nodeId) {
+      throw new Error("graph.code.chain requires node_id");
+    }
+
+    const depth = Math.min(Math.max(payload.depth || 2, 1), 4);
+    const traversed = this.slotDb.graph.traverseCodeGraph(
+      identity.userId,
+      identity.agentId,
+      nodeId,
+      depth,
+      payload.relation_type,
+    );
+
+    const relationships = traversed.relationships;
+
+    return {
+      graph_model: UNIVERSAL_GRAPH_MODEL_VERSION,
+      start_node_id: nodeId,
+      depth,
+      entities: traversed.entities,
+      relationships,
     };
   }
 }

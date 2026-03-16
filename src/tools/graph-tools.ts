@@ -390,4 +390,171 @@ export function registerGraphTools(
       }
     },
   });
+
+  // ==========================================================================
+  // Tool 6: memory_graph_code_link
+  // ==========================================================================
+  api.registerTool({
+    name: "memory_graph_code_link",
+    label: "Graph Code Link",
+    description:
+      "Upsert universal code-graph nodes/relations (language-agnostic) with provenance + confidence, then return a minimal read chain.",
+    parameters: {
+      type: "object",
+      properties: {
+        nodes: {
+          type: "array",
+          description: "Universal nodes to upsert",
+          items: {
+            type: "object",
+            properties: {
+              node_id: { type: "string" },
+              node_type: {
+                type: "string",
+                enum: ["file", "module", "symbol", "route", "job", "event", "entity"],
+              },
+              name: { type: "string" },
+              properties: { type: "object" },
+            },
+            required: ["node_id", "node_type", "name"],
+          },
+        },
+        relations: {
+          type: "array",
+          description: "Universal relations to upsert",
+          items: {
+            type: "object",
+            properties: {
+              source_node_id: { type: "string" },
+              target_node_id: { type: "string" },
+              relation_type: {
+                type: "string",
+                enum: [
+                  "defines",
+                  "calls",
+                  "imports",
+                  "extends",
+                  "implements",
+                  "routes_to",
+                  "reads_from",
+                  "writes_to",
+                  "emits",
+                  "consumes",
+                  "scheduled_as",
+                  "depends_on",
+                ],
+              },
+              provenance: {
+                type: "object",
+                properties: {
+                  adapter_kind: { type: "string" },
+                  confidence: { type: "number" },
+                  evidence_path: { type: "string" },
+                  evidence_start_line: { type: "number" },
+                  evidence_end_line: { type: "number" },
+                },
+                required: ["adapter_kind", "confidence"],
+              },
+              properties: { type: "object" },
+            },
+            required: ["source_node_id", "target_node_id", "relation_type", "provenance"],
+          },
+        },
+        start_node_id: {
+          type: "string",
+          description: "Optional start node for minimal read chain. Defaults to first node_id",
+        },
+        depth: {
+          type: "number",
+          description: "Read depth for chain (1-4). Default 2",
+        },
+        relation_type: {
+          type: "string",
+          description: "Optional relation type filter for minimal code-aware chain",
+        },
+      },
+      required: ["nodes"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        nodes: Array<{ node_id: string; node_type: string; name: string; properties?: Record<string, unknown> }>;
+        relations?: Array<{
+          source_node_id: string;
+          target_node_id: string;
+          relation_type: string;
+          provenance: {
+            adapter_kind: string;
+            confidence: number;
+            evidence_path?: string;
+            evidence_start_line?: number;
+            evidence_end_line?: number;
+          };
+          properties?: Record<string, unknown>;
+        }>;
+        start_node_id?: string;
+        depth?: number;
+        relation_type?: string;
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const upsert = await useCasePort.run<typeof params, any>("graph.code.upsert", {
+          context: { userId, agentId },
+          payload: {
+            nodes: params.nodes,
+            relations: params.relations || [],
+          },
+          meta: {
+            source: "openclaw",
+            toolName: "memory_graph_code_link",
+            requestId: _id,
+          },
+        });
+
+        const startNodeId = params.start_node_id || params.nodes?.[0]?.node_id;
+        if (!startNodeId) {
+          return createResult(JSON.stringify(upsert, null, 2));
+        }
+
+        const chain = await useCasePort.run<
+          { node_id: string; depth?: number; relation_type?: string },
+          { entities: any[]; relationships: any[]; graph_model: string }
+        >("graph.code.chain", {
+          context: { userId, agentId },
+          payload: {
+            node_id: startNodeId,
+            depth: params.depth,
+            relation_type: params.relation_type,
+          },
+          meta: {
+            source: "openclaw",
+            toolName: "memory_graph_code_link",
+            requestId: _id,
+          },
+        });
+
+        return createResult(
+          JSON.stringify(
+            {
+              upsert,
+              chain: {
+                graph_model: chain.graph_model,
+                entities: chain.entities,
+                relationships: chain.relationships,
+              },
+            },
+            null,
+            2,
+          ),
+        );
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
 }

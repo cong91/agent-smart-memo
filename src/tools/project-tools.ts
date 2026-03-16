@@ -910,6 +910,260 @@ export function registerProjectTools(
   });
 
   api.registerTool({
+    name: "project_change_overlay_query",
+    label: "Project Change Overlay Query",
+    description:
+      "Query ASM-94 change-aware overlay with explicit selector (task/tracker) and optional feature filter.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        task_id: { type: "string" },
+        tracker_issue_key: { type: "string" },
+        task_title: { type: "string" },
+        feature_key: {
+          type: "string",
+          enum: [
+            "project_onboarding_registration_indexing",
+            "code_aware_retrieval",
+            "heartbeat_health_runtime_integrity",
+            "change_aware_impact",
+            "post_entry_review_decision_support",
+          ],
+        },
+        feature_name: { type: "string" },
+        include_related: { type: "boolean" },
+        include_parent_chain: { type: "boolean" },
+      },
+      required: ["project_id"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_id: string;
+        task_id?: string;
+        tracker_issue_key?: string;
+        task_title?: string;
+        feature_key?:
+          | "project_onboarding_registration_indexing"
+          | "code_aware_retrieval"
+          | "heartbeat_health_runtime_integrity"
+          | "change_aware_impact"
+          | "post_entry_review_decision_support";
+        feature_name?: string;
+        include_related?: boolean;
+        include_parent_chain?: boolean;
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.change_overlay.query", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_change_overlay_query",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
+    name: "project_feature_pack_generate",
+    label: "Project Feature Pack Generate",
+    description:
+      "Generate a minimal feature/capability pack for a registered project flow. ASM-93 Slice 2 supports multiple priority feature packs.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        project_alias: { type: "string" },
+        feature_key: {
+          type: "string",
+          enum: [
+            "project_onboarding_registration_indexing",
+            "code_aware_retrieval",
+            "heartbeat_health_runtime_integrity",
+            "change_aware_impact",
+            "post_entry_review_decision_support",
+          ],
+        },
+      },
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_id?: string;
+        project_alias?: string;
+        feature_key?:
+          | "project_onboarding_registration_indexing"
+          | "code_aware_retrieval"
+          | "heartbeat_health_runtime_integrity"
+          | "change_aware_impact"
+          | "post_entry_review_decision_support";
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.feature_pack.generate", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_feature_pack_generate",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
+    name: "project_feature_pack_query",
+    label: "Project Feature Pack Query",
+    description:
+      "Query feature pack by feature_key or feature name (human-friendly) for a registered project.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        project_alias: { type: "string" },
+        feature_key: {
+          type: "string",
+          enum: [
+            "project_onboarding_registration_indexing",
+            "code_aware_retrieval",
+            "heartbeat_health_runtime_integrity",
+            "change_aware_impact",
+            "post_entry_review_decision_support",
+          ],
+        },
+        feature_name: { type: "string" },
+      },
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_id?: string;
+        project_alias?: string;
+        feature_key?:
+          | "project_onboarding_registration_indexing"
+          | "code_aware_retrieval"
+          | "heartbeat_health_runtime_integrity"
+          | "change_aware_impact"
+          | "post_entry_review_decision_support";
+        feature_name?: string;
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.feature_pack.query", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_feature_pack_query",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
+    name: "project_developer_query",
+    label: "Project Developer Query",
+    description:
+      "ASM-95 Slice 1 unified developer query surface (locate + feature understanding) over existing hybrid_search/feature_pack capabilities.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        project_alias: { type: "string" },
+        query: { type: "string" },
+        intent: { type: "string", enum: ["locate", "trace_flow", "impact", "change_aware_lookup", "feature_understanding"] },
+        limit: { type: "number" },
+        feature_key: {
+          type: "string",
+          enum: [
+            "project_onboarding_registration_indexing",
+            "code_aware_retrieval",
+            "heartbeat_health_runtime_integrity",
+            "change_aware_impact",
+            "post_entry_review_decision_support",
+          ],
+        },
+        feature_name: { type: "string" },
+      },
+      required: [],
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_id?: string;
+        project_alias?: string;
+        query: string;
+        intent?: "locate" | "trace_flow" | "impact" | "change_aware_lookup" | "feature_understanding";
+        limit?: number;
+        feature_key?:
+          | "project_onboarding_registration_indexing"
+          | "code_aware_retrieval"
+          | "heartbeat_health_runtime_integrity"
+          | "change_aware_impact"
+          | "post_entry_review_decision_support";
+        feature_name?: string;
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.developer_query", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_developer_query",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
     name: "project_hybrid_search",
     label: "Project Hybrid Search",
     description:
