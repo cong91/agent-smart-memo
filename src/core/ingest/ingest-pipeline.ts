@@ -111,7 +111,7 @@ export function buildChunkArtifacts(
   blocks: SemanticBlock[],
 ): ChunkArtifact[] {
   return blocks.map((block, ordinal) => {
-    const symbolId = ["function", "class", "method"].includes(block.kind)
+    const symbolId = ["function", "class", "method", "tool"].includes(block.kind)
       ? buildSymbolId(projectId, relativePath, block.semantic_path)
       : null;
 

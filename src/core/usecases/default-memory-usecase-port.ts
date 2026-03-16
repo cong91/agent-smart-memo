@@ -251,6 +251,7 @@ interface ProjectHybridSearchPayload {
   project_id: string;
   query: string;
   limit?: number;
+  debug?: boolean;
   path_prefix?: string[];
   module?: string[];
   language?: string[];
@@ -336,6 +337,11 @@ function allScopeIdentities(ctx: { userId: string; agentId: string }): ScopeIden
 function randomJobId(): string {
   return `idxjob_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
+
+function sha1(raw: string): string {
+  return createHash("sha1").update(raw).digest("hex");
+}
+
 
 function shellEscape(value: string): string {
   const input = String(value || "");
@@ -783,7 +789,10 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
     const queuedAt = new Date().toISOString();
     const jobId = randomJobId();
 
-    const normalizedPaths = (payload.paths || []).filter((item) => String(item.relative_path || "").trim().length > 0);
+    const normalizedPaths = this.hydrateIndexPathsFromRepo(
+      project.repo_root,
+      (payload.paths || []).filter((item) => String(item.relative_path || "").trim().length > 0),
+    );
 
     this.scheduleProjectReindexJob({
       scopeUserId: identity.userId,
@@ -831,12 +840,14 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
   }): void {
     setTimeout(() => {
       try {
+        const project = this.slotDb.getProjectById(input.scopeUserId, input.scopeAgentId, input.projectId);
         let paths = input.paths;
         if (paths.length === 0) {
-          const project = this.slotDb.getProjectById(input.scopeUserId, input.scopeAgentId, input.projectId);
           if (project?.repo_root) {
             paths = this.collectGitTrackedPaths(project.repo_root);
           }
+        } else {
+          paths = this.hydrateIndexPathsFromRepo(project?.repo_root, paths);
         }
 
         if (paths.length === 0) return;
@@ -1304,7 +1315,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
           }
           return {
             relative_path: relativePath,
-            checksum: `git:${relativePath}`,
+            checksum: content != null ? sha1(content) : `git:${relativePath}`,
             module: relativePath.split("/")[0] || undefined,
             language: ext || undefined,
             content,
@@ -1343,13 +1354,47 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
         }
         return {
           relative_path: relativePath,
-          checksum: `fs:${relativePath}`,
+          checksum: content != null ? sha1(content) : `fs:${relativePath}`,
           module: relativePath.split("/")[0] || undefined,
           language: relativePath.includes(".") ? relativePath.split(".").pop() || undefined : undefined,
           content,
         };
       });
     }
+  }
+
+  private hydrateIndexPathsFromRepo(
+    repoRoot: string | null | undefined,
+    paths: Array<{
+      relative_path: string;
+      checksum?: string | null;
+      module?: string | null;
+      language?: string | null;
+      content?: string | null;
+    }>,
+  ) {
+    if (!repoRoot) return paths;
+    return paths.map((item) => {
+      const relativePath = String(item.relative_path || '').trim();
+      if (!relativePath) return item;
+      const abs = resolve(repoRoot, relativePath);
+      let content = item.content;
+      if ((content == null || content === '') && existsSync(abs)) {
+        try {
+          content = readFileSync(abs, 'utf8');
+        } catch {
+          content = item.content;
+        }
+      }
+      const checksum = content != null && String(content).trim() !== ''
+        ? sha1(String(content))
+        : (item.checksum || null);
+      return {
+        ...item,
+        checksum,
+        content,
+      };
+    });
   }
 
   private handleProjectReindexDiff(payload: ProjectReindexDiffPayload, req: CoreRequestEnvelope<unknown>) {
@@ -1393,7 +1438,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       }
       return {
         relative_path: relativePath,
-        checksum: `event:${relativePath}:${payload.source_rev || "unknown"}`,
+        checksum: content != null && String(content).trim() !== '' ? sha1(String(content)) : `event:${relativePath}:${payload.source_rev || "unknown"}`,
         module: relativePath.split("/")[0] || undefined,
         language: relativePath.includes(".") ? relativePath.split(".").pop() || undefined : undefined,
         content,

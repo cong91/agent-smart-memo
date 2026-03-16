@@ -294,6 +294,7 @@ export interface ProjectHybridSearchInput {
   project_id: string;
   query: string;
   limit?: number;
+  debug?: boolean;
   path_prefix?: string[];
   module?: string[];
   language?: string[];
@@ -330,6 +331,25 @@ export interface ProjectHybridSearchResult {
   count: number;
   task_lineage_context: ProjectTaskLineageContextResult | null;
   results: ProjectHybridSearchResultItem[];
+  debug?: {
+    query_intent: {
+      looks_code_intent: boolean;
+      looks_identifier_query: boolean;
+      query_tokens: string[];
+    };
+    candidate_counts: {
+      file_index_state: number;
+      symbol_registry: number;
+      chunk_registry: number;
+      task_registry: number;
+    };
+    top_candidates: {
+      file_index_state: Array<Record<string, unknown>>;
+      symbol_registry: Array<Record<string, unknown>>;
+      chunk_registry: Array<Record<string, unknown>>;
+      task_registry: Array<Record<string, unknown>>;
+    };
+  };
 }
 
 export interface ProjectLegacyBackfillInput {
@@ -1339,7 +1359,7 @@ export class SlotDB {
           }
 
           for (const block of blocks) {
-            if (!block.symbol_name || !["function", "class", "method"].includes(block.kind)) continue;
+            if (!block.symbol_name || !["function", "class", "method", "tool"].includes(block.kind)) continue;
             const symbolFqn = block.semantic_path || `${block.kind}:${block.symbol_name}`;
             this.upsertSymbolRegistry(scopeUserId, scopeAgentId, {
               symbol_id: buildSymbolId(input.project_id, relativePath, symbolFqn),
@@ -1659,6 +1679,22 @@ export class SlotDB {
       }
       return matched / queryTokens.length;
     };
+    const exactMatchScore = (candidate: string): number => {
+      const value = String(candidate || '').trim().toLowerCase();
+      if (!value) return 0;
+      if (value === queryLc) return 1;
+      if (value.endsWith(`.${queryLc}`)) return 0.92;
+      if (value.includes(`/${queryLc}`) || value.includes(`:${queryLc}`) || value.includes(`#${queryLc}`)) return 0.78;
+      return 0;
+    };
+    const codeIntentHints = ['function', 'class', 'method', 'symbol', 'route', 'endpoint', 'extractor', 'registry', 'chunk', 'snippet', 'code'];
+    const looksCodeIntent = codeIntentHints.some((hint) => queryLc.includes(hint)) || query.includes('/') || query.includes('_');
+    const looksIdentifierQuery =
+      /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(query) ||
+      /^[a-zA-Z_][a-zA-Z0-9_.#:-]*$/.test(query) ||
+      query.includes('::') ||
+      query.includes('.') ||
+      query.includes('_');
     const taskContextInput = input.task_context;
 
     let lineageContext: ProjectTaskLineageContextResult | null = null;
@@ -1690,6 +1726,20 @@ export class SlotDB {
 
     const results: ProjectHybridSearchResultItem[] = [];
 
+    const debugEnabled = input.debug === true;
+    const debugBuckets = {
+      file_index_state: [] as Array<Record<string, unknown>>,
+      symbol_registry: [] as Array<Record<string, unknown>>,
+      chunk_registry: [] as Array<Record<string, unknown>>,
+      task_registry: [] as Array<Record<string, unknown>>,
+    };
+    const pushDebug = (bucket: keyof typeof debugBuckets, entry: Record<string, unknown>) => {
+      if (!debugEnabled) return;
+      debugBuckets[bucket].push(entry);
+    };
+
+    const symbolRowsById = new Map<string, any>();
+
     const fileStmt = this.db.prepare(
       `SELECT * FROM file_index_state
        WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND active = 1`,
@@ -1711,9 +1761,25 @@ export class SlotDB {
       if (text.includes(queryLc)) score += 0.55;
       score += tokenScore(text) * 0.25;
       if (lineageContext && lineageContext.touched_files.includes(relativePath)) score += 0.35;
-      if (relativePath.includes("README") || relativePath.includes("docs/")) score += 0.05;
+      if (looksCodeIntent) {
+        if (relativePath.includes('/docs/') || relativePath.startsWith('docs/') || relativePath.includes('README')) score -= 0.18;
+        if (relativePath.startsWith('src/') || relativePath.startsWith('tests/')) score += 0.14;
+      } else if (relativePath.includes("README") || relativePath.includes("docs/")) {
+        score += 0.05;
+      }
+      if (looksIdentifierQuery) {
+        score -= 0.12;
+      }
       if (score <= 0.08) continue;
 
+      pushDebug('file_index_state', {
+        relative_path: relativePath,
+        score: Number(score.toFixed(4)),
+        module: moduleName,
+        language,
+        text_exact: text.includes(queryLc),
+        token_score: Number(tokenScore(text).toFixed(4)),
+      });
       results.push({
         source: "file_index_state",
         id: String(row.file_id),
@@ -1738,6 +1804,7 @@ export class SlotDB {
       const symbolName = String(row.symbol_name || "");
       const symbolKind = String(row.symbol_kind || "");
       const symbolFqn = String(row.symbol_fqn || "");
+      symbolRowsById.set(String(row.symbol_id), row);
 
       if (lexicalPathPrefix.length > 0 && !lexicalPathPrefix.some((prefix) => relativePath.startsWith(prefix))) continue;
       if (lexicalModules.size > 0 && !moduleName) continue;
@@ -1749,10 +1816,30 @@ export class SlotDB {
       let score = 0;
       if (text.includes(queryLc)) score += 0.62;
       score += tokenScore(text) * 0.35;
+      score += exactMatchScore(symbolName) * 1.35;
+      score += exactMatchScore(symbolFqn) * 1.1;
+      if (looksIdentifierQuery) {
+        if (symbolName.toLowerCase() === queryLc) score += 1.8;
+        else if (symbolFqn.toLowerCase() === queryLc) score += 1.5;
+        else if (symbolFqn.toLowerCase().endsWith(`.${queryLc}`)) score += 1.1;
+      }
       if (lineageContext && lineageContext.touched_symbols.includes(symbolName)) score += 0.3;
       if (lineageContext && lineageContext.touched_files.includes(relativePath)) score += 0.12;
+      if (looksCodeIntent && (relativePath.startsWith('src/') || relativePath.startsWith('tests/'))) score += 0.08;
+      if (looksIdentifierQuery) score += 0.18;
       if (score <= 0.08) continue;
 
+      pushDebug('symbol_registry', {
+        relative_path: relativePath,
+        symbol_name: symbolName,
+        symbol_fqn: symbolFqn,
+        symbol_kind: symbolKind,
+        score: Number(score.toFixed(4)),
+        exact_symbol: symbolName.toLowerCase() === queryLc,
+        exact_fqn: symbolFqn.toLowerCase() === queryLc,
+        suffix_fqn: symbolFqn.toLowerCase().endsWith(`.${queryLc}`),
+        token_score: Number(tokenScore(text).toFixed(4)),
+      });
       results.push({
         source: "symbol_registry",
         id: String(row.symbol_id),
@@ -1776,20 +1863,44 @@ export class SlotDB {
       const relativePath = String(row.relative_path || "");
       const chunkKind = String(row.chunk_kind || "");
       const symbolId = row.symbol_id ? String(row.symbol_id) : null;
+      const symbolRow = symbolId ? symbolRowsById.get(symbolId) : null;
+      const symbolName = symbolRow ? String(symbolRow.symbol_name || '') : '';
+      const symbolFqn = symbolRow ? String(symbolRow.symbol_fqn || '') : '';
       if (lexicalPathPrefix.length > 0 && !lexicalPathPrefix.some((prefix) => relativePath.startsWith(prefix))) continue;
-      const text = `${relativePath} ${chunkKind} ${symbolId || ""}`.toLowerCase();
+      const text = `${relativePath} ${chunkKind} ${symbolId || ""} ${symbolName} ${symbolFqn}`.toLowerCase();
       let score = 0;
       if (text.includes(queryLc)) score += 0.6;
       score += tokenScore(text) * 0.4;
+      score += exactMatchScore(symbolName) * 0.9;
+      score += exactMatchScore(symbolFqn) * 0.7;
+      if (looksIdentifierQuery) {
+        if (symbolName.toLowerCase() === queryLc) score += 1.0;
+        else if (symbolFqn.toLowerCase() === queryLc) score += 0.85;
+      }
       if (lineageContext && lineageContext.touched_files.includes(relativePath)) score += 0.15;
+      if (looksCodeIntent) {
+        if (relativePath.includes('/docs/') || relativePath.startsWith('docs/') || relativePath.includes('README')) score -= 0.14;
+        if (relativePath.startsWith('src/') || relativePath.startsWith('tests/')) score += 0.1;
+      }
+      if (looksIdentifierQuery) score += 0.12;
       if (score <= 0.08) continue;
+      pushDebug('chunk_registry', {
+        relative_path: relativePath,
+        chunk_kind: chunkKind,
+        symbol_name: symbolName || null,
+        symbol_fqn: symbolFqn || null,
+        score: Number(score.toFixed(4)),
+        exact_symbol: symbolName ? symbolName.toLowerCase() === queryLc : false,
+        token_score: Number(tokenScore(text).toFixed(4)),
+      });
       results.push({
         source: "chunk_registry",
         id: String(row.chunk_id),
         score,
         project_id: projectId,
         relative_path: relativePath,
-        snippet: `chunk ${chunkKind} in ${relativePath}`,
+        symbol_name: symbolName || undefined,
+        snippet: symbolName ? `chunk ${chunkKind} for symbol ${symbolName} in ${relativePath}` : `chunk ${chunkKind} in ${relativePath}`,
       });
     }
 
@@ -1831,6 +1942,13 @@ export class SlotDB {
       }
       if (score <= 0.08) continue;
 
+      pushDebug('task_registry', {
+        task_id: task.task_id,
+        tracker_issue_key: task.tracker_issue_key,
+        task_title: task.task_title,
+        score: Number(score.toFixed(4)),
+        token_score: Number(tokenScore(text).toFixed(4)),
+      });
       results.push({
         source: "task_registry",
         id: task.task_id,
@@ -1854,6 +1972,27 @@ export class SlotDB {
       count: ranked.length,
       task_lineage_context: lineageContext,
       results: ranked,
+      debug: debugEnabled
+        ? {
+            query_intent: {
+              looks_code_intent: looksCodeIntent,
+              looks_identifier_query: looksIdentifierQuery,
+              query_tokens: queryTokens,
+            },
+            candidate_counts: {
+              file_index_state: debugBuckets.file_index_state.length,
+              symbol_registry: debugBuckets.symbol_registry.length,
+              chunk_registry: debugBuckets.chunk_registry.length,
+              task_registry: debugBuckets.task_registry.length,
+            },
+            top_candidates: {
+              file_index_state: debugBuckets.file_index_state.sort((a, b) => Number(b.score || 0) - Number(a.score || 0)).slice(0, 8),
+              symbol_registry: debugBuckets.symbol_registry.sort((a, b) => Number(b.score || 0) - Number(a.score || 0)).slice(0, 8),
+              chunk_registry: debugBuckets.chunk_registry.sort((a, b) => Number(b.score || 0) - Number(a.score || 0)).slice(0, 8),
+              task_registry: debugBuckets.task_registry.sort((a, b) => Number(b.score || 0) - Number(a.score || 0)).slice(0, 8),
+            },
+          }
+        : undefined,
     };
   }
 

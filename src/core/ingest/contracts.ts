@@ -30,6 +30,7 @@ export type SemanticBlockKind =
   | "function"
   | "class"
   | "method"
+  | "tool"
   | "doc_section"
   | "doc_paragraph";
 

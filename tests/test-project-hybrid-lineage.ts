@@ -58,6 +58,24 @@ async function main() {
   });
   const projectId = project.project.project_id as string;
 
+  const toolSurfaceContent = `
+export function registerProjectTools(api: any) {
+  api.registerTool({
+    name: "project_task_lineage_context",
+    label: "Project Task Lineage Context",
+    parameters: { type: "object", properties: {} },
+    async execute() { return {}; }
+  });
+
+  api.registerTool({
+    name: "project_hybrid_search",
+    label: "Project Hybrid Search",
+    parameters: { type: "object", properties: {} },
+    async execute() { return {}; }
+  });
+}
+`;
+
   await usecase.run<any, any>("project.reindex_diff", {
     ...ctx,
     payload: {
@@ -65,38 +83,25 @@ async function main() {
       source_rev: "asm79-seed",
       trigger_type: "bootstrap",
       paths: [
-        { relative_path: "src/tools/project-tools.ts", checksum: "h1", module: "tools", language: "ts" },
-        { relative_path: "src/core/usecases/default-memory-usecase-port.ts", checksum: "h2", module: "core", language: "ts" },
+        {
+          relative_path: "src/tools/project-tools.ts",
+          checksum: "h1",
+          module: "tools",
+          language: "ts",
+          content: toolSurfaceContent,
+        },
+        {
+          relative_path: "src/core/usecases/default-memory-usecase-port.ts",
+          checksum: "h2",
+          module: "core",
+          language: "ts",
+          content: "export function reindexProjectByDiff() { return null; }",
+        },
       ],
     },
   });
 
-  // Seed symbol registry directly (ASM-79 scope uses existing table; no parser wiring yet)
   const raw = db as any;
-  raw.db
-    .prepare(
-      `INSERT INTO symbol_registry (
-        symbol_id, scope_user_id, scope_agent_id, project_id, relative_path, module, language,
-        symbol_name, symbol_fqn, symbol_kind, signature_hash, index_state, active, tombstone_at, indexed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      `${projectId}::project_hybrid_search`,
-      ctx.context.userId,
-      ctx.context.agentId,
-      projectId,
-      "src/tools/project-tools.ts",
-      "tools",
-      "ts",
-      "project_hybrid_search",
-      "registerProjectTools.project_hybrid_search",
-      "function",
-      "sig-1",
-      "indexed",
-      1,
-      null,
-      new Date().toISOString(),
-    );
 
   await usecase.run<any, any>("project.task_registry_upsert", {
     ...ctx,
@@ -163,6 +168,26 @@ async function main() {
       commit_refs: ["abc123"],
       decision_notes: "blend lexical + lineage weighting",
     },
+  });
+
+  await test("project.reindex_diff persists extracted tool symbols + chunks via real path", async () => {
+    const symbolRows = raw.db.prepare(
+      `SELECT symbol_name, symbol_fqn, symbol_kind, relative_path
+       FROM symbol_registry
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND active = 1
+       ORDER BY symbol_name ASC`,
+    ).all(ctx.context.userId, ctx.context.agentId, projectId) as any[];
+
+    const chunkRows = raw.db.prepare(
+      `SELECT chunk_kind, relative_path, symbol_id
+       FROM chunk_registry
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND active = 1
+       ORDER BY relative_path ASC, chunk_kind ASC`,
+    ).all(ctx.context.userId, ctx.context.agentId, projectId) as any[];
+
+    assert(symbolRows.some((r) => r.symbol_name === "project_hybrid_search" && r.symbol_kind === "tool"), "tool symbol project_hybrid_search must persist into symbol_registry");
+    assert(symbolRows.some((r) => r.symbol_name === "project_task_lineage_context" && r.symbol_kind === "tool"), "tool symbol project_task_lineage_context must persist into symbol_registry");
+    assert(chunkRows.some((r) => r.relative_path === "src/tools/project-tools.ts" && r.chunk_kind === "tool" && r.symbol_id), "tool chunk must persist into chunk_registry with symbol linkage");
   });
 
   await test("project.task_lineage_context assembles focus + parent + related + touched scope", async () => {

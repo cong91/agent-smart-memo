@@ -44,6 +44,34 @@ function findBalancedBlock(content: string, startOffset: number): { text: string
   return { text: content.slice(startOffset), endOffset: content.length };
 }
 
+function extractRegisteredToolBlocks(content: string): Array<{ symbolName: string; start: number; endOffset: number; text: string }> {
+  const blocks: Array<{ symbolName: string; start: number; endOffset: number; text: string }> = [];
+  const nameRegex = /name\s*:\s*["'`]([A-Za-z_][A-Za-z0-9_:-]*)["'`]/;
+  let cursor = 0;
+
+  while (cursor < content.length) {
+    const callIdx = content.indexOf('registerTool', cursor);
+    if (callIdx < 0) break;
+    const objectStart = content.indexOf('{', callIdx);
+    if (objectStart < 0) break;
+
+    const block = findBalancedBlock(content, objectStart);
+    const match = nameRegex.exec(block.text);
+    if (match) {
+      blocks.push({
+        symbolName: match[1],
+        start: callIdx,
+        endOffset: block.endOffset,
+        text: content.slice(callIdx, block.endOffset),
+      });
+    }
+
+    cursor = Math.max(block.endOffset, callIdx + 1);
+  }
+
+  return blocks;
+}
+
 function extractCodeBlocks(relativePath: string, content: string): SemanticBlock[] {
   const blocks: SemanticBlock[] = [];
   const classRegex = /^\s*(?:export\s+)?class\s+([A-Za-z_][\w$]*)/gm;
@@ -96,6 +124,18 @@ function extractCodeBlocks(relativePath: string, content: string): SemanticBlock
       end_line: lineOf(content, block.endOffset),
       ordinal: blocks.length,
       text: block.text,
+    });
+  }
+
+  for (const toolBlock of extractRegisteredToolBlocks(content)) {
+    blocks.push({
+      kind: "tool",
+      symbol_name: toolBlock.symbolName,
+      semantic_path: `tool:${toolBlock.symbolName}`,
+      start_line: lineOf(content, toolBlock.start),
+      end_line: lineOf(content, toolBlock.endOffset),
+      ordinal: blocks.length,
+      text: toolBlock.text,
     });
   }
 

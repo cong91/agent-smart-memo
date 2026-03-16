@@ -447,6 +447,7 @@ export function registerProjectTools(
               checksum: { type: "string" },
               module: { type: "string" },
               language: { type: "string" },
+              content: { type: "string" },
             },
             required: ["relative_path"],
           },
@@ -475,6 +476,7 @@ export function registerProjectTools(
           checksum?: string;
           module?: string;
           language?: string;
+          content?: string;
         }>;
       },
       ctx: any,
@@ -580,6 +582,7 @@ export function registerProjectTools(
               checksum: { type: "string" },
               module: { type: "string" },
               language: { type: "string" },
+              content: { type: "string" },
             },
             required: ["relative_path"],
           },
@@ -599,6 +602,7 @@ export function registerProjectTools(
           checksum?: string;
           module?: string;
           language?: string;
+          content?: string;
         }>;
       },
       ctx: any,
@@ -916,6 +920,7 @@ export function registerProjectTools(
         project_id: { type: "string" },
         query: { type: "string" },
         limit: { type: "number" },
+        debug: { type: "boolean", description: "Return candidate-generation and ranking debug info for conformance/debugging." },
         path_prefix: { type: "array", items: { type: "string" } },
         module: { type: "array", items: { type: "string" } },
         language: { type: "array", items: { type: "string" } },
@@ -940,6 +945,7 @@ export function registerProjectTools(
         project_id: string;
         query: string;
         limit?: number;
+        debug?: boolean;
         path_prefix?: string[];
         module?: string[];
         language?: string[];
