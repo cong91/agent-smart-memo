@@ -409,6 +409,14 @@ export interface ProjectChangeOverlaySymbol {
 }
 
 export interface ProjectChangeOverlayResult {
+  status: "ok" | "selector_not_resolved";
+  reason?: string;
+  selector: {
+    task_id?: string;
+    tracker_issue_key?: string;
+    task_title?: string;
+  };
+  recoverable: boolean;
   project_id: string;
   focus: {
     task_id: string;
@@ -2073,14 +2081,51 @@ export class SlotDB {
     scopeAgentId: string,
     input: ProjectChangeOverlayQueryInput,
   ): ProjectChangeOverlayResult {
-    const lineage = this.getTaskLineageContext(scopeUserId, scopeAgentId, {
-      project_id: input.project_id,
-      task_id: input.task_id,
-      tracker_issue_key: input.tracker_issue_key,
-      task_title: input.task_title,
-      include_related: input.include_related,
-      include_parent_chain: input.include_parent_chain,
-    });
+    let lineage: ProjectTaskLineageContextResult | null = null;
+
+    const taskIdSelector = String(input.task_id || "").trim();
+    const trackerSelector = String(input.tracker_issue_key || "").trim();
+    const taskTitleSelector = String(input.task_title || "").trim();
+    const selector = {
+      ...(taskIdSelector ? { task_id: taskIdSelector } : {}),
+      ...(trackerSelector ? { tracker_issue_key: trackerSelector } : {}),
+      ...(taskTitleSelector ? { task_title: taskTitleSelector } : {}),
+    };
+
+    try {
+      lineage = this.getTaskLineageContext(scopeUserId, scopeAgentId, {
+        project_id: input.project_id,
+        task_id: input.task_id,
+        tracker_issue_key: input.tracker_issue_key,
+        task_title: input.task_title,
+        include_related: input.include_related,
+        include_parent_chain: input.include_parent_chain,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes("task lineage focus not found for provided selector")) {
+        throw error;
+      }
+
+      const unresolvedTaskId = taskIdSelector || `unresolved:${trackerSelector || taskTitleSelector || "selector"}`;
+      const unresolvedTitle = taskTitleSelector || "Unresolved task lineage selector";
+
+      return {
+        status: "selector_not_resolved",
+        reason: "task lineage focus not found for provided selector",
+        selector,
+        recoverable: true,
+        project_id: input.project_id,
+        focus: {
+          task_id: unresolvedTaskId,
+          task_title: unresolvedTitle,
+          tracker_issue_key: trackerSelector || null,
+        },
+        changed_files: [],
+        related_symbols: [],
+        commit_refs: [],
+      };
+    }
 
     const changedFiles = this.uniqueSorted(
       (lineage.touched_files || []).map((p) => this.normalizeRelativePath(p)).filter(Boolean),
@@ -2135,6 +2180,9 @@ export class SlotDB {
     }
 
     return {
+      status: "ok",
+      selector,
+      recoverable: false,
       project_id: input.project_id,
       focus: lineage.focus,
       changed_files: changedFiles,

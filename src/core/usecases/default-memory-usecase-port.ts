@@ -37,6 +37,7 @@ import type {
   ProjectChangeOverlayV1,
 } from "../contracts/change-overlay-contracts.js";
 import type {
+  ProjectDeveloperQueryCanonicalIntent,
   ProjectDeveloperQueryIntent,
   ProjectDeveloperQueryPayload,
   ProjectDeveloperQueryPrimaryResult,
@@ -316,6 +317,30 @@ interface ProjectFeaturePackQueryPayload {
 }
 
 type ProjectChangeOverlayQueryUseCasePayload = ProjectChangeOverlayQueryPayload;
+
+interface ProjectDeveloperQueryParsed {
+  canonical_intent: ProjectDeveloperQueryCanonicalIntent;
+  legacy_intent: ProjectDeveloperQueryIntent;
+  query_text: string;
+  symbol_name?: string;
+  relative_path?: string;
+  tracker_issue_key?: string;
+  task_id?: string;
+  feature_key?: FeaturePackKey;
+}
+
+type DeveloperRetrievalSource = "symbol_registry" | "file_index_state" | "chunk_registry" | "task_registry";
+
+interface ProjectDeveloperRetrievalPlan {
+  plan_key: ProjectDeveloperQueryCanonicalIntent;
+  source_priority: DeveloperRetrievalSource[];
+  locate_limit: number;
+  use_task_context: boolean;
+  attach_feature_pack: boolean;
+  attach_overlay: boolean;
+  prefer_feature_primary: boolean;
+  path_prefix_hint?: string[];
+}
 
 interface ProjectLegacyBackfillPayload {
   mode?: "dry_run" | "apply";
@@ -1802,6 +1827,10 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
 
     return {
       overlay_id: `change-overlay:${result.project_id}:${result.focus.task_id}${requestedFeature ? `:${requestedFeature}` : ""}`,
+      status: result.status,
+      ...(result.reason ? { reason: result.reason } : {}),
+      selector: result.selector,
+      recoverable: result.recoverable,
       project_id: result.project_id,
       focus: result.focus,
       changed_files: result.changed_files,
@@ -2029,54 +2058,43 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
     req: CoreRequestEnvelope<unknown>,
   ): ProjectDeveloperQueryResponseV1 {
     const identity = normalizePrivateIdentity(req.context);
-    const initialRequestedFeature = this.pickFeatureKeyForIntent(
-      payload.intent || "feature_understanding",
-      payload.feature_key,
-      payload.feature_name,
-      String(payload.query || "").trim(),
-    );
-    const query = String(payload.query || payload.feature_name || initialRequestedFeature || "").trim();
-    if (!query) {
-      throw new Error("project.developer_query requires payload.query or a resolvable feature selector");
-    }
+    const parsed = this.parseProjectDeveloperQueryPayload(payload);
+    const query = parsed.query_text;
 
     const project = this.resolveProjectRef(identity.userId, identity.agentId, {
       project_id: payload.project_id,
       project_alias: payload.project_alias,
     });
 
-    const inferredIntent: ProjectDeveloperQueryIntent = this.inferDeveloperQueryIntent(
-      payload.intent || "feature_understanding",
-      query,
-      Boolean(payload.feature_key || payload.feature_name),
-    );
+    const inferredIntent: ProjectDeveloperQueryIntent = parsed.legacy_intent;
+    const retrievalPlan = this.buildDeveloperRetrievalPlan(parsed.canonical_intent, payload.limit, parsed);
 
-    const queryId = `pdevq:${project.project_id}:${Date.now().toString(36)}`;
-    const locateLimit = Math.min(Math.max(Number(payload.limit || 8), 1), 20);
-    const trackerIssueHint = query.match(/\b[A-Z][A-Z0-9_]+-\d+\b/)?.[0];
+    const queryFingerprint = createHash("sha1")
+      .update(`${project.project_id}|${parsed.canonical_intent}|${query.toLowerCase()}`)
+      .digest("hex")
+      .slice(0, 16);
+    const queryId = `pdevq:${queryFingerprint}`;
+    const trackerIssueHint = parsed.tracker_issue_key || query.match(/\b[A-Z][A-Z0-9_]+-\d+\b/)?.[0];
 
-    const hybridTaskContext =
-      inferredIntent === "trace_flow"
-        ? {
-            tracker_issue_key: trackerIssueHint,
-            include_related: true,
-            include_parent_chain: true,
-          }
-        : inferredIntent === "impact" || inferredIntent === "change_aware_lookup"
-          ? {
-              tracker_issue_key: trackerIssueHint,
-              include_related: true,
-              include_parent_chain: false,
-            }
-          : undefined;
+    const hybridTaskContext = retrievalPlan.use_task_context
+      ? {
+          tracker_issue_key: trackerIssueHint,
+          task_id: parsed.task_id,
+          include_related: true,
+          include_parent_chain: inferredIntent === "trace_flow",
+        }
+      : undefined;
 
     let locate = this.handleProjectHybridSearch(
       {
         project_id: project.project_id,
         query,
-        limit: locateLimit,
+        limit: retrievalPlan.locate_limit,
         debug: false,
         ...(hybridTaskContext ? { task_context: hybridTaskContext } : {}),
+        ...(retrievalPlan.path_prefix_hint && retrievalPlan.path_prefix_hint.length > 0
+          ? { path_prefix: retrievalPlan.path_prefix_hint }
+          : {}),
       },
       req,
     );
@@ -2087,15 +2105,73 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
         {
           project_id: project.project_id,
           query,
-          limit: locateLimit,
+          limit: retrievalPlan.locate_limit,
           debug: false,
+          ...(retrievalPlan.path_prefix_hint && retrievalPlan.path_prefix_hint.length > 0
+            ? { path_prefix: retrievalPlan.path_prefix_hint }
+            : {}),
         },
         req,
       );
       locateFallbackUsed = true;
     }
 
-    const locatePrimary: ProjectDeveloperQueryPrimaryResult[] = locate.results.map((item) => ({
+    const topN = {
+      primary_results: 12,
+      files: 12,
+      symbols: 16,
+      snippets: 10,
+      graph_paths: 8,
+      change_context: 8,
+      answer_points: 5,
+    } as const;
+
+    const sourceRank = retrievalPlan.source_priority.reduce<Record<DeveloperRetrievalSource, number>>(
+      (acc, source, index) => {
+        acc[source] = index;
+        return acc;
+      },
+      {
+        symbol_registry: 99,
+        file_index_state: 99,
+        chunk_registry: 99,
+        task_registry: 99,
+      },
+    );
+
+    const sourceBoostByPriority = retrievalPlan.source_priority.reduce<Record<DeveloperRetrievalSource, number>>(
+      (acc, source, index) => {
+        acc[source] = Math.max(0, 0.15 - index * 0.04);
+        return acc;
+      },
+      {
+        symbol_registry: 0,
+        file_index_state: 0,
+        chunk_registry: 0,
+        task_registry: 0,
+      },
+    );
+
+    const sortStringsStable = (values: string[]) => values.sort((a, b) => a.localeCompare(b));
+
+    const locateScored = locate.results.map((item) => {
+      const source = item.source as DeveloperRetrievalSource;
+      const adjustedScore = Number((Number(item.score || 0) + (sourceBoostByPriority[source] || 0)).toFixed(4));
+      return {
+        ...item,
+        adjusted_score: adjustedScore,
+      };
+    });
+
+    const locateSorted = [...locateScored].sort((a, b) =>
+      Number(b.adjusted_score || 0) - Number(a.adjusted_score || 0)
+      || (sourceRank[a.source as DeveloperRetrievalSource] ?? 99) - (sourceRank[b.source as DeveloperRetrievalSource] ?? 99)
+      || String(a.relative_path || "").localeCompare(String(b.relative_path || ""))
+      || String(a.symbol_name || "").localeCompare(String(b.symbol_name || ""))
+      || String(a.task_id || a.id).localeCompare(String(b.task_id || b.id)),
+    );
+
+    const locatePrimary: ProjectDeveloperQueryPrimaryResult[] = locateSorted.map((item) => ({
       type:
         item.source === "file_index_state"
           ? "file"
@@ -2108,7 +2184,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       title: item.symbol_name
         ? `${item.symbol_name}${item.relative_path ? ` (${item.relative_path})` : ""}`
         : item.relative_path || item.task_title || item.id,
-      score: item.score,
+      score: item.adjusted_score,
       relative_path: item.relative_path,
       symbol_name: item.symbol_name,
       snippet: item.snippet,
@@ -2116,15 +2192,13 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
 
     const requestedFeature = this.pickFeatureKeyForIntent(
       inferredIntent,
-      payload.feature_key,
+      parsed.feature_key || payload.feature_key,
       payload.feature_name,
       query,
     );
     const shouldAttachFeaturePack =
-      inferredIntent === "feature_understanding"
-      || inferredIntent === "impact"
-      || inferredIntent === "change_aware_lookup"
-      || Boolean(payload.feature_key || payload.feature_name);
+      retrievalPlan.attach_feature_pack
+      || Boolean(parsed.feature_key || payload.feature_key || payload.feature_name);
 
     let featurePacks: FeaturePackV1[] = [];
     if (shouldAttachFeaturePack && requestedFeature) {
@@ -2142,14 +2216,9 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       }
     }
 
-    const overlaySelector = this.pickOverlaySelectorFromLocate(locate.results);
-    const shouldAttachOverlay =
-      inferredIntent === "trace_flow"
-      || inferredIntent === "impact"
-      || inferredIntent === "change_aware_lookup"
-      || inferredIntent === "feature_understanding";
+    const overlaySelector = this.pickOverlaySelectorFromLocate(locate.results, parsed);
     let overlay: ProjectChangeOverlayV1 | null = null;
-    if (shouldAttachOverlay && (overlaySelector.task_id || overlaySelector.tracker_issue_key)) {
+    if (retrievalPlan.attach_overlay && (overlaySelector.task_id || overlaySelector.tracker_issue_key)) {
       try {
         overlay = this.handleProjectChangeOverlayQuery(
           {
@@ -2167,49 +2236,75 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       }
     }
 
-    const featurePrimary: ProjectDeveloperQueryPrimaryResult[] = featurePacks.map((pack) => ({
-      type: "feature_pack",
-      id: pack.pack_id,
-      title: pack.title,
-      score: 1,
-      snippet: pack.summary,
-    }));
+    const featurePrimary: ProjectDeveloperQueryPrimaryResult[] = featurePacks
+      .map((pack): ProjectDeveloperQueryPrimaryResult => ({
+        type: "feature_pack",
+        id: pack.pack_id,
+        title: pack.title,
+        score: 1,
+        snippet: pack.summary,
+      }))
+      .sort((a, b) => String(a.id).localeCompare(String(b.id)));
 
-    const mergedPrimary = [
-      ...(inferredIntent === "feature_understanding" ? featurePrimary : []),
-      ...(inferredIntent === "change_aware_lookup" || inferredIntent === "impact"
-        ? (overlay?.related_symbols || []).slice(0, 3).map((symbol) => ({
-            type: "symbol" as const,
-            id: symbol.symbol_fqn || symbol.symbol_name,
-            title: `${symbol.symbol_name}${symbol.relative_path ? ` (${symbol.relative_path})` : ""}`,
-            score: symbol.confidence,
-            relative_path: symbol.relative_path,
-            symbol_name: symbol.symbol_name,
-          }))
-        : []),
+    const overlaySymbolPrimary: ProjectDeveloperQueryPrimaryResult[] =
+      parsed.canonical_intent === "change_lookup"
+        ? [...(overlay?.related_symbols || [])]
+            .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0)
+              || String(a.relative_path || "").localeCompare(String(b.relative_path || ""))
+              || String(a.symbol_name || "").localeCompare(String(b.symbol_name || "")))
+            .slice(0, 3)
+            .map((symbol) => ({
+              type: "symbol" as const,
+              id: symbol.symbol_fqn || symbol.symbol_name,
+              title: `${symbol.symbol_name}${symbol.relative_path ? ` (${symbol.relative_path})` : ""}`,
+              score: symbol.confidence,
+              relative_path: symbol.relative_path,
+              symbol_name: symbol.symbol_name,
+            }))
+        : [];
+
+    const mergedPrimaryCandidates = [
+      ...(retrievalPlan.prefer_feature_primary ? featurePrimary : []),
+      ...overlaySymbolPrimary,
       ...locatePrimary,
-      ...(inferredIntent !== "feature_understanding" ? featurePrimary : []),
-    ].slice(0, 12);
+      ...(!retrievalPlan.prefer_feature_primary ? featurePrimary : []),
+    ];
 
-    const files = Array.from(
+    const mergedPrimaryDeduped = Array.from(
+      new Map(
+        mergedPrimaryCandidates.map((item) => {
+          const key = `${item.type}:${item.id}`;
+          return [key, item] as const;
+        }),
+      ).values(),
+    );
+
+    const mergedPrimary = mergedPrimaryDeduped
+      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0)
+        || String(a.type).localeCompare(String(b.type))
+        || String(a.relative_path || "").localeCompare(String(b.relative_path || ""))
+        || String(a.title).localeCompare(String(b.title)))
+      .slice(0, topN.primary_results);
+
+    const files = sortStringsStable(Array.from(
       new Set([
-        ...locate.results.map((item) => item.relative_path).filter(Boolean) as string[],
+        ...locateSorted.map((item) => item.relative_path).filter(Boolean) as string[],
         ...(overlay?.changed_files || []),
         ...featurePacks.flatMap((pack) => pack.primary_files || []),
       ]),
-    ).slice(0, 12);
+    )).slice(0, topN.files);
 
-    const symbols = Array.from(
+    const symbols = sortStringsStable(Array.from(
       new Set([
-        ...locate.results.map((item) => item.symbol_name).filter(Boolean) as string[],
+        ...locateSorted.map((item) => item.symbol_name).filter(Boolean) as string[],
         ...(overlay?.related_symbols || []).map((item) => item.symbol_fqn || item.symbol_name).filter(Boolean) as string[],
         ...featurePacks.flatMap((pack) => pack.primary_symbols || []),
       ]),
-    ).slice(0, 16);
+    )).slice(0, topN.symbols);
 
-    const snippets = Array.from(
+    const snippets = sortStringsStable(Array.from(
       new Set([
-        ...locate.results.map((item) => String(item.snippet || "").trim()).filter(Boolean),
+        ...locateSorted.map((item) => String(item.snippet || "").trim()).filter(Boolean),
         ...featurePacks.map((pack) => pack.summary).filter(Boolean),
         ...(overlay
           ? [
@@ -2218,23 +2313,24 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
             ]
           : []),
       ]),
-    ).slice(0, 10);
+    )).slice(0, topN.snippets);
 
-    const graphPaths = overlay
-      ? overlay.related_symbols
-          .slice(0, 8)
-          .map((item) => `${item.relative_path || "unknown"}::${item.symbol_fqn || item.symbol_name}`)
-      : [];
+    const graphPaths = sortStringsStable(overlay
+      ? Array.from(new Set(
+        overlay.related_symbols
+          .map((item) => `${item.relative_path || "unknown"}::${item.symbol_fqn || item.symbol_name}`),
+      ))
+      : []).slice(0, topN.graph_paths);
 
-    const changeContext = Array.from(
+    const changeContext = sortStringsStable(Array.from(
       new Set([
-        ...locate.results
+        ...locateSorted
           .map((item) => item.task_id || item.tracker_issue_key)
           .filter((value): value is string => Boolean(value)),
         ...(overlay ? [overlay.focus.task_id, ...(overlay.focus.tracker_issue_key ? [overlay.focus.tracker_issue_key] : [])] : []),
         ...featurePacks.flatMap((pack) => pack.related_tasks || []),
       ]),
-    ).slice(0, 8);
+    )).slice(0, topN.change_context);
 
     const assemblySources = Array.from(
       new Set([
@@ -2243,7 +2339,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
         ...(featurePacks.length > 0 ? (["feature_pack"] as const) : []),
         ...(overlay ? (["change_overlay"] as const) : []),
       ]),
-    );
+    ).sort((a, b) => a.localeCompare(b));
 
     const confidenceOverall = Number(
       Math.min(
@@ -2251,7 +2347,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
         (locate.results.length > 0 ? 0.45 : 0.1)
           + (featurePacks.length > 0 ? 0.2 : 0)
           + (overlay ? 0.2 : 0)
-          + ((inferredIntent === "impact" || inferredIntent === "change_aware_lookup") && overlay ? 0.07 : 0)
+          + (parsed.canonical_intent === "change_lookup" && overlay ? 0.07 : 0)
           + (inferredIntent === "trace_flow" && !locateFallbackUsed ? 0.03 : 0)
           + Math.min(0.07, snippets.length * 0.01),
       ).toFixed(2),
@@ -2260,17 +2356,58 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
     const confidenceReasonParts: string[] = [];
     confidenceReasonParts.push(`intent=${inferredIntent}`);
     confidenceReasonParts.push(`locate_hits=${locate.results.length}`);
+    confidenceReasonParts.push(`plan=${retrievalPlan.plan_key}`);
     if (featurePacks.length > 0) confidenceReasonParts.push(`feature_pack=${featurePacks[0].feature_key}`);
     if (overlay) confidenceReasonParts.push(`overlay_focus=${overlay.focus.task_id}`);
     if (locateFallbackUsed) confidenceReasonParts.push("trace_task_context_fallback=true");
 
     const whyThisResult = [
       "resolved via project.hybrid_search",
+      `retrieval plan ${retrievalPlan.plan_key} source priority: ${retrievalPlan.source_priority.join(" > ")}`,
       ...(hybridTaskContext ? ["intent-aware task_context applied"] : []),
+      ...(retrievalPlan.path_prefix_hint && retrievalPlan.path_prefix_hint.length > 0
+        ? [`path_prefix hint: ${retrievalPlan.path_prefix_hint.join(", ")}`]
+        : []),
       ...(featurePacks.length > 0 ? ["enriched via project.feature_pack.query"] : []),
       ...(overlay ? ["enriched via project.change_overlay.query"] : []),
       `result_count=${locate.count}`,
+      "stable ordering: score desc -> source/path/title",
+      "dedup key: primary(type:id), lists via set",
     ];
+
+    const answerTemplate =
+      parsed.canonical_intent === "locate_symbol" || parsed.canonical_intent === "locate_file"
+        ? "locate"
+        : parsed.canonical_intent === "feature_lookup"
+          ? "feature_understanding"
+          : "generic";
+
+    const answerSummary = answerTemplate === "locate"
+      ? `Located ${mergedPrimary.length} candidate result(s) for '${query}' in project ${project.project_id}.`
+      : answerTemplate === "feature_understanding"
+        ? `Feature understanding assembled for '${query}' with ${featurePacks.length} feature pack(s).`
+        : `Developer query '${query}' resolved with ${assemblySources.length} assembly source(s).`;
+
+    const answerPoints = (answerTemplate === "locate"
+      ? [
+          mergedPrimary[0] ? `Top hit: ${mergedPrimary[0].title}` : "Top hit: none",
+          files.length > 0 ? `Files: ${files.slice(0, 3).join(", ")}` : "Files: none",
+          symbols.length > 0 ? `Symbols: ${symbols.slice(0, 3).join(", ")}` : "Symbols: none",
+          `Assembly sources: ${assemblySources.join(", ") || "none"}`,
+        ]
+      : answerTemplate === "feature_understanding"
+        ? [
+            featurePacks[0] ? `Feature pack: ${featurePacks[0].title}` : "Feature pack: none",
+            featurePacks[0]?.summary ? `Summary: ${featurePacks[0].summary}` : "Summary: none",
+            featurePacks[0]?.primary_files?.length ? `Primary files: ${featurePacks[0].primary_files.slice(0, 3).join(", ")}` : "Primary files: none",
+            featurePacks[0]?.primary_symbols?.length ? `Primary symbols: ${featurePacks[0].primary_symbols.slice(0, 3).join(", ")}` : "Primary symbols: none",
+          ]
+        : [
+            `Intent: ${inferredIntent}`,
+            `Top result: ${mergedPrimary[0]?.title || "none"}`,
+            `Assembly sources: ${assemblySources.join(", ") || "none"}`,
+          ])
+      .slice(0, topN.answer_points);
 
     return {
       query_id: queryId,
@@ -2286,38 +2423,219 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       feature_packs: featurePacks,
       change_context: changeContext,
       assembly_sources: assemblySources,
+      answer_template: answerTemplate,
+      answer_summary: answerSummary,
+      answer_points: answerPoints,
+      explainability: {
+        ranking_rules: [
+          "typed query parser maps query -> canonical intent/selectors deterministically",
+          `retrieval plan ${retrievalPlan.plan_key} applies source priority ${retrievalPlan.source_priority.join(" > ")}`,
+          "primary_results sorted by score desc, then type/path/title",
+          "files/symbols/snippets/graph_paths/change_context sorted lexicographically",
+          "hybrid locate candidates pre-sorted by score/source/path/symbol/task",
+        ],
+        top_n: topN,
+        evidence_counts: {
+          locate_hits: locate.results.length,
+          feature_pack_hits: featurePacks.length,
+          overlay_changed_files: overlay?.changed_files.length || 0,
+          overlay_related_symbols: overlay?.related_symbols.length || 0,
+        },
+        dedup: {
+          primary_results: true,
+          files: true,
+          symbols: true,
+          snippets: true,
+          graph_paths: true,
+          change_context: true,
+        },
+        fallbacks: [
+          ...(locateFallbackUsed ? ["trace_task_context_fallback=true"] : []),
+          ...(featurePacks.length === 0 && shouldAttachFeaturePack ? ["feature_pack_unavailable_or_unresolved"] : []),
+          ...(overlay === null && retrievalPlan.attach_overlay ? ["overlay_unavailable_or_unresolved"] : []),
+        ],
+      },
       confidence: {
         overall: confidenceOverall,
         reason: confidenceReasonParts.join("; ") || "minimal evidence",
       },
       why_this_result: whyThisResult,
       generated_at: new Date().toISOString(),
-      generator_version: "asm-95-slice3",
+      generator_version: "asm-109-slice1",
     };
   }
 
-  private inferDeveloperQueryIntent(
-    intent: ProjectDeveloperQueryIntent | undefined,
-    query: string,
-    hasFeatureSelector: boolean,
-  ): ProjectDeveloperQueryIntent {
-    if (intent) return intent;
+  private buildDeveloperRetrievalPlan(
+    intent: ProjectDeveloperQueryCanonicalIntent,
+    requestedLimit: number | undefined,
+    parsed: ProjectDeveloperQueryParsed,
+  ): ProjectDeveloperRetrievalPlan {
+    const locateLimit = Math.min(Math.max(Number(requestedLimit || 8), 1), 20);
 
-    const lowered = query.toLowerCase();
-    if (hasFeatureSelector || /feature|capability|pack|understand/.test(lowered)) {
-      return "feature_understanding";
-    }
-    if (/trace|flow|path|sequence|chain/.test(lowered)) {
-      return "trace_flow";
-    }
-    if (/impact|blast radius|affected|affect/.test(lowered)) {
-      return "impact";
-    }
-    if (/change-aware|change aware|overlay|recent change|lookup/.test(lowered)) {
-      return "change_aware_lookup";
+    if (intent === "locate_symbol") {
+      return {
+        plan_key: "locate_symbol",
+        source_priority: ["symbol_registry", "chunk_registry", "file_index_state", "task_registry"],
+        locate_limit: locateLimit,
+        use_task_context: false,
+        attach_feature_pack: false,
+        attach_overlay: false,
+        prefer_feature_primary: false,
+      };
     }
 
-    return "locate";
+    if (intent === "locate_file") {
+      return {
+        plan_key: "locate_file",
+        source_priority: ["file_index_state", "chunk_registry", "symbol_registry", "task_registry"],
+        locate_limit: locateLimit,
+        use_task_context: false,
+        attach_feature_pack: false,
+        attach_overlay: false,
+        prefer_feature_primary: false,
+        path_prefix_hint: this.buildLocatePathPrefixHint(parsed.relative_path || parsed.query_text),
+      };
+    }
+
+    if (intent === "feature_lookup") {
+      return {
+        plan_key: "feature_lookup",
+        source_priority: ["symbol_registry", "file_index_state", "task_registry", "chunk_registry"],
+        locate_limit: Math.min(locateLimit, 12),
+        use_task_context: false,
+        attach_feature_pack: true,
+        attach_overlay: false,
+        prefer_feature_primary: true,
+      };
+    }
+
+    return {
+      plan_key: "change_lookup",
+      source_priority: ["task_registry", "symbol_registry", "file_index_state", "chunk_registry"],
+      locate_limit: locateLimit,
+      use_task_context: true,
+      attach_feature_pack: true,
+      attach_overlay: true,
+      prefer_feature_primary: false,
+    };
+  }
+
+  private buildLocatePathPrefixHint(rawPath: string): string[] | undefined {
+    const normalized = String(rawPath || "").trim().replace(/\\/g, "/").replace(/^\.\//, "");
+    if (!normalized || !normalized.includes("/")) return undefined;
+
+    const segments = normalized.split("/").filter(Boolean);
+    if (segments.length === 0) return undefined;
+
+    const hints = [normalized];
+    if (segments.length > 1) {
+      hints.push(segments.slice(0, -1).join("/"));
+    }
+    hints.push(segments[0]);
+
+    return Array.from(new Set(hints)).filter(Boolean);
+  }
+
+  private parseProjectDeveloperQueryPayload(payload: ProjectDeveloperQueryPayload): ProjectDeveloperQueryParsed {
+    const explicitIntent = payload.intent;
+    const query = String(payload.query || "").trim();
+    const symbolName = String(payload.symbol_name || "").trim();
+    const relativePath = String(payload.relative_path || "").trim();
+    const trackerIssueKey = String(payload.tracker_issue_key || "").trim();
+    const taskId = String(payload.task_id || "").trim();
+
+    const canonicalFromExplicit: Record<ProjectDeveloperQueryIntent, ProjectDeveloperQueryCanonicalIntent> = {
+      locate_symbol: "locate_symbol",
+      locate_file: "locate_file",
+      feature_lookup: "feature_lookup",
+      change_lookup: "change_lookup",
+      locate: "locate_symbol",
+      trace_flow: "change_lookup",
+      impact: "change_lookup",
+      change_aware_lookup: "change_lookup",
+      feature_understanding: "feature_lookup",
+    };
+
+    const canonical_intent = explicitIntent
+      ? canonicalFromExplicit[explicitIntent]
+      : this.inferCanonicalIntentFromQuery({
+          query,
+          symbolName,
+          relativePath,
+          trackerIssueKey,
+          taskId,
+          hasFeatureSelector: Boolean(payload.feature_key || payload.feature_name),
+        });
+
+    const explicitLegacyIntents: ProjectDeveloperQueryIntent[] = [
+      "locate",
+      "trace_flow",
+      "impact",
+      "change_aware_lookup",
+      "feature_understanding",
+    ];
+    const legacy_intent: ProjectDeveloperQueryIntent =
+      explicitIntent && explicitLegacyIntents.includes(explicitIntent)
+        ? explicitIntent
+        : (canonical_intent === "feature_lookup"
+            ? "feature_understanding"
+            : canonical_intent === "change_lookup"
+              ? "change_aware_lookup"
+              : "locate");
+
+    const feature_key = payload.feature_key
+      || (payload.feature_name ? this.tryResolveFeatureKeyInput(undefined, payload.feature_name) : null)
+      || (canonical_intent === "change_lookup" ? "change_aware_impact" : undefined);
+
+    const query_text = String(
+      canonical_intent === "locate_symbol"
+        ? (symbolName || query)
+        : canonical_intent === "locate_file"
+          ? (relativePath || query)
+          : canonical_intent === "feature_lookup"
+            ? (query || payload.feature_name || feature_key || "")
+            : (query || trackerIssueKey || taskId || ""),
+    ).trim();
+
+    if (!query_text) {
+      throw new Error("project.developer_query requires payload.query or deterministic selectors");
+    }
+
+    return {
+      canonical_intent,
+      legacy_intent,
+      query_text,
+      ...(symbolName ? { symbol_name: symbolName } : {}),
+      ...(relativePath ? { relative_path: relativePath } : {}),
+      ...(trackerIssueKey ? { tracker_issue_key: trackerIssueKey } : {}),
+      ...(taskId ? { task_id: taskId } : {}),
+      ...(feature_key ? { feature_key } : {}),
+    };
+  }
+
+  private inferCanonicalIntentFromQuery(input: {
+    query: string;
+    symbolName?: string;
+    relativePath?: string;
+    trackerIssueKey?: string;
+    taskId?: string;
+    hasFeatureSelector: boolean;
+  }): ProjectDeveloperQueryCanonicalIntent {
+    if (input.symbolName) return "locate_symbol";
+    if (input.relativePath) return "locate_file";
+    if (input.trackerIssueKey || input.taskId) return "change_lookup";
+
+    const lowered = input.query.toLowerCase();
+    if (input.hasFeatureSelector || /feature|capability|pack|understand/.test(lowered)) {
+      return "feature_lookup";
+    }
+    if (/trace|flow|impact|blast radius|affected|change-aware|change aware|overlay|lookup/.test(lowered)) {
+      return "change_lookup";
+    }
+    if (/file|path|\.tsx?|\.jsx?|\/src\//.test(lowered)) {
+      return "locate_file";
+    }
+    return "locate_symbol";
   }
 
   private pickFeatureKeyForIntent(
@@ -2331,12 +2649,12 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       if (resolved) return resolved;
     }
 
-    if (intent === "impact" || intent === "change_aware_lookup") {
+    if (intent === "impact" || intent === "change_aware_lookup" || intent === "change_lookup") {
       return "change_aware_impact";
     }
 
-    if (intent === "feature_understanding" && query) {
-      return this.tryResolveFeatureKeyInput(undefined, query);
+    if (intent === "feature_understanding" || intent === "feature_lookup") {
+      if (query) return this.tryResolveFeatureKeyInput(undefined, query);
     }
 
     return null;
@@ -2352,6 +2670,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
 
   private pickOverlaySelectorFromLocate(
     items: Array<{ task_id?: string; tracker_issue_key?: string | null }>,
+    parsed?: ProjectDeveloperQueryParsed,
   ): { task_id?: string; tracker_issue_key?: string } {
     const firstTaskId = items.map((item) => item.task_id).find((value): value is string => Boolean(value));
     const firstIssue = items
@@ -2359,8 +2678,8 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       .find((value): value is string => Boolean(value));
 
     return {
-      task_id: firstTaskId,
-      tracker_issue_key: firstIssue,
+      task_id: parsed?.task_id || firstTaskId,
+      tracker_issue_key: parsed?.tracker_issue_key || firstIssue,
     };
   }
 

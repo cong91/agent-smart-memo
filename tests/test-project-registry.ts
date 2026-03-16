@@ -440,10 +440,14 @@ async function main() {
     assert(Array.isArray(locate.primary_results) && locate.primary_results.length >= 1, "locate should return primary results");
     assert(Array.isArray(locate.files), "locate response should expose files[] contract");
     assert(Array.isArray(locate.symbols), "locate response should expose symbols[] contract");
-    assertEqual(locate.generator_version, "asm-95-slice3", "locate response generator should match slice3");
+    assertEqual(locate.generator_version, "asm-109-slice1", "locate response generator should match asm-109 slice1");
     assert(Array.isArray(locate.assembly_sources), "locate response should expose assembly_sources");
     assert(locate.assembly_sources.includes("file") || locate.assembly_sources.includes("symbol"), "locate should include file/symbol assembly source");
+    assertEqual(locate.answer_template, "locate", "locate should use locate template");
+    assert(typeof locate.answer_summary === "string" && locate.answer_summary.length > 0, "locate should expose answer_summary");
+    assert(Array.isArray(locate.answer_points) && locate.answer_points.length >= 1, "locate should expose answer_points");
     assert(locate.confidence.reason.includes("intent=locate"), "locate confidence reason should include intent marker");
+    assert(typeof locate.explainability === "object" && Array.isArray(locate.explainability.ranking_rules), "locate should expose explainability");
 
     const traceFlow = await usecase.run<any, any>("project.developer_query", {
       ...ctx,
@@ -500,9 +504,85 @@ async function main() {
     assert(Array.isArray(feature.feature_packs) && feature.feature_packs.length === 1, "feature query should return one feature pack");
     assertEqual(feature.feature_packs[0].feature_key, "code_aware_retrieval", "feature query should resolve retrieval pack");
     assert(Array.isArray(feature.primary_results) && feature.primary_results[0]?.type === "feature_pack", "feature query primary result should be feature_pack");
-    assertEqual(feature.generator_version, "asm-95-slice3", "feature response generator should match slice3");
+    assertEqual(feature.generator_version, "asm-109-slice1", "feature response generator should match asm-109 slice1");
     assert(Array.isArray(feature.assembly_sources), "feature response should expose assembly_sources");
     assert(feature.assembly_sources.includes("feature_pack"), "feature response should include feature_pack assembly source");
+    assertEqual(feature.answer_template, "feature_understanding", "feature response should use feature template");
+    assert(typeof feature.answer_summary === "string" && feature.answer_summary.length > 0, "feature response should expose answer_summary");
+    assert(Array.isArray(feature.answer_points) && feature.answer_points.length >= 1, "feature response should expose answer_points");
+    assert(typeof feature.explainability === "object" && feature.explainability.top_n?.primary_results === 12, "feature response should expose explainability top_n");
+
+    const typedLocateSymbol = await usecase.run<any, any>("project.developer_query", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        intent: "locate_symbol",
+        symbol_name: "project_hybrid_search",
+      },
+    });
+    assertEqual(typedLocateSymbol.intent, "locate", "typed locate_symbol should map to legacy locate response intent");
+    assert(
+      typedLocateSymbol.explainability.ranking_rules.some((rule: string) => rule.includes("typed query parser")),
+      "typed locate_symbol should expose parser rule in explainability",
+    );
+    assert(
+      typedLocateSymbol.explainability.ranking_rules.some((rule: string) => rule.includes("retrieval plan locate_symbol")),
+      "typed locate_symbol should apply locate_symbol retrieval plan",
+    );
+
+    const typedLocateFile = await usecase.run<any, any>("project.developer_query", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        intent: "locate_file",
+        relative_path: "src/tools/project-tools.ts",
+      },
+    });
+    assertEqual(typedLocateFile.intent, "locate", "typed locate_file should map to legacy locate response intent");
+    assert(typedLocateFile.files.includes("src/tools/project-tools.ts"), "typed locate_file should include requested path");
+    assert(
+      typedLocateFile.why_this_result.some((line: string) => line.includes("path_prefix hint")),
+      "typed locate_file should include path_prefix hint for file-first retrieval",
+    );
+
+    const typedFeatureLookup = await usecase.run<any, any>("project.developer_query", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        intent: "feature_lookup",
+        query: "code aware retrieval",
+      },
+    });
+    assertEqual(typedFeatureLookup.intent, "feature_understanding", "typed feature_lookup should map to feature_understanding");
+    assertEqual(typedFeatureLookup.feature_packs[0].feature_key, "code_aware_retrieval", "typed feature lookup should resolve pack deterministically");
+    assert(
+      typedFeatureLookup.primary_results[0]?.type === "feature_pack",
+      "typed feature_lookup should prefer feature pack in primary results",
+    );
+    assert(
+      typedFeatureLookup.explainability.ranking_rules.some((rule: string) => rule.includes("retrieval plan feature_lookup")),
+      "typed feature_lookup should apply feature_lookup retrieval plan",
+    );
+
+    const typedChangeLookup = await usecase.run<any, any>("project.developer_query", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        intent: "change_lookup",
+        tracker_issue_key: "ASM-78",
+        query: "overlay for asm-78",
+      },
+    });
+    assertEqual(typedChangeLookup.intent, "change_aware_lookup", "typed change_lookup should map to change_aware_lookup");
+    assert(typedChangeLookup.assembly_sources.includes("change_overlay"), "typed change_lookup should include overlay source");
+    assert(
+      typedChangeLookup.why_this_result.some((line: string) => line.includes("intent-aware task_context applied")),
+      "typed change_lookup should apply task-context retrieval plan",
+    );
+    assert(
+      typedChangeLookup.explainability.ranking_rules.some((rule: string) => rule.includes("retrieval plan change_lookup")),
+      "typed change_lookup should apply change_lookup retrieval plan",
+    );
   });
 
   await test("project.change_overlay.query maps overlay -> feature packs with confidence ordering", async () => {
@@ -596,6 +676,31 @@ async function main() {
     });
     assertEqual(overlayByFeatureName.feature_packs.length, 1, "feature_name should narrow overlay to one matched feature pack");
     assertEqual(overlayByFeatureName.feature_packs[0].feature_key, "change_aware_impact", "feature_name normalization should be applied");
+  });
+
+  await test("project.change_overlay.query returns controlled empty overlay when selector does not resolve", async () => {
+    const current = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_alias: "agent-smart-memo-cmd" },
+    });
+
+    const overlay = await usecase.run<any, any>("project.change_overlay.query", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        tracker_issue_key: "ASM-DOES-NOT-EXIST",
+      },
+    });
+
+    assertEqual(overlay.project_id, current.project.project_id, "overlay should keep project id");
+    assertEqual(overlay.status, "selector_not_resolved", "overlay should return structured unresolved status");
+    assertEqual(overlay.reason, "task lineage focus not found for provided selector", "overlay should include unresolved reason");
+    assertEqual(overlay.recoverable, true, "unresolved selector should be recoverable");
+    assertEqual(overlay.selector?.tracker_issue_key, "ASM-DOES-NOT-EXIST", "overlay should echo unresolved selector");
+    assertEqual(overlay.focus.tracker_issue_key, "ASM-DOES-NOT-EXIST", "overlay should echo unresolved tracker selector");
+    assert(Array.isArray(overlay.changed_files) && overlay.changed_files.length === 0, "overlay should gracefully return empty changed_files");
+    assert(Array.isArray(overlay.related_symbols) && overlay.related_symbols.length === 0, "overlay should gracefully return empty related_symbols");
+    assert(Array.isArray(overlay.commit_refs) && overlay.commit_refs.length === 0, "overlay should gracefully return empty commit_refs");
   });
 
   await test("project.list returns registry entries", async () => {

@@ -1100,15 +1100,32 @@ export function registerProjectTools(
     name: "project_developer_query",
     label: "Project Developer Query",
     description:
-      "ASM-95 Slice 1 unified developer query surface (locate + feature understanding) over existing hybrid_search/feature_pack capabilities.",
+      "ASM-112 typed developer query parser surface with deterministic intent/selector normalization over existing hybrid_search/feature_pack/change_overlay capabilities.",
     parameters: {
       type: "object",
       properties: {
         project_id: { type: "string" },
         project_alias: { type: "string" },
         query: { type: "string" },
-        intent: { type: "string", enum: ["locate", "trace_flow", "impact", "change_aware_lookup", "feature_understanding"] },
+        intent: {
+          type: "string",
+          enum: [
+            "locate_symbol",
+            "locate_file",
+            "feature_lookup",
+            "change_lookup",
+            "locate",
+            "trace_flow",
+            "impact",
+            "change_aware_lookup",
+            "feature_understanding",
+          ],
+        },
         limit: { type: "number" },
+        symbol_name: { type: "string" },
+        relative_path: { type: "string" },
+        tracker_issue_key: { type: "string" },
+        task_id: { type: "string" },
         feature_key: {
           type: "string",
           enum: [
@@ -1128,9 +1145,22 @@ export function registerProjectTools(
       params: {
         project_id?: string;
         project_alias?: string;
-        query: string;
-        intent?: "locate" | "trace_flow" | "impact" | "change_aware_lookup" | "feature_understanding";
+        query?: string;
+        intent?:
+          | "locate_symbol"
+          | "locate_file"
+          | "feature_lookup"
+          | "change_lookup"
+          | "locate"
+          | "trace_flow"
+          | "impact"
+          | "change_aware_lookup"
+          | "feature_understanding";
         limit?: number;
+        symbol_name?: string;
+        relative_path?: string;
+        tracker_issue_key?: string;
+        task_id?: string;
         feature_key?:
           | "project_onboarding_registration_indexing"
           | "code_aware_retrieval"

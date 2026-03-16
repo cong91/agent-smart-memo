@@ -45,8 +45,20 @@ export interface ProjectChangeOverlayConfidence {
   };
 }
 
+export interface ProjectChangeOverlaySelectorEcho {
+  task_id?: string;
+  tracker_issue_key?: string;
+  task_title?: string;
+}
+
+export type ProjectChangeOverlayStatus = "ok" | "selector_not_resolved";
+
 export interface ProjectChangeOverlayV1 {
   overlay_id: string;
+  status: ProjectChangeOverlayStatus;
+  reason?: string;
+  selector: ProjectChangeOverlaySelectorEcho;
+  recoverable: boolean;
   project_id: string;
   focus: {
     task_id: string;

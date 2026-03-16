@@ -31,6 +31,16 @@ interface ParsedImportStatement {
   line: number;
 }
 
+interface RoutedPathMatch {
+  path: string;
+  line: number;
+}
+
+interface EventSignalMatch {
+  eventKey: string;
+  line: number;
+}
+
 export function buildCodeGraphFileNodeId(projectId: string, relativePath: string): string {
   return `file:${projectId}:${normalizePath(relativePath)}`;
 }
@@ -57,6 +67,10 @@ function buildCodeGraphRouteNodeId(projectId: string, routePath: string): string
 
 function buildCodeGraphJobNodeId(projectId: string, jobKey: string): string {
   return `job:${projectId}:${sha1(jobKey)}`;
+}
+
+function buildCodeGraphEventNodeId(projectId: string, eventKey: string): string {
+  return `event:${projectId}:${sha1(eventKey)}`;
 }
 
 function sha1(raw: string): string {
@@ -185,34 +199,151 @@ function extractCallTargets(blockText: string): string[] {
   return Array.from(out);
 }
 
-function extractRoutePaths(text: string): string[] {
-  const out = new Set<string>();
+function normalizeRoutePath(routePath: string): string {
+  const normalized = String(routePath || "").trim();
+  if (!normalized) return "/";
+  const cleaned = normalized.replace(/\/+/g, "/");
+  if (cleaned.startsWith("/")) return cleaned;
+  return `/${cleaned}`;
+}
+
+function joinRoutePath(prefix: string, childPath: string): string {
+  const base = normalizeRoutePath(prefix);
+  const child = String(childPath || "").trim();
+  if (!child || child === "/") return base;
+  const normalizedChild = child.startsWith("/") ? child : `/${child}`;
+  const joined = `${base.replace(/\/$/, "")}${normalizedChild}`;
+  return normalizeRoutePath(joined);
+}
+
+function extractRouteMatches(text: string): RoutedPathMatch[] {
+  const out: RoutedPathMatch[] = [];
+  const push = (path: string, offset: number) => {
+    const normalized = normalizeRoutePath(path);
+    out.push({ path: normalized, line: lineOf(text, offset) });
+  };
+
   const httpRoutes = /\.(?:get|post|put|patch|delete|all|options|head)\s*\(\s*["'`]([^"'`]+)["'`]/gi;
-  const nestRoutes = /@(?:Get|Post|Put|Patch|Delete|All|Options|Head)\s*\(\s*["'`]([^"'`]+)["'`]/g;
+  const nestController = /@Controller\s*\(\s*(?:["'`]([^"'`]*)["'`])?\s*\)/g;
+  const nestRoutes = /@(?:Get|Post|Put|Patch|Delete|All|Options|Head)\s*\(\s*(?:["'`]([^"'`]*)["'`])?\s*\)/g;
 
   let match: RegExpExecArray | null;
   while ((match = httpRoutes.exec(text))) {
-    if (match[1]?.startsWith("/")) out.add(match[1]);
-  }
-  while ((match = nestRoutes.exec(text))) {
-    if (match[1]?.startsWith("/")) out.add(match[1]);
+    push(match[1], match.index);
   }
 
-  return Array.from(out);
+  const controllerPrefixes: Array<{ offset: number; prefix: string }> = [];
+  while ((match = nestController.exec(text))) {
+    controllerPrefixes.push({
+      offset: match.index,
+      prefix: normalizeRoutePath(match[1] || "/"),
+    });
+  }
+
+  while ((match = nestRoutes.exec(text))) {
+    const routeOffset = match.index;
+    const methodPath = String(match[1] || "").trim();
+    const controllerPrefix = [...controllerPrefixes]
+      .reverse()
+      .find((item) => item.offset <= routeOffset)?.prefix;
+
+    if (controllerPrefix) {
+      push(joinRoutePath(controllerPrefix, methodPath), routeOffset);
+      continue;
+    }
+
+    if (methodPath) {
+      push(methodPath, routeOffset);
+    }
+  }
+
+  const dedup = new Map<string, RoutedPathMatch>();
+  for (const item of out) {
+    const existing = dedup.get(item.path);
+    if (!existing || item.line < existing.line) dedup.set(item.path, item);
+  }
+
+  return Array.from(dedup.values()).sort((a, b) => a.line - b.line || a.path.localeCompare(b.path));
 }
 
-function extractScheduleKeys(text: string): string[] {
-  const out = new Set<string>();
+function extractScheduleMatches(text: string): RoutedPathMatch[] {
+  const out: RoutedPathMatch[] = [];
   const cronSchedule = /\bcron\.schedule\s*\(\s*["'`]([^"'`]+)["'`]/g;
   const scheduleJob = /\bscheduleJob\s*\(\s*["'`]([^"'`]+)["'`]/g;
   const setIntervalRegex = /\bsetInterval\s*\([^,]+,\s*(\d+)\s*\)/g;
+  const setTimeoutRegex = /\bsetTimeout\s*\([^,]+,\s*(\d+)\s*\)/g;
+  const nestCron = /@Cron\s*\(\s*["'`]([^"'`]+)["'`]/g;
+  const nestInterval = /@Interval\s*\(\s*(\d+)\s*\)/g;
+  const nestTimeout = /@Timeout\s*\(\s*(\d+)\s*\)/g;
+  const bullProcess = /@Process\s*\(\s*["'`]([^"'`]+)["'`]/g;
+  const agendaEvery = /\bagenda\.every\s*\(\s*["'`]([^"'`]+)["'`]/g;
 
   let match: RegExpExecArray | null;
-  while ((match = cronSchedule.exec(text))) out.add(`cron:${match[1]}`);
-  while ((match = scheduleJob.exec(text))) out.add(`scheduleJob:${match[1]}`);
-  while ((match = setIntervalRegex.exec(text))) out.add(`interval:${match[1]}ms`);
+  while ((match = cronSchedule.exec(text))) out.push({ path: `cron:${match[1]}`, line: lineOf(text, match.index) });
+  while ((match = scheduleJob.exec(text))) out.push({ path: `scheduleJob:${match[1]}`, line: lineOf(text, match.index) });
+  while ((match = setIntervalRegex.exec(text))) out.push({ path: `interval:${match[1]}ms`, line: lineOf(text, match.index) });
+  while ((match = setTimeoutRegex.exec(text))) out.push({ path: `timeout:${match[1]}ms`, line: lineOf(text, match.index) });
+  while ((match = nestCron.exec(text))) out.push({ path: `cron:${match[1]}`, line: lineOf(text, match.index) });
+  while ((match = nestInterval.exec(text))) out.push({ path: `interval:${match[1]}ms`, line: lineOf(text, match.index) });
+  while ((match = nestTimeout.exec(text))) out.push({ path: `timeout:${match[1]}ms`, line: lineOf(text, match.index) });
+  while ((match = bullProcess.exec(text))) out.push({ path: `queue:${match[1]}`, line: lineOf(text, match.index) });
+  while ((match = agendaEvery.exec(text))) out.push({ path: `agenda:${match[1]}`, line: lineOf(text, match.index) });
 
-  return Array.from(out);
+  const dedup = new Map<string, RoutedPathMatch>();
+  for (const item of out) {
+    const existing = dedup.get(item.path);
+    if (!existing || item.line < existing.line) dedup.set(item.path, item);
+  }
+
+  return Array.from(dedup.values()).sort((a, b) => a.line - b.line || a.path.localeCompare(b.path));
+}
+
+function extractEventSignals(text: string): { emits: EventSignalMatch[]; consumes: EventSignalMatch[] } {
+  const emits: EventSignalMatch[] = [];
+  const consumes: EventSignalMatch[] = [];
+
+  const emitPatterns = [
+    /\.emit\s*\(\s*["'`]([^"'`]+)["'`]/g,
+    /\.publish\s*\(\s*["'`]([^"'`]+)["'`]/g,
+    /@Emit\s*\(\s*["'`]([^"'`]+)["'`]/g,
+    /dispatchEvent\s*\(\s*["'`]([^"'`]+)["'`]/g,
+  ];
+  const consumePatterns = [
+    /\.on\s*\(\s*["'`]([^"'`]+)["'`]/g,
+    /\.once\s*\(\s*["'`]([^"'`]+)["'`]/g,
+    /\.subscribe\s*\(\s*["'`]([^"'`]+)["'`]/g,
+    /@On(?:Event)?\s*\(\s*["'`]([^"'`]+)["'`]/g,
+    /@EventPattern\s*\(\s*["'`]([^"'`]+)["'`]/g,
+  ];
+
+  for (const pattern of emitPatterns) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text))) {
+      emits.push({ eventKey: String(match[1]), line: lineOf(text, match.index) });
+    }
+  }
+
+  for (const pattern of consumePatterns) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text))) {
+      consumes.push({ eventKey: String(match[1]), line: lineOf(text, match.index) });
+    }
+  }
+
+  const dedup = (items: EventSignalMatch[]) => {
+    const map = new Map<string, EventSignalMatch>();
+    for (const item of items) {
+      const key = item.eventKey;
+      const existing = map.get(key);
+      if (!existing || item.line < existing.line) map.set(key, item);
+    }
+    return Array.from(map.values()).sort((a, b) => a.line - b.line || a.eventKey.localeCompare(b.eventKey));
+  };
+
+  return {
+    emits: dedup(emits),
+    consumes: dedup(consumes),
+  };
 }
 
 function lineOf(content: string, offset: number): number {
@@ -240,6 +371,8 @@ export function populateUniversalCodeGraphForFile(
     routes_to: 0,
     scheduled_as: 0,
     depends_on: 0,
+    emits: 0,
+    consumes: 0,
   };
 
   let nodesUpserted = 0;
@@ -564,61 +697,64 @@ export function populateUniversalCodeGraphForFile(
     }
   }
 
-  const routePathToSymbolOwners = new Map<string, string[]>();
+  const routePathToOwners = new Map<string, Array<{ nodeId: string; line: number }>>();
   for (const block of symbolBlocks) {
     const sourceNodeId = buildCodeGraphSymbolNodeId(input.projectId, relativePath, block.semantic_path);
-    const routePaths = extractRoutePaths(block.text);
-    for (const routePath of routePaths) {
-      const owners = routePathToSymbolOwners.get(routePath) || [];
-      owners.push(sourceNodeId);
-      routePathToSymbolOwners.set(routePath, owners);
+    const routeMatches = extractRouteMatches(block.text);
+    for (const routeMatch of routeMatches) {
+      const owners = routePathToOwners.get(routeMatch.path) || [];
+      owners.push({ nodeId: sourceNodeId, line: block.start_line + Math.max(routeMatch.line - 1, 0) });
+      routePathToOwners.set(routeMatch.path, owners);
     }
   }
 
-  const fileLevelRoutes = extractRoutePaths(content);
-  for (const routePath of fileLevelRoutes) {
-    const routeNodeId = buildCodeGraphRouteNodeId(input.projectId, routePath);
+  const fileLevelRouteMatches = extractRouteMatches(content);
+  for (const routeMatch of fileLevelRouteMatches) {
+    const routeNodeId = buildCodeGraphRouteNodeId(input.projectId, routeMatch.path);
     upsertUniversalGraphNode(graph, scopeUserId, scopeAgentId, {
       node_id: routeNodeId,
       node_type: "route",
-      name: routePath,
+      name: routeMatch.path,
       properties: {
         project_id: input.projectId,
-        route_path: routePath,
+        route_path: routeMatch.path,
       },
     });
     nodesUpserted += 1;
 
-    const owners = routePathToSymbolOwners.get(routePath) || [fileNodeId];
-    for (const ownerNodeId of owners) {
-      emitRelation(`${ownerNodeId}|routes_to|${routeNodeId}`, () => {
+    const owners = routePathToOwners.get(routeMatch.path) || [{ nodeId: fileNodeId, line: routeMatch.line }];
+    for (const owner of owners) {
+      emitRelation(`${owner.nodeId}|routes_to|${routeNodeId}`, () => {
         upsertUniversalGraphRelation(graph, scopeUserId, scopeAgentId, {
-          source_node_id: ownerNodeId,
+          source_node_id: owner.nodeId,
           target_node_id: routeNodeId,
           relation_type: "routes_to",
           provenance: {
             adapter_kind: ADAPTER_KIND,
-            confidence: ownerNodeId === fileNodeId ? 0.74 : 0.86,
+            confidence: owner.nodeId === fileNodeId ? 0.74 : 0.86,
             evidence_path: relativePath,
+            evidence_start_line: owner.line,
+            evidence_end_line: owner.line,
           },
         });
       }, "routes_to");
     }
   }
 
-  const scheduleKeyToOwners = new Map<string, string[]>();
+  const scheduleKeyToOwners = new Map<string, Array<{ nodeId: string; line: number }>>();
   for (const block of symbolBlocks) {
     const sourceNodeId = buildCodeGraphSymbolNodeId(input.projectId, relativePath, block.semantic_path);
-    const scheduleKeys = extractScheduleKeys(block.text);
-    for (const scheduleKey of scheduleKeys) {
-      const owners = scheduleKeyToOwners.get(scheduleKey) || [];
-      owners.push(sourceNodeId);
-      scheduleKeyToOwners.set(scheduleKey, owners);
+    const scheduleMatches = extractScheduleMatches(block.text);
+    for (const scheduleMatch of scheduleMatches) {
+      const owners = scheduleKeyToOwners.get(scheduleMatch.path) || [];
+      owners.push({ nodeId: sourceNodeId, line: block.start_line + Math.max(scheduleMatch.line - 1, 0) });
+      scheduleKeyToOwners.set(scheduleMatch.path, owners);
     }
   }
 
-  const fileLevelScheduleKeys = extractScheduleKeys(content);
-  for (const scheduleKey of fileLevelScheduleKeys) {
+  const fileLevelScheduleMatches = extractScheduleMatches(content);
+  for (const scheduleMatch of fileLevelScheduleMatches) {
+    const scheduleKey = scheduleMatch.path;
     const jobNodeId = buildCodeGraphJobNodeId(input.projectId, `${relativePath}:${scheduleKey}`);
     upsertUniversalGraphNode(graph, scopeUserId, scopeAgentId, {
       node_id: jobNodeId,
@@ -631,20 +767,90 @@ export function populateUniversalCodeGraphForFile(
     });
     nodesUpserted += 1;
 
-    const owners = scheduleKeyToOwners.get(scheduleKey) || [fileNodeId];
-    for (const ownerNodeId of owners) {
-      emitRelation(`${ownerNodeId}|scheduled_as|${jobNodeId}`, () => {
+    const owners = scheduleKeyToOwners.get(scheduleKey) || [{ nodeId: fileNodeId, line: scheduleMatch.line }];
+    for (const owner of owners) {
+      emitRelation(`${owner.nodeId}|scheduled_as|${jobNodeId}`, () => {
         upsertUniversalGraphRelation(graph, scopeUserId, scopeAgentId, {
-          source_node_id: ownerNodeId,
+          source_node_id: owner.nodeId,
           target_node_id: jobNodeId,
           relation_type: "scheduled_as",
           provenance: {
             adapter_kind: ADAPTER_KIND,
-            confidence: ownerNodeId === fileNodeId ? 0.72 : 0.84,
+            confidence: owner.nodeId === fileNodeId ? 0.72 : 0.84,
             evidence_path: relativePath,
+            evidence_start_line: owner.line,
+            evidence_end_line: owner.line,
           },
         });
       }, "scheduled_as");
+    }
+  }
+
+  const eventSignalToOwners = new Map<string, Array<{ nodeId: string; line: number; mode: "emits" | "consumes" }>>();
+  for (const block of symbolBlocks) {
+    const sourceNodeId = buildCodeGraphSymbolNodeId(input.projectId, relativePath, block.semantic_path);
+    const eventSignals = extractEventSignals(block.text);
+    for (const emitEvent of eventSignals.emits) {
+      const owners = eventSignalToOwners.get(emitEvent.eventKey) || [];
+      owners.push({
+        nodeId: sourceNodeId,
+        line: block.start_line + Math.max(emitEvent.line - 1, 0),
+        mode: "emits",
+      });
+      eventSignalToOwners.set(emitEvent.eventKey, owners);
+    }
+    for (const consumeEvent of eventSignals.consumes) {
+      const owners = eventSignalToOwners.get(consumeEvent.eventKey) || [];
+      owners.push({
+        nodeId: sourceNodeId,
+        line: block.start_line + Math.max(consumeEvent.line - 1, 0),
+        mode: "consumes",
+      });
+      eventSignalToOwners.set(consumeEvent.eventKey, owners);
+    }
+  }
+
+  const fileLevelEventSignals = extractEventSignals(content);
+  const fileLevelEvents = [
+    ...fileLevelEventSignals.emits.map((item) => ({ ...item, mode: "emits" as const })),
+    ...fileLevelEventSignals.consumes.map((item) => ({ ...item, mode: "consumes" as const })),
+  ];
+
+  for (const eventSignal of fileLevelEvents) {
+    const eventNodeId = buildCodeGraphEventNodeId(input.projectId, eventSignal.eventKey);
+    upsertUniversalGraphNode(graph, scopeUserId, scopeAgentId, {
+      node_id: eventNodeId,
+      node_type: "event",
+      name: eventSignal.eventKey,
+      properties: {
+        project_id: input.projectId,
+        event_key: eventSignal.eventKey,
+      },
+    });
+    nodesUpserted += 1;
+
+    const owners = eventSignalToOwners.get(eventSignal.eventKey)
+      ?.filter((owner) => owner.mode === eventSignal.mode)
+      || [{ nodeId: fileNodeId, line: eventSignal.line, mode: eventSignal.mode }];
+
+    for (const owner of owners) {
+      emitRelation(`${owner.nodeId}|${owner.mode}|${eventNodeId}`, () => {
+        upsertUniversalGraphRelation(graph, scopeUserId, scopeAgentId, {
+          source_node_id: owner.nodeId,
+          target_node_id: eventNodeId,
+          relation_type: owner.mode,
+          provenance: {
+            adapter_kind: ADAPTER_KIND,
+            confidence: owner.nodeId === fileNodeId ? 0.7 : 0.82,
+            evidence_path: relativePath,
+            evidence_start_line: owner.line,
+            evidence_end_line: owner.line,
+          },
+          properties: {
+            event_key: eventSignal.eventKey,
+          },
+        });
+      }, owner.mode);
     }
   }
 

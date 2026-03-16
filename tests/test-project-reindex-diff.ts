@@ -137,15 +137,28 @@ async function main() {
       'import { helper } from "./helper";',
       'import express from "express";',
       '',
-      'export function helper() {',
-      '  return "ok";',
+      '@Controller("/api")',
+      'export class ServerController {',
+      '  @Get("health")',
+      '  checkHealth() {',
+      '    this.notify();',
+      '    return helper();',
+      '  }',
+      '',
+      '  notify() {',
+      '    this.eventBus.emit("server.started");',
+      '  }',
       '}',
       '',
       'export function startServer() {',
       '  helper();',
       '  const app = express();',
       '  app.get("/health", helper);',
+      '  app.post("v1/tasks", helper);',
       '  cron.schedule("*/5 * * * *", helper);',
+      '  setTimeout(helper, 1500);',
+      '  bus.on("server.started", helper);',
+      '  bus.emit("server.started", { ok: true });',
       '}',
     ].join("\n");
 
@@ -181,6 +194,8 @@ async function main() {
     assert(relationTypes.includes("depends_on"), "should populate depends_on relation");
     assert(relationTypes.includes("routes_to"), "should populate routes_to relation");
     assert(relationTypes.includes("scheduled_as"), "should populate scheduled_as relation");
+    assert(relationTypes.includes("emits"), "should populate emits relation");
+    assert(relationTypes.includes("consumes"), "should populate consumes relation");
     assert(relationTypes.includes("calls"), "should populate calls relation");
 
     const importedCall = chain.relationships.find(
@@ -189,7 +204,22 @@ async function main() {
     assert(Boolean(importedCall), "should populate calls relation from local symbol to imported binding symbol");
 
     const importEdge = chain.relationships.find((rel: any) => rel.relation_type === "imports");
-    assert(Boolean(importEdge?.properties?.evidence_start_line), "imports relation should carry evidence_start_line");
+    assert(
+      Boolean(importEdge?.properties?.evidence_start_line || importEdge?.provenance?.evidence_start_line),
+      "imports relation should carry evidence_start_line",
+    );
+
+    const routeToApiHealth = chain.entities.find((node: any) => (node.node_type || node.type) === "route" && node.name === "/api/health");
+    assert(Boolean(routeToApiHealth), "should normalize controller + method route to /api/health");
+
+    const routeToV1Tasks = chain.entities.find((node: any) => (node.node_type || node.type) === "route" && node.name === "/v1/tasks");
+    assert(Boolean(routeToV1Tasks), "should normalize route without leading slash to /v1/tasks");
+
+    const timeoutJob = chain.entities.find((node: any) => (node.node_type || node.type) === "job" && String(node.name || "").includes("timeout:1500ms"));
+    assert(Boolean(timeoutJob), "should extract setTimeout schedule as timeout job");
+
+    const emittedEvent = chain.entities.find((node: any) => (node.node_type || node.type) === "event" && node.name === "server.started");
+    assert(Boolean(emittedEvent), "should create event node for emitted/consumed event");
   });
 
   db.close();
