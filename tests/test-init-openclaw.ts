@@ -83,9 +83,12 @@ test("buildPatchedConfig merges plugin block without dropping unrelated fields",
       embedModel: "qwen3-embedding:0.6b",
       embedDimensions: 1024,
       slotDbDir: join(stateDir, "agent-memo"),
+      projectWorkspaceRoot: join(stateDir, "projects"),
+      asmConfigPath: join(stateDir, ".config", "asm", "config.json"),
       telegramOnboardingCommands: ["project"],
     },
     true,
+    { asmConfigPath: join(stateDir, ".config", "asm", "config.json") },
   );
 
   assert(next.some_unrelated_top_level?.keep_me === true, "unrelated top-level field must be preserved");
@@ -101,7 +104,8 @@ test("buildPatchedConfig merges plugin block without dropping unrelated fields",
 
   const entry = next.plugins.entries["agent-smart-memo"];
   assert(entry && entry.enabled === true, "agent-smart-memo entry should be enabled");
-  assertEqual(entry.config.embedDimensions, 1024, "embedDimensions should be set");
+  assertEqual(entry.config.asmConfigPath, join(stateDir, ".config", "asm", "config.json"), "openclaw entry should only keep asmConfigPath as source-of-truth pointer");
+  assertEqual(entry.config.embedDimensions, undefined, "openclaw entry should not persist embedDimensions in minimal config");
 });
 
 test("buildPatchedConfig keeps single-account telegram merge at channels.telegram.customCommands", () => {
@@ -229,16 +233,7 @@ test("buildSetupSummary classifies already configured / will add / will update",
         "agent-smart-memo": {
           enabled: true,
           config: {
-            qdrantHost: "localhost",
-            qdrantPort: 6333,
-            qdrantCollection: "mrc_bot",
-            llmBaseUrl: "http://localhost:8317/v1",
-            llmModel: "gemini-2.5-flash",
-            llmApiKey: "",
-            embedBackend: "ollama",
-            embedModel: "qwen3-embedding:0.6b",
-            embedDimensions: 1024,
-            slotDbDir: join(stateDir, "agent-memo"),
+            asmConfigPath: join(stateDir, ".config", "asm", "config.json"),
           },
         },
       },
@@ -256,15 +251,17 @@ test("buildSetupSummary classifies already configured / will add / will update",
     embedModel: "qwen3-embedding:0.6b",
     embedDimensions: 1024,
     slotDbDir: join(stateDir, "agent-memo"),
+    projectWorkspaceRoot: join(stateDir, "projects"),
+    asmConfigPath: join(stateDir, ".config", "asm", "config.json"),
     mapMemorySlot: true,
     telegramOnboardingCommands: ["project", "indexproject"],
   };
 
-  const next = mod.buildPatchedConfig(current, answers, true);
+  const next = mod.buildPatchedConfig(current, answers, true, { asmConfigPath: answers.asmConfigPath });
   const summary = mod.buildSetupSummary(current, answers, next);
 
   assert(summary.alreadyConfigured.includes("plugins.allow includes agent-smart-memo"), "plugin allow should be already configured");
-  assert(summary.willUpdate.includes("plugins.entries.agent-smart-memo.config.llmApiKey"), "llmApiKey should be will update");
+  assert(summary.alreadyConfigured.includes("plugins.entries.agent-smart-memo.config.asmConfigPath"), "asmConfigPath should be already configured");
   assert(
     summary.willAdd.includes("channels.telegram.customCommands includes /indexproject"),
     "indexproject should be classified as will add",
@@ -275,7 +272,7 @@ test("formatSetupSummary renders required operator sections", () => {
   const output = mod.formatSetupSummary({
     alreadyConfigured: ["plugins.allow includes agent-smart-memo"],
     willAdd: ["channels.telegram.customCommands includes /indexproject"],
-    willUpdate: ["plugins.entries.agent-smart-memo.config.llmApiKey"],
+    willUpdate: ["plugins.entries.agent-smart-memo.config.slotDbDir"],
   });
 
   assert(output.includes("already configured"), "must include already configured section");
@@ -289,6 +286,28 @@ test("buildBackupPath uses .bak timestamp suffix", () => {
 });
 
 test("runInitOpenClaw supports non-interactive auto-apply write path", async () => {
+  const asmConfigDir = join(ROOT, ".config", "asm");
+  mkdirSync(asmConfigDir, { recursive: true });
+  writeFileSync(
+    join(asmConfigDir, "config.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      core: {
+        projectWorkspaceRoot: "~/Work/projects",
+        qdrantHost: "localhost",
+        qdrantPort: 6333,
+        qdrantCollection: "mrc_bot",
+        llmBaseUrl: "http://localhost:8317/v1",
+        llmModel: "gemini-2.5-flash",
+        embedBackend: "ollama",
+        embedModel: "qwen3-embedding:0.6b",
+        embedDimensions: 1024,
+        storage: { slotDbDir: "~/.local/share/asm/slotdb" },
+      },
+    }, null, 2),
+    "utf8",
+  );
+
   const env = {
     HOME: ROOT,
     OPENCLAW_STATE_DIR: stateDir,

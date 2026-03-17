@@ -242,6 +242,9 @@ test("runInitSetupFlow creates shared ASM config with platform defaults", async 
 
   assertEqual(result.ok, true, "init-setup should succeed");
   assertEqual(written.core.projectWorkspaceRoot, "~/Work/projects", "init-setup should ensure default shared workspace root");
+  assertEqual(written.core.qdrantHost, "localhost", "init-setup should write qdrantHost into shared core config");
+  assertEqual(written.core.llmBaseUrl, "http://localhost:8317/v1", "init-setup should write llmBaseUrl into shared core config");
+  assertEqual(written.core.embedModel, "qwen3-embedding:0.6b", "init-setup should write embedModel into shared core config");
   assertEqual(written.adapters.opencode.mode, "read-only", "init-setup should enforce read-only default for opencode adapter");
 });
 
