@@ -1297,6 +1297,19 @@ async function main() {
     assert(Array.isArray(result.errors) && result.errors.length >= 1, "unresolved binding should return structured errors");
   });
 
+  await test("project.binding_preview returns structured unregistered repo result", async () => {
+    const preview = await usecase.run<any, any>("project.binding_preview", {
+      ...ctx,
+      payload: {
+        repo_root: "/tmp/unregistered-opencode-repo",
+      },
+    });
+
+    assertEqual(preview.resolution_status, "unresolved", "unregistered repo_root should stay unresolved");
+    assertEqual(preview.resolution.reason, "unregistered_repo_root", "unregistered repo_root should return explicit structured reason");
+    assert(Array.isArray(preview.errors) && preview.errors.length >= 1, "unregistered repo_root should return structured errors");
+  });
+
   await test("project.list returns registry entries", async () => {
     const rows = await usecase.run<any, any[]>("project.list", {
       ...ctx,

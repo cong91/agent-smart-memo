@@ -808,13 +808,20 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
     const allowed = !crossProjectRequired || payload.allow_cross_project === true;
     const selected = activeMatches[0] || uniqueByProject[0] || null;
 
+    const resolutionStatus = selected
+      ? (crossProjectRequired && !allowed ? "ambiguous" : "resolved")
+      : "unresolved";
+    const resolutionReason = resolutionStatus === "ambiguous"
+      ? "multiple_active_projects"
+      : resolutionStatus === "unresolved"
+        ? (normalizedRepoRoot ? "unregistered_repo_root" : "selector_not_matched")
+        : "matched";
+
     return {
       mode: "read-only",
       project_scoped_by_default: true,
       cross_project_allowed: payload.allow_cross_project === true,
-      resolution_status: selected
-        ? (crossProjectRequired && !allowed ? "ambiguous" : "resolved")
-        : "unresolved",
+      resolution_status: resolutionStatus,
       selected_project: selected,
       candidate_projects: uniqueByProject,
       resolution: {
@@ -824,13 +831,14 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
           session_project_alias: payload.session_project_alias || null,
           repo_root: normalizedRepoRoot || null,
         },
+        reason: resolutionReason,
         cross_project_required: crossProjectRequired,
         explicit_cross_project_required: crossProjectRequired,
         read_only_tool_surface: ["project_registry_get", "project_registry_list", "project_hybrid_search", "project_developer_query"],
       },
       errors: selected
         ? (crossProjectRequired && !allowed ? ["multiple active project matches found; explicit cross-project approval required"] : [])
-        : ["no registered project matched provided selectors"],
+        : [normalizedRepoRoot ? "no active registered project matched repo_root" : "no registered project matched provided selectors"],
     };
   }
 
