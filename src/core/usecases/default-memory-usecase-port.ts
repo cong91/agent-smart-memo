@@ -2585,7 +2585,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       },
       why_this_result: whyThisResult,
       generated_at: new Date().toISOString(),
-      generator_version: "asm-109-slice6",
+      generator_version: "asm-109-slice8",
     };
   }
 
@@ -2768,10 +2768,13 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
     if (input.relativePath || input.routePath) return "locate_file";
 
     const lowered = input.query.toLowerCase();
-    if (/trace|flow|impact|impact analysis|blast radius|affected|change-aware|change aware|overlay|lookup/.test(lowered)) {
+    if (/what breaks if|blast radius|affected|impact|impact analysis|change-aware|change aware|overlay|lookup/.test(lowered)) {
       return "change_lookup";
     }
-    if (/route|endpoint|api\//.test(lowered)) {
+    if (/where does .* flow|trace|flow/.test(lowered)) {
+      return "change_lookup";
+    }
+    if (/who handles|entrypoint for|where is .* implemented|route|endpoint|api\//.test(lowered)) {
       return "locate_file";
     }
     if (/file|path|\.tsx?|\.jsx?|\/src\//.test(lowered)) {

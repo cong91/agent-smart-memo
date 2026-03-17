@@ -97,5 +97,5 @@ export interface ProjectDeveloperQueryResponseV1 {
   };
   why_this_result: string[];
   generated_at: string;
-  generator_version: "asm-109-slice6";
+  generator_version: "asm-109-slice8";
 }

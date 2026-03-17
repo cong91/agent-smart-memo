@@ -518,7 +518,7 @@ async function main() {
     assert(Array.isArray(locate.primary_results) && locate.primary_results.length >= 1, "locate should return primary results");
     assert(Array.isArray(locate.files), "locate response should expose files[] contract");
     assert(Array.isArray(locate.symbols), "locate response should expose symbols[] contract");
-    assertEqual(locate.generator_version, "asm-109-slice6", "locate response generator should match asm-109 slice6");
+    assertEqual(locate.generator_version, "asm-109-slice8", "locate response generator should match asm-109 slice8");
     assert(Array.isArray(locate.assembly_sources), "locate response should expose assembly_sources");
     assert(locate.assembly_sources.includes("file") || locate.assembly_sources.includes("symbol"), "locate should include file/symbol assembly source");
     assertEqual(locate.answer_template, "locate", "locate should use locate template");
@@ -582,7 +582,7 @@ async function main() {
     assert(Array.isArray(feature.feature_packs) && feature.feature_packs.length === 1, "feature query should return one feature pack");
     assertEqual(feature.feature_packs[0].feature_key, "code_aware_retrieval", "feature query should resolve retrieval pack");
     assert(Array.isArray(feature.primary_results) && feature.primary_results[0]?.type === "feature_pack", "feature query primary result should be feature_pack");
-    assertEqual(feature.generator_version, "asm-109-slice6", "feature response generator should match asm-109 slice6");
+    assertEqual(feature.generator_version, "asm-109-slice8", "feature response generator should match asm-109 slice8");
     assert(Array.isArray(feature.assembly_sources), "feature response should expose assembly_sources");
     assert(feature.assembly_sources.includes("feature_pack"), "feature response should include feature_pack assembly source");
     assertEqual(feature.answer_template, "feature_understanding", "feature response should use feature template");
@@ -763,6 +763,33 @@ async function main() {
       precedenceLookup.assembly_sources.includes("change_overlay"),
       "precedence rules should still attach overlay when change selector wins",
     );
+
+    const phraseImpactLookup = await usecase.run<any, any>("project.developer_query", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        query: "what breaks if ASM-78 changes",
+      },
+    });
+    assertEqual(phraseImpactLookup.intent, "change_aware_lookup", "what breaks if should normalize to change-aware lookup");
+
+    const phraseLocateLookup = await usecase.run<any, any>("project.developer_query", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        query: "who handles /project",
+      },
+    });
+    assertEqual(phraseLocateLookup.intent, "locate", "who handles should normalize to locate intent for route ownership questions");
+
+    const phraseFlowLookup = await usecase.run<any, any>("project.developer_query", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        query: "where does ASM-78 flow after reindex",
+      },
+    });
+    assertEqual(phraseFlowLookup.intent, "change_aware_lookup", "where does ... flow should normalize to trace/change-aware lookup");
   });
 
   await test("project.change_overlay.query maps overlay -> feature packs with confidence ordering", async () => {
