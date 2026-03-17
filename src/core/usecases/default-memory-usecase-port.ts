@@ -867,6 +867,34 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
 
     const selectedProjectId = binding.selected_project.project_id;
     const selectedProjectAlias = binding.selected_project.project_alias;
+    const selectedLifecycle = String(binding.selected_project.lifecycle_status || "active");
+
+    if (["deindexed", "detached", "disabled", "purged"].includes(selectedLifecycle)) {
+      return {
+        mode: "read-only",
+        resolution_status: "resolved",
+        binding,
+        query: payload.query,
+        results: {
+          project_id: selectedProjectId,
+          project_alias: selectedProjectAlias || null,
+          project_lifecycle_status: selectedLifecycle,
+          searchable: false,
+          count: 0,
+          results: [],
+          reason:
+            selectedLifecycle === "deindexed"
+              ? "project is deindexed; read-only retrieval is disabled until reindex"
+              : selectedLifecycle === "detached"
+                ? "project is detached; read-only retrieval is disabled until re-attachment"
+                : selectedLifecycle === "disabled"
+                  ? "project is unregistered/disabled; read-only retrieval is disabled"
+                  : "project is purged; read-only retrieval is disabled",
+        },
+        errors: [],
+      };
+    }
+
     const results = this.handleProjectDeveloperQuery(
       {
         project_id: selectedProjectId,
