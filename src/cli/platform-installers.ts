@@ -217,10 +217,13 @@ function ensureOpencodeConfig(
       servers: {
         ...(currentServers as Record<string, unknown>),
         asm: {
-          command: "asm",
-          args: ["project-event", "--project-id", "<project-id>", "--repo-root", "<repo-root>"],
-          mode: "read-only",
-          asmConfigPath,
+          type: "local",
+          command: ["asm", "mcp", "opencode"],
+          enabled: true,
+          environment: {
+            ASM_CONFIG: asmConfigPath,
+            ASM_MCP_AGENT_ID: "opencode",
+          },
         },
       },
     },
