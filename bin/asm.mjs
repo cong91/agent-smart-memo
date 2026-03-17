@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { doctorAsmSharedConfig, getAsmSharedConfig, resolveAsmConfigPath } from "../src/shared/asm-config.ts";
 import { runInitOpenClaw } from "../scripts/init-openclaw.mjs";
 
 const ASM_PLUGIN_PACKAGE = "@mrc2204/agent-smart-memo";
@@ -61,6 +62,14 @@ export function parseAsmCliArgs(argv = []) {
     };
   }
 
+  if (first === "init-setup") {
+    return { command: "init-setup", argv: args.slice(1) };
+  }
+
+  if (first === "init" && (args[1] || "") === "setup") {
+    return { command: "init-setup", argv: args.slice(2) };
+  }
+
   if (first === "init-openclaw") {
     return { command: "init-openclaw", argv: args.slice(1) };
   }
@@ -85,15 +94,74 @@ export function printHelp(log = console.log) {
   log("  asm install openclaw [--yes]");
   log("  asm install paperclip");
   log("  asm install opencode");
+  log("  asm init-setup [--yes]");
+  log("  asm init setup [--yes]");
   log("  asm init-openclaw [--non-interactive]");
   log("  asm init openclaw [--non-interactive]");
   log("  asm project-event --project-id <id> --repo-root <path> [--event-type post_commit|post_merge|manual] [--source-rev <sha>] [--changed-files a,b] [--deleted-files x,y]");
   log("  asm help");
   log("");
   log("Roadmap commands (not implemented yet):");
-  log("  asm init-setup");
   log("  asm doctor");
   log("  asm test-openclaw");
+}
+
+export async function runInitSetupFlow({
+  log = console.log,
+  env = process.env,
+  homeDir = process.env.HOME,
+  argv = [],
+} = {}) {
+  const nonInteractive = Array.isArray(argv) && argv.some((item) => ["--yes", "-y", "--non-interactive"].includes(String(item).trim()));
+  const path = resolveAsmConfigPath({ env, homeDir });
+  const doctor = doctorAsmSharedConfig({ env, homeDir });
+  const loaded = getAsmSharedConfig({ env, homeDir });
+
+  const baseConfig = loaded.config || { schemaVersion: 1, core: {}, adapters: {} };
+  const nextConfig = {
+    schemaVersion: typeof baseConfig.schemaVersion === "number" ? baseConfig.schemaVersion : 1,
+    ...baseConfig,
+    core: {
+      ...(baseConfig.core || {}),
+      projectWorkspaceRoot: baseConfig.core?.projectWorkspaceRoot || "~/Work/projects",
+      storage: {
+        ...(baseConfig.core?.storage || {}),
+        slotDbDir: baseConfig.core?.storage?.slotDbDir || "~/.local/share/asm/slotdb",
+      },
+    },
+    adapters: {
+      ...(baseConfig.adapters || {}),
+      openclaw: {
+        enabled: true,
+        ...((baseConfig.adapters || {}).openclaw || {}),
+      },
+      paperclip: {
+        enabled: true,
+        ...((baseConfig.adapters || {}).paperclip || {}),
+      },
+      opencode: {
+        enabled: true,
+        mode: "read-only",
+        ...((baseConfig.adapters || {}).opencode || {}),
+      },
+    },
+  };
+
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
+
+  log(`[ASM-104] init-setup ${doctor.exists ? "updated" : "created"} shared config at: ${path}`);
+  if (!nonInteractive) {
+    log("[ASM-104] shared defaults ensured for core.projectWorkspaceRoot, core.storage.slotDbDir, and adapter enablement.");
+  }
+
+  return {
+    ok: true,
+    step: "init-setup",
+    path,
+    existed: doctor.exists,
+    nonInteractive,
+  };
 }
 
 export async function runInstallPlatformFlow({
@@ -284,6 +352,11 @@ export async function main(argv = process.argv.slice(2)) {
 
   if (parsed.command === "install-platform") {
     const result = await runInstallPlatformFlow({ platform: parsed.platform, argv: parsed.argv });
+    return result.ok ? 0 : 1;
+  }
+
+  if (parsed.command === "init-setup") {
+    const result = await runInitSetupFlow({ argv: parsed.argv });
     return result.ok ? 0 : 1;
   }
 
