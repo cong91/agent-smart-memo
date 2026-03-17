@@ -518,7 +518,7 @@ async function main() {
     assert(Array.isArray(locate.primary_results) && locate.primary_results.length >= 1, "locate should return primary results");
     assert(Array.isArray(locate.files), "locate response should expose files[] contract");
     assert(Array.isArray(locate.symbols), "locate response should expose symbols[] contract");
-    assertEqual(locate.generator_version, "asm-109-slice3", "locate response generator should match asm-109 slice3");
+    assertEqual(locate.generator_version, "asm-109-slice4", "locate response generator should match asm-109 slice4");
     assert(Array.isArray(locate.assembly_sources), "locate response should expose assembly_sources");
     assert(locate.assembly_sources.includes("file") || locate.assembly_sources.includes("symbol"), "locate should include file/symbol assembly source");
     assertEqual(locate.answer_template, "locate", "locate should use locate template");
@@ -582,7 +582,7 @@ async function main() {
     assert(Array.isArray(feature.feature_packs) && feature.feature_packs.length === 1, "feature query should return one feature pack");
     assertEqual(feature.feature_packs[0].feature_key, "code_aware_retrieval", "feature query should resolve retrieval pack");
     assert(Array.isArray(feature.primary_results) && feature.primary_results[0]?.type === "feature_pack", "feature query primary result should be feature_pack");
-    assertEqual(feature.generator_version, "asm-109-slice3", "feature response generator should match asm-109 slice3");
+    assertEqual(feature.generator_version, "asm-109-slice4", "feature response generator should match asm-109 slice4");
     assert(Array.isArray(feature.assembly_sources), "feature response should expose assembly_sources");
     assert(feature.assembly_sources.includes("feature_pack"), "feature response should include feature_pack assembly source");
     assertEqual(feature.answer_template, "feature_understanding", "feature response should use feature template");
@@ -701,6 +701,23 @@ async function main() {
     assert(
       taskTitleLookup.why_this_result.some((line: string) => line.includes("intent-aware task_context applied")),
       "task_title selector should drive task-context retrieval",
+    );
+
+    const inferredIssueLookup = await usecase.run<any, any>("project.developer_query", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        query: "show impact for ASM-78 and task-impact-1",
+      },
+    });
+    assertEqual(inferredIssueLookup.intent, "change_aware_lookup", "issue/task id extraction should infer change-aware lookup intent");
+    assert(
+      inferredIssueLookup.change_context.includes("ASM-78") || inferredIssueLookup.change_context.includes("task-impact-1"),
+      "issue/task id extraction should surface parsed selectors in change context",
+    );
+    assert(
+      inferredIssueLookup.assembly_sources.includes("change_overlay"),
+      "issue/task id extraction should attach overlay when selectors resolve",
     );
   });
 

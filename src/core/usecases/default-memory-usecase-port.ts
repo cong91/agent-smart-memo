@@ -368,6 +368,8 @@ interface ProjectDeveloperQueryParsed {
   tracker_issue_key?: string;
   task_id?: string;
   task_title?: string;
+  tracker_issue_keys?: string[];
+  task_ids?: string[];
   feature_key?: FeaturePackKey;
 }
 
@@ -2194,7 +2196,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       .digest("hex")
       .slice(0, 16);
     const queryId = `pdevq:${queryFingerprint}`;
-    const trackerIssueHint = parsed.tracker_issue_key || query.match(/\b[A-Z][A-Z0-9_]+-\d+\b/)?.[0];
+    const trackerIssueHint = parsed.tracker_issue_key || parsed.tracker_issue_keys?.[0] || query.match(/\b[A-Z][A-Z0-9_]+-\d+\b/)?.[0];
 
     const hybridTaskContext = retrievalPlan.use_task_context
       ? {
@@ -2582,7 +2584,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       },
       why_this_result: whyThisResult,
       generated_at: new Date().toISOString(),
-      generator_version: "asm-109-slice3",
+      generator_version: "asm-109-slice4",
     };
   }
 
@@ -2666,6 +2668,8 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
     const trackerIssueKey = String(payload.tracker_issue_key || "").trim();
     const taskId = String(payload.task_id || "").trim();
     const taskTitle = String(payload.task_title || "").trim();
+    const trackerIssueKeys = this.extractTrackerIssueKeys(query);
+    const taskIds = this.extractTaskIds(query);
 
     const canonicalFromExplicit: Record<ProjectDeveloperQueryIntent, ProjectDeveloperQueryCanonicalIntent> = {
       locate_symbol: "locate_symbol",
@@ -2687,8 +2691,8 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
           symbolName,
           relativePath,
           routePath,
-          trackerIssueKey,
-          taskId,
+          trackerIssueKey: trackerIssueKey || trackerIssueKeys[0],
+          taskId: taskId || taskIds[0],
           taskTitle,
           hasFeatureSelector: Boolean(payload.feature_key || payload.feature_name),
         });
@@ -2735,9 +2739,11 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       ...(symbolName ? { symbol_name: symbolName } : {}),
       ...(relativePath ? { relative_path: relativePath } : {}),
       ...(routePath ? { route_path: routePath } : {}),
-      ...(trackerIssueKey ? { tracker_issue_key: trackerIssueKey } : {}),
-      ...(taskId ? { task_id: taskId } : {}),
+      ...((trackerIssueKey || trackerIssueKeys[0]) ? { tracker_issue_key: trackerIssueKey || trackerIssueKeys[0] } : {}),
+      ...((taskId || taskIds[0]) ? { task_id: taskId || taskIds[0] } : {}),
       ...(taskTitle ? { task_title: taskTitle } : {}),
+      ...(trackerIssueKeys.length > 0 ? { tracker_issue_keys: trackerIssueKeys } : {}),
+      ...(taskIds.length > 0 ? { task_ids: taskIds } : {}),
       ...(feature_key ? { feature_key } : {}),
     };
   }
@@ -2812,9 +2818,19 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       .find((value): value is string => Boolean(value));
 
     return {
-      task_id: parsed?.task_id || firstTaskId,
-      tracker_issue_key: parsed?.tracker_issue_key || firstIssue,
+      task_id: parsed?.task_id || parsed?.task_ids?.[0] || firstTaskId,
+      tracker_issue_key: parsed?.tracker_issue_key || parsed?.tracker_issue_keys?.[0] || firstIssue,
     };
+  }
+
+  private extractTrackerIssueKeys(query: string): string[] {
+    const matches = String(query || "").match(/\b[A-Z][A-Z0-9_]+-\d+\b/g) || [];
+    return Array.from(new Set(matches.map((item) => item.trim().toUpperCase()).filter(Boolean)));
+  }
+
+  private extractTaskIds(query: string): string[] {
+    const matches = String(query || "").match(/\btask-[a-z0-9-]+\b/gi) || [];
+    return Array.from(new Set(matches.map((item) => item.trim()).filter(Boolean)));
   }
 
   private resolveFeatureKeyInput(featureKey?: FeaturePackKey, featureName?: string): FeaturePackKey {

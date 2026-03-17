@@ -1372,6 +1372,8 @@ export function registerProjectTools(
         tracker_issue_key: { type: "string" },
         task_id: { type: "string" },
         task_title: { type: "string" },
+        tracker_issue_keys: { type: "array", items: { type: "string" } },
+        task_ids: { type: "array", items: { type: "string" } },
         feature_key: {
           type: "string",
           enum: [
@@ -1410,6 +1412,8 @@ export function registerProjectTools(
         tracker_issue_key?: string;
         task_id?: string;
         task_title?: string;
+        tracker_issue_keys?: string[];
+        task_ids?: string[];
         feature_key?:
           | "project_onboarding_registration_indexing"
           | "code_aware_retrieval"
