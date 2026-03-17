@@ -1310,6 +1310,34 @@ async function main() {
     assert(Array.isArray(preview.errors) && preview.errors.length >= 1, "unregistered repo_root should return structured errors");
   });
 
+  await test("project.binding_preview allows explicit cross-project repo binding preview", async () => {
+    const preview = await usecase.run<any, any>("project.binding_preview", {
+      ...ctx,
+      payload: {
+        repo_root: "/Users/mrcagents/Work/projects/agent-smart-memo",
+        allow_cross_project: true,
+      },
+    });
+
+    assertEqual(preview.project_scoped_by_default, true, "cross-project preview should still document project-scoped default");
+    assertEqual(preview.cross_project_allowed, true, "explicit cross-project flag should be reflected");
+    assertEqual(preview.resolution_status, "resolved", "explicit cross-project should allow resolved preview on repo-root selector");
+  });
+
+  await test("project.opencode_search prefers explicit project alias over session alias", async () => {
+    const result = await usecase.run<any, any>("project.opencode_search", {
+      ...ctx,
+      payload: {
+        session_project_alias: "agent-smart-memo-cmd",
+        explicit_project_alias: "agent-smart-memo",
+        query: "code aware retrieval",
+      },
+    });
+
+    assertEqual(result.resolution_status, "resolved", "explicit project alias should resolve search binding");
+    assertEqual(result.binding.selected_project.project_alias, "agent-smart-memo", "explicit project alias must win over session alias");
+  });
+
   await test("project.list returns registry entries", async () => {
     const rows = await usecase.run<any, any[]>("project.list", {
       ...ctx,
