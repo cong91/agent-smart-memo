@@ -1241,6 +1241,32 @@ async function main() {
     assertEqual(after, null, "purged project should be removed from registry lookup");
   });
 
+  await test("project.binding_preview resolves active project read-only by alias", async () => {
+    const preview = await usecase.run<any, any>("project.binding_preview", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo",
+      },
+    });
+
+    assertEqual(preview.mode, "read-only", "binding preview must stay read-only");
+    assertEqual(preview.project_scoped_by_default, true, "binding preview should enforce project scope by default");
+    assertEqual(preview.resolution_status, "resolved", "alias binding should resolve one project");
+    assertEqual(preview.selected_project.project_alias, "agent-smart-memo", "selected project alias should match request");
+  });
+
+  await test("project.binding_preview returns unresolved for unknown selectors", async () => {
+    const preview = await usecase.run<any, any>("project.binding_preview", {
+      ...ctx,
+      payload: {
+        project_alias: "does-not-exist",
+      },
+    });
+
+    assertEqual(preview.resolution_status, "unresolved", "unknown alias should not crash; must return unresolved status");
+    assert(Array.isArray(preview.errors) && preview.errors.length >= 1, "unresolved preview should return structured errors");
+  });
+
   await test("project.list returns registry entries", async () => {
     const rows = await usecase.run<any, any[]>("project.list", {
       ...ctx,
