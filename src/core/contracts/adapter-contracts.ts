@@ -51,6 +51,8 @@ export type MemoryUseCaseName =
   | "project.feature_pack.generate"
   | "project.feature_pack.query"
   | "project.developer_query"
+  | "project.routing_contract"
+  | "project.coding_packet"
   | "project.binding_preview"
   | "project.opencode_search"
   | "memory.capture"

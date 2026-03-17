@@ -42,6 +42,30 @@ export function buildOpencodeMcpToolDescriptors() {
         required: ["query"],
       },
     ),
+    makeTool(
+      "asm_project_coding_packet",
+      "Build coding packet (foundation lane) for OpenCode using ASM project-aware/code-aware retrieval context.",
+      {
+        type: "object",
+        properties: {
+          project_id: { type: "string" },
+          project_alias: { type: "string" },
+          query: { type: "string" },
+          objective: { type: "string" },
+          task_id: { type: "string" },
+          tracker_issue_key: { type: "string" },
+          task_title: { type: "string" },
+          symbol_name: { type: "string" },
+          relative_path: { type: "string" },
+          route_path: { type: "string" },
+          limit: { type: "number" },
+          acceptance_criteria: { type: "array", items: { type: "string" } },
+          constraints: { type: "array", items: { type: "string" } },
+          out_of_scope: { type: "array", items: { type: "string" } },
+          validation_commands: { type: "array", items: { type: "string" } },
+        },
+      },
+    ),
   ];
 }
 
@@ -111,6 +135,15 @@ async function handleToolCall(name, args) {
     const data = await usecase.run("project.opencode_search", {
       context,
       meta: { source: "cli", toolName: "asm.mcp.opencode.search" },
+      payload: args || {},
+    });
+    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+  }
+
+  if (name === "asm_project_coding_packet") {
+    const data = await usecase.run("project.coding_packet", {
+      context,
+      meta: { source: "cli", toolName: "asm.mcp.opencode.coding_packet" },
       payload: args || {},
     });
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };

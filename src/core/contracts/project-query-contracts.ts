@@ -99,3 +99,81 @@ export interface ProjectDeveloperQueryResponseV1 {
   generated_at: string;
   generator_version: "asm-109-slice8";
 }
+
+export type ProjectWorkstreamType = "research_execution" | "coding_execution" | "review_execution";
+
+export interface ProjectRoutingContractPayload {
+  project_id?: string;
+  project_alias?: string;
+  query?: string;
+  objective?: string;
+  workstream_type?: ProjectWorkstreamType;
+}
+
+export interface ProjectRoutingContractV1 {
+  routing_contract_version: "asm-routing-v1";
+  workstream_type: ProjectWorkstreamType;
+  project_id: string;
+  project_alias: string | null;
+  route_target: {
+    lane: "opencode";
+    mode: "foundation";
+    reason: string;
+  };
+  retrieval_profile: {
+    project_aware: true;
+    code_aware: true;
+    primary_usecase: "project.developer_query";
+  };
+  generated_at: string;
+}
+
+export interface ProjectCodingPacketPayload {
+  project_id?: string;
+  project_alias?: string;
+  query?: string;
+  objective?: string;
+  task_id?: string;
+  tracker_issue_key?: string;
+  task_title?: string;
+  symbol_name?: string;
+  relative_path?: string;
+  route_path?: string;
+  limit?: number;
+  acceptance_criteria?: string[];
+  constraints?: string[];
+  out_of_scope?: string[];
+  validation_commands?: string[];
+}
+
+export interface ProjectCodingPacketV1 {
+  packet_version: "asm-coding-packet-v1";
+  routing: ProjectRoutingContractV1;
+  objective: string;
+  project: {
+    project_id: string;
+    project_alias: string | null;
+  };
+  selectors: {
+    task_id?: string;
+    tracker_issue_key?: string;
+    task_title?: string;
+    symbol_name?: string;
+    relative_path?: string;
+    route_path?: string;
+  };
+  context: {
+    developer_query: ProjectDeveloperQueryResponseV1;
+    primary_files: string[];
+    primary_symbols: string[];
+    change_context: string[];
+  };
+  execution_hints: {
+    acceptance_criteria: string[];
+    constraints: string[];
+    out_of_scope: string[];
+    validation_commands: string[];
+    handoff_language: "vi";
+  };
+  generated_at: string;
+}

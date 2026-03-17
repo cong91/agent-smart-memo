@@ -1450,6 +1450,127 @@ export function registerProjectTools(
   });
 
   api.registerTool({
+    name: "project_routing_contract",
+    label: "Project Routing Contract",
+    description:
+      "Routing contract/workstream foundation for OpenClaw orchestrates -> OpenCode coding lane. Returns project-aware + code-aware routing envelope.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        project_alias: { type: "string" },
+        query: { type: "string" },
+        objective: { type: "string" },
+        workstream_type: {
+          type: "string",
+          enum: ["research_execution", "coding_execution", "review_execution"],
+        },
+      },
+      required: [],
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_id?: string;
+        project_alias?: string;
+        query?: string;
+        objective?: string;
+        workstream_type?: "research_execution" | "coding_execution" | "review_execution";
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.routing_contract", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_routing_contract",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
+    name: "project_coding_packet",
+    label: "Project Coding Packet",
+    description:
+      "Build coding packet schema for OpenCode lane using existing project-aware/code-aware retrieval (developer_query).",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        project_alias: { type: "string" },
+        query: { type: "string" },
+        objective: { type: "string" },
+        task_id: { type: "string" },
+        tracker_issue_key: { type: "string" },
+        task_title: { type: "string" },
+        symbol_name: { type: "string" },
+        relative_path: { type: "string" },
+        route_path: { type: "string" },
+        limit: { type: "number" },
+        acceptance_criteria: { type: "array", items: { type: "string" } },
+        constraints: { type: "array", items: { type: "string" } },
+        out_of_scope: { type: "array", items: { type: "string" } },
+        validation_commands: { type: "array", items: { type: "string" } },
+      },
+      required: [],
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_id?: string;
+        project_alias?: string;
+        query?: string;
+        objective?: string;
+        task_id?: string;
+        tracker_issue_key?: string;
+        task_title?: string;
+        symbol_name?: string;
+        relative_path?: string;
+        route_path?: string;
+        limit?: number;
+        acceptance_criteria?: string[];
+        constraints?: string[];
+        out_of_scope?: string[];
+        validation_commands?: string[];
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.coding_packet", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_coding_packet",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
     name: "project_developer_query",
     label: "Project Developer Query",
     description:

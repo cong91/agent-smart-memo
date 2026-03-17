@@ -124,9 +124,10 @@ async function main() {
     const tools = Array.isArray(toolsList.result?.tools) ? toolsList.result.tools : [];
     const toolNames = tools.map((tool: any) => String(tool?.name || "")).sort();
 
-    assert(toolNames.length === 2, "tools/list must return exactly 2 read-only tools");
+    assert(toolNames.length === 3, "tools/list must return exactly 3 read-only tools");
     assert(toolNames[0] === "asm_project_binding_preview", "missing asm_project_binding_preview");
-    assert(toolNames[1] === "asm_project_opencode_search", "missing asm_project_opencode_search");
+    assert(toolNames[1] === "asm_project_coding_packet", "missing asm_project_coding_packet");
+    assert(toolNames[2] === "asm_project_opencode_search", "missing asm_project_opencode_search");
 
     console.log("✅ opencode MCP stdio smoke passed");
   } finally {
