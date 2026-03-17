@@ -17,7 +17,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveSlotDbDir } from "./shared/slotdb-path.js";
-import { resolveAsmCoreConfigValue, resolveAsmCoreProjectWorkspaceRoot } from "./shared/asm-config.js";
+import { getAsmSharedConfig, resolveAsmCoreProjectWorkspaceRoot, resolveAsmCoreSlotDbDir } from "./shared/asm-config.js";
 
 // Tool modules
 import { registerSlotTools } from "./tools/slot-tools.js";
@@ -37,46 +37,11 @@ import { registerTelegramAddProjectCommand } from "./commands/telegram-addprojec
 // ============================================================================
 
 export interface AgentMemoConfig {
-  slotCategories?: string[];
-  maxSlots?: number;
-  injectStateTokenBudget?: number;
-  qdrantHost?: string;
-  qdrantPort?: number;
-  qdrantCollection?: string;
-  qdrantVectorSize?: number;
-  llmBaseUrl?: string;
-  llmApiKey?: string;
-  llmModel?: string;
-  embedBaseUrl?: string;
-  embedBackend?: EmbedBackend;
-  embedModel?: string;
-  embedDimensions?: number;
-  autoCaptureEnabled?: boolean;
-  autoCaptureMinConfidence?: number;
-  contextWindowMaxTokens?: number;
-  summarizeEveryActions?: number;
-  slotDbDir?: string;
-  projectWorkspaceRoot?: string;
+  asmConfigPath?: string;
 }
 
 const CONFIG_KEY_CANDIDATES: (keyof AgentMemoConfig)[] = [
-  "slotCategories",
-  "qdrantHost",
-  "qdrantPort",
-  "qdrantCollection",
-  "llmBaseUrl",
-  "llmApiKey",
-  "llmModel",
-  "embedBaseUrl",
-  "embedBackend",
-  "embedModel",
-  "embedDimensions",
-  "slotDbDir",
-  "projectWorkspaceRoot",
-  "autoCaptureEnabled",
-  "autoCaptureMinConfidence",
-  "contextWindowMaxTokens",
-  "summarizeEveryActions",
+  "asmConfigPath",
 ];
 
 function asObject(value: unknown): Record<string, any> | null {
@@ -166,25 +131,19 @@ function resolvePluginConfig(
   pluginId: string
 ): { config: AgentMemoConfig; source: string } {
   const pluginConfig = asObject((api as any).pluginConfig);
-  const adapterLocal = asObject(pluginConfig?.adapterLocal || pluginConfig);
-  if (hasAnyConfigKey(adapterLocal)) {
-    return { config: adapterLocal as AgentMemoConfig, source: "pluginConfig" };
+  if (typeof pluginConfig?.asmConfigPath === "string" && pluginConfig.asmConfigPath.trim()) {
+    return { config: { asmConfigPath: pluginConfig.asmConfigPath.trim() }, source: "pluginConfig" };
   }
 
   const legacyEntryConfig = asObject((api as any)?.config?.plugins?.entries?.[pluginId]?.config);
-  const asmConfigPath = typeof legacyEntryConfig?.asmConfigPath === "string" ? legacyEntryConfig.asmConfigPath : undefined;
-  const adapterMinimal = {
-    slotDbDir: typeof legacyEntryConfig?.slotDbDir === "string" ? legacyEntryConfig.slotDbDir : undefined,
-    projectWorkspaceRoot: typeof legacyEntryConfig?.projectWorkspaceRoot === "string" ? legacyEntryConfig.projectWorkspaceRoot : undefined,
-  };
-  if (hasAnyConfigKey(adapterMinimal)) {
+  if (typeof legacyEntryConfig?.asmConfigPath === "string" && legacyEntryConfig.asmConfigPath.trim()) {
     return {
-      config: adapterMinimal as AgentMemoConfig,
-      source: asmConfigPath ? "api.config.plugins.entries[pluginId].config (adapter-local+shared)" : "api.config.plugins.entries[pluginId].config (adapter-local)",
+      config: { asmConfigPath: legacyEntryConfig.asmConfigPath.trim() },
+      source: "api.config.plugins.entries[pluginId].config",
     };
   }
 
-  return resolveLegacyConfig((api as any).config);
+  return { config: {}, source: "default" };
 }
 
 // ============================================================================
@@ -214,74 +173,9 @@ export const AGENT_MEMO_CONFIG_SCHEMA = {
       type: "number",
       description: "Max tokens for Current State injection",
     },
-    qdrantHost: {
+    asmConfigPath: {
       type: "string",
-      description: "Qdrant server host",
-    },
-    qdrantPort: {
-      type: "number",
-      description: "Qdrant server port",
-    },
-    qdrantCollection: {
-      type: "string",
-      description: "Qdrant collection name (default: mrc_bot)",
-    },
-    qdrantVectorSize: {
-      type: "number",
-      description: "Qdrant vector size (default: 1024)",
-    },
-    llmBaseUrl: {
-      type: "string",
-      description: "LLM API base URL (OpenAI compatible)",
-    },
-    llmApiKey: {
-      type: "string",
-      description: "LLM API key",
-    },
-    llmModel: {
-      type: "string",
-      description: "LLM model for auto-capture",
-    },
-    embedBaseUrl: {
-      type: "string",
-      description: "Embedding service base URL (default: http://localhost:11434)",
-    },
-    embedBackend: {
-      type: "string",
-      enum: ["ollama", "openai", "docker"],
-      description: "Embedding backend selector (optional). If omitted, keeps legacy auto behavior.",
-    },
-    embedModel: {
-      type: "string",
-      description: "Embedding model for vectorization (default: qwen3-embedding:0.6b)",
-    },
-    embedDimensions: {
-      type: "number",
-      description: "Embedding dimensions (default: 1024)",
-    },
-    slotDbDir: {
-      type: "string",
-      description: "Absolute path for SlotDB directory. Priority: OPENCLAW_SLOTDB_DIR > config.slotDbDir > ${OPENCLAW_STATE_DIR}/agent-memo",
-    },
-    projectWorkspaceRoot: {
-      type: "string",
-      description: "Default workspace root for repo clone/import onboarding resolution (used for project.register/project onboarding).",
-    },
-    autoCaptureEnabled: {
-      type: "boolean",
-      description: "Enable auto-capture feature",
-    },
-    autoCaptureMinConfidence: {
-      type: "number",
-      description: "Minimum confidence for auto-capture",
-    },
-    contextWindowMaxTokens: {
-      type: "number",
-      description: "Maximum tokens for context window in auto-capture (default: 12000)",
-    },
-    summarizeEveryActions: {
-      type: "number",
-      description: "Auto-summarize project_living_state every N actions (default: 6)",
+      description: "Path to shared ASM config source-of-truth used by the OpenClaw plugin runtime.",
     },
   },
 } as const;
@@ -393,43 +287,38 @@ const agentMemoPlugin = {
     const rawConfig = (api as any).config;
     const { config, source } = resolvePluginConfig(api, "agent-smart-memo");
 
-    const slotCategories = config.slotCategories || DEFAULT_CATEGORIES;
-    const qdrantHost = firstNonEmptyString(config.qdrantHost, resolveAsmCoreConfigValue<string>("qdrantHost")) || "localhost";
-    const qdrantPort = config.qdrantPort || resolveAsmCoreConfigValue<number>("qdrantPort") || 6333;
-    const qdrantCollection = firstNonEmptyString(config.qdrantCollection, resolveAsmCoreConfigValue<string>("qdrantCollection")) || "mrc_bot";
-    const qdrantVectorSize = config.qdrantVectorSize || resolveAsmCoreConfigValue<number>("qdrantVectorSize") || 1024;
-    const llmBaseUrl = firstNonEmptyString(config.llmBaseUrl, resolveAsmCoreConfigValue<string>("llmBaseUrl")) || "http://localhost:8317/v1";
-    const llmApiKey = firstNonEmptyString(config.llmApiKey, resolveAsmCoreConfigValue<string>("llmApiKey")) || "proxypal-local";
-    const resolvedLlmModel = firstNonEmptyString(
-      config.llmModel,
-      resolveAsmCoreConfigValue<string>("llmModel"),
-      findNestedStringKey(rawConfig, "llmModel")
-    );
+    const slotCategories = DEFAULT_CATEGORIES;
+    const asmConfigPath = firstNonEmptyString(config.asmConfigPath);
+    const shared = getAsmSharedConfig({ configPath: asmConfigPath, env: process.env, homeDir: process.env.HOME }).config || {};
+    const sharedCore = (shared.core || {}) as Record<string, any>;
+    const qdrantHost = firstNonEmptyString(sharedCore.qdrantHost) || "localhost";
+    const qdrantPort = Number(sharedCore.qdrantPort) || 6333;
+    const qdrantCollection = firstNonEmptyString(sharedCore.qdrantCollection) || "mrc_bot";
+    const qdrantVectorSize = Number(sharedCore.qdrantVectorSize) || 1024;
+    const llmBaseUrl = firstNonEmptyString(sharedCore.llmBaseUrl) || "http://localhost:8317/v1";
+    const llmApiKey = firstNonEmptyString(sharedCore.llmApiKey) || "proxypal-local";
+    const resolvedLlmModel = firstNonEmptyString(sharedCore.llmModel, findNestedStringKey(rawConfig, "llmModel"));
     const llmModel = resolvedLlmModel || "gemini-2.5-flash";
     const llmModelFallbackUsed = !resolvedLlmModel;
-    const embedBaseUrl = firstNonEmptyString(config.embedBaseUrl, resolveAsmCoreConfigValue<string>("embedBaseUrl")) || "http://localhost:11434";
-    const sharedEmbedBackend = resolveAsmCoreConfigValue<string>("embedBackend");
+    const embedBaseUrl = firstNonEmptyString(sharedCore.embedBaseUrl) || "http://localhost:11434";
+    const sharedEmbedBackend = firstNonEmptyString(sharedCore.embedBackend);
     const embedBackend =
-      config.embedBackend === "ollama" ||
-      config.embedBackend === "openai" ||
-      config.embedBackend === "docker"
-        ? config.embedBackend
-        : sharedEmbedBackend === "ollama" || sharedEmbedBackend === "openai" || sharedEmbedBackend === "docker"
-          ? sharedEmbedBackend
-          : undefined;
-    const embedModel = firstNonEmptyString(config.embedModel, resolveAsmCoreConfigValue<string>("embedModel")) || "qwen3-embedding:0.6b";
-    const embedDimensions = config.embedDimensions || resolveAsmCoreConfigValue<number>("embedDimensions") || 1024;
-    const autoCaptureEnabled = config.autoCaptureEnabled ?? resolveAsmCoreConfigValue<boolean>("autoCaptureEnabled") ?? true;
-    const autoCaptureMinConfidence = config.autoCaptureMinConfidence || resolveAsmCoreConfigValue<number>("autoCaptureMinConfidence") || 0.7;
-    const contextWindowMaxTokens = config.contextWindowMaxTokens || resolveAsmCoreConfigValue<number>("contextWindowMaxTokens") || 12000;
-    const summarizeEveryActions = config.summarizeEveryActions || resolveAsmCoreConfigValue<number>("summarizeEveryActions") || 6;
-    const projectWorkspaceRoot = firstNonEmptyString(config.projectWorkspaceRoot, resolveAsmCoreProjectWorkspaceRoot({ env: process.env, homeDir: process.env.HOME }));
+      sharedEmbedBackend === "ollama" || sharedEmbedBackend === "openai" || sharedEmbedBackend === "docker"
+        ? sharedEmbedBackend as EmbedBackend
+        : undefined;
+    const embedModel = firstNonEmptyString(sharedCore.embedModel) || "qwen3-embedding:0.6b";
+    const embedDimensions = Number(sharedCore.embedDimensions) || 1024;
+    const autoCaptureEnabled = sharedCore.autoCaptureEnabled ?? true;
+    const autoCaptureMinConfidence = Number(sharedCore.autoCaptureMinConfidence) || 0.7;
+    const contextWindowMaxTokens = Number(sharedCore.contextWindowMaxTokens) || 12000;
+    const summarizeEveryActions = Number(sharedCore.summarizeEveryActions) || 6;
+    const projectWorkspaceRoot = resolveAsmCoreProjectWorkspaceRoot({ configPath: asmConfigPath, env: process.env, homeDir: process.env.HOME });
 
     // State directory from env or default
     const stateDir = process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
     const slotDbDir = resolveSlotDbDir({
       stateDir,
-      slotDbDir: config.slotDbDir,
+      slotDbDir: resolveAsmCoreSlotDbDir({ configPath: asmConfigPath, env: process.env, homeDir: process.env.HOME }),
       env: process.env,
       homeDir: process.env.HOME,
     });

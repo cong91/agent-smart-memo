@@ -309,8 +309,6 @@ export function buildPatchedConfig(existingConfig, answers, mapMemorySlot = true
     enabled: true,
     config: {
       ...(asmConfigPath ? { asmConfigPath } : {}),
-      ...(prevEntryConfig.slotDbDir ? { slotDbDir: prevEntryConfig.slotDbDir } : {}),
-      ...(prevEntryConfig.projectWorkspaceRoot ? { projectWorkspaceRoot: prevEntryConfig.projectWorkspaceRoot } : {}),
     },
   };
 
@@ -438,8 +436,6 @@ export function buildSetupSummary(currentConfig, answers, nextConfig) {
 
   const managedConfigKeys = [
     "asmConfigPath",
-    "slotDbDir",
-    "projectWorkspaceRoot",
   ];
 
   for (const key of managedConfigKeys) {

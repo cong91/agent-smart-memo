@@ -105,7 +105,7 @@ test("buildPatchedConfig merges plugin block without dropping unrelated fields",
   const entry = next.plugins.entries["agent-smart-memo"];
   assert(entry && entry.enabled === true, "agent-smart-memo entry should be enabled");
   assertEqual(entry.config.asmConfigPath, join(stateDir, ".config", "asm", "config.json"), "openclaw entry should only keep asmConfigPath as source-of-truth pointer");
-  assertEqual(entry.config.embedDimensions, undefined, "openclaw entry should not persist embedDimensions in minimal config");
+  assertEqual(Object.keys(entry.config).sort(), ["asmConfigPath"], "openclaw entry config should only expose asmConfigPath");
 });
 
 test("buildPatchedConfig keeps single-account telegram merge at channels.telegram.customCommands", () => {
@@ -272,7 +272,7 @@ test("formatSetupSummary renders required operator sections", () => {
   const output = mod.formatSetupSummary({
     alreadyConfigured: ["plugins.allow includes agent-smart-memo"],
     willAdd: ["channels.telegram.customCommands includes /indexproject"],
-    willUpdate: ["plugins.entries.agent-smart-memo.config.slotDbDir"],
+    willUpdate: ["plugins.entries.agent-smart-memo.config.asmConfigPath"],
   });
 
   assert(output.includes("already configured"), "must include already configured section");
