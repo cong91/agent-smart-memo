@@ -370,6 +370,7 @@ interface ProjectDeveloperQueryParsed {
   task_title?: string;
   tracker_issue_keys?: string[];
   task_ids?: string[];
+  route_paths?: string[];
   feature_key?: FeaturePackKey;
 }
 
@@ -2584,7 +2585,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       },
       why_this_result: whyThisResult,
       generated_at: new Date().toISOString(),
-      generator_version: "asm-109-slice4",
+      generator_version: "asm-109-slice5",
     };
   }
 
@@ -2670,6 +2671,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
     const taskTitle = String(payload.task_title || "").trim();
     const trackerIssueKeys = this.extractTrackerIssueKeys(query);
     const taskIds = this.extractTaskIds(query);
+    const routePaths = this.extractRoutePaths(query);
 
     const canonicalFromExplicit: Record<ProjectDeveloperQueryIntent, ProjectDeveloperQueryCanonicalIntent> = {
       locate_symbol: "locate_symbol",
@@ -2690,7 +2692,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
           query,
           symbolName,
           relativePath,
-          routePath,
+          routePath: routePath || routePaths[0],
           trackerIssueKey: trackerIssueKey || trackerIssueKeys[0],
           taskId: taskId || taskIds[0],
           taskTitle,
@@ -2738,7 +2740,8 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       query_text,
       ...(symbolName ? { symbol_name: symbolName } : {}),
       ...(relativePath ? { relative_path: relativePath } : {}),
-      ...(routePath ? { route_path: routePath } : {}),
+      ...((routePath || routePaths[0]) ? { route_path: routePath || routePaths[0] } : {}),
+      ...(routePaths.length > 0 ? { route_paths: routePaths } : {}),
       ...((trackerIssueKey || trackerIssueKeys[0]) ? { tracker_issue_key: trackerIssueKey || trackerIssueKeys[0] } : {}),
       ...((taskId || taskIds[0]) ? { task_id: taskId || taskIds[0] } : {}),
       ...(taskTitle ? { task_title: taskTitle } : {}),
@@ -2831,6 +2834,11 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
   private extractTaskIds(query: string): string[] {
     const matches = String(query || "").match(/\btask-[a-z0-9-]+\b/gi) || [];
     return Array.from(new Set(matches.map((item) => item.trim()).filter(Boolean)));
+  }
+
+  private extractRoutePaths(query: string): string[] {
+    const matches = String(query || "").match(/\/(?:[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*)?/g) || [];
+    return Array.from(new Set(matches.map((item) => item.trim()).filter((item) => item.startsWith("/") && item.length >= 2)));
   }
 
   private resolveFeatureKeyInput(featureKey?: FeaturePackKey, featureName?: string): FeaturePackKey {
