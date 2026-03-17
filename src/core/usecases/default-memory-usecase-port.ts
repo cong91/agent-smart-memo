@@ -37,11 +37,16 @@ import type {
   ProjectChangeOverlayV1,
 } from "../contracts/change-overlay-contracts.js";
 import type {
+  ProjectCodingPacketPayload,
+  ProjectCodingPacketV1,
   ProjectDeveloperQueryCanonicalIntent,
   ProjectDeveloperQueryIntent,
   ProjectDeveloperQueryPayload,
   ProjectDeveloperQueryPrimaryResult,
   ProjectDeveloperQueryResponseV1,
+  ProjectRoutingContractPayload,
+  ProjectRoutingContractV1,
+  ProjectWorkstreamType,
 } from "../contracts/project-query-contracts.js";
 import { resolveAsmCoreProjectWorkspaceRoot } from "../../shared/asm-config.js";
 
@@ -565,6 +570,10 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
         return this.handleProjectFeaturePackQuery(payload as unknown as ProjectFeaturePackQueryPayload, req) as TRes;
       case "project.developer_query":
         return this.handleProjectDeveloperQuery(payload as unknown as ProjectDeveloperQueryPayload, req) as TRes;
+      case "project.routing_contract":
+        return this.handleProjectRoutingContract(payload as unknown as ProjectRoutingContractPayload, req) as TRes;
+      case "project.coding_packet":
+        return this.handleProjectCodingPacket(payload as unknown as ProjectCodingPacketPayload, req) as TRes;
       case "graph.entity.get":
         return this.handleGraphEntityGet(payload as unknown as GraphEntityGetPayload, req) as TRes;
       case "graph.entity.set":
@@ -915,6 +924,120 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       query: payload.query,
       results,
       errors: [],
+    };
+  }
+
+  private normalizeWorkstreamType(raw?: string): ProjectWorkstreamType {
+    const normalized = String(raw || "").trim().toLowerCase();
+    if (normalized === "research_execution" || normalized === "coding_execution" || normalized === "review_execution") {
+      return normalized;
+    }
+    return "coding_execution";
+  }
+
+  private handleProjectRoutingContract(
+    payload: ProjectRoutingContractPayload,
+    req: CoreRequestEnvelope<unknown>,
+  ): ProjectRoutingContractV1 {
+    const identity = normalizePrivateIdentity(req.context);
+    const project = this.resolveProjectRef(identity.userId, identity.agentId, {
+      project_id: payload.project_id,
+      project_alias: payload.project_alias,
+    });
+
+    const workstreamType = this.normalizeWorkstreamType(payload.workstream_type);
+    const reasonByWorkstream: Record<ProjectWorkstreamType, string> = {
+      coding_execution: "OpenClaw orchestrates and routes coding execution to OpenCode lane foundation.",
+      research_execution: "Research execution keeps OpenCode lane ready through project/code-aware retrieval foundation.",
+      review_execution: "Review execution can reuse OpenCode coding lane foundation with project-aware packet context.",
+    };
+
+    return {
+      routing_contract_version: "asm-routing-v1",
+      workstream_type: workstreamType,
+      project_id: project.project_id,
+      project_alias: payload.project_alias || null,
+      route_target: {
+        lane: "opencode",
+        mode: "foundation",
+        reason: reasonByWorkstream[workstreamType],
+      },
+      retrieval_profile: {
+        project_aware: true,
+        code_aware: true,
+        primary_usecase: "project.developer_query",
+      },
+      generated_at: new Date().toISOString(),
+    };
+  }
+
+  private handleProjectCodingPacket(
+    payload: ProjectCodingPacketPayload,
+    req: CoreRequestEnvelope<unknown>,
+  ): ProjectCodingPacketV1 {
+    const routing = this.handleProjectRoutingContract(
+      {
+        project_id: payload.project_id,
+        project_alias: payload.project_alias,
+        query: payload.query,
+        objective: payload.objective,
+        workstream_type: "coding_execution",
+      },
+      req,
+    );
+
+    const query = String(payload.query || payload.objective || payload.task_title || "").trim();
+    const objective = String(payload.objective || payload.query || "").trim() || "Implement requested coding change with project-aware/code-aware context.";
+
+    const developerQuery = this.handleProjectDeveloperQuery(
+      {
+        project_id: routing.project_id,
+        project_alias: routing.project_alias || undefined,
+        query,
+        task_id: payload.task_id,
+        tracker_issue_key: payload.tracker_issue_key,
+        task_title: payload.task_title,
+        symbol_name: payload.symbol_name,
+        relative_path: payload.relative_path,
+        route_path: payload.route_path,
+        limit: payload.limit,
+      },
+      req,
+    );
+
+    const primaryFiles = developerQuery.files.slice(0, 12);
+    const primarySymbols = developerQuery.symbols.slice(0, 16);
+
+    return {
+      packet_version: "asm-coding-packet-v1",
+      routing,
+      objective,
+      project: {
+        project_id: routing.project_id,
+        project_alias: routing.project_alias,
+      },
+      selectors: {
+        ...(payload.task_id ? { task_id: payload.task_id } : {}),
+        ...(payload.tracker_issue_key ? { tracker_issue_key: payload.tracker_issue_key } : {}),
+        ...(payload.task_title ? { task_title: payload.task_title } : {}),
+        ...(payload.symbol_name ? { symbol_name: payload.symbol_name } : {}),
+        ...(payload.relative_path ? { relative_path: payload.relative_path } : {}),
+        ...(payload.route_path ? { route_path: payload.route_path } : {}),
+      },
+      context: {
+        developer_query: developerQuery,
+        primary_files: primaryFiles,
+        primary_symbols: primarySymbols,
+        change_context: developerQuery.change_context,
+      },
+      execution_hints: {
+        acceptance_criteria: payload.acceptance_criteria || [],
+        constraints: payload.constraints || [],
+        out_of_scope: payload.out_of_scope || [],
+        validation_commands: payload.validation_commands || [],
+        handoff_language: "vi",
+      },
+      generated_at: new Date().toISOString(),
     };
   }
 

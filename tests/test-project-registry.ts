@@ -1381,6 +1381,45 @@ async function main() {
     assertEqual(result.binding.selected_project.project_alias, "agent-smart-memo", "explicit project alias must win over session alias");
   });
 
+  await test("project.routing_contract returns coding_execution route to opencode foundation lane", async () => {
+    const result = await usecase.run<any, any>("project.routing_contract", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo",
+        workstream_type: "coding_execution",
+        objective: "Implement typed query parser",
+      },
+    });
+
+    assertEqual(result.routing_contract_version, "asm-routing-v1", "routing contract version should be stable");
+    assertEqual(result.workstream_type, "coding_execution", "workstream type should be preserved");
+    assertEqual(result.route_target.lane, "opencode", "coding execution should route to opencode lane");
+    assertEqual(result.route_target.mode, "foundation", "initial routing should stay in foundation mode");
+    assertEqual(result.retrieval_profile.project_aware, true, "routing should declare project-aware retrieval");
+    assertEqual(result.retrieval_profile.code_aware, true, "routing should declare code-aware retrieval");
+  });
+
+  await test("project.coding_packet builds packet using project.developer_query context", async () => {
+    const result = await usecase.run<any, any>("project.coding_packet", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo",
+        query: "code aware retrieval",
+        objective: "Wire packet to coding lane",
+        acceptance_criteria: ["packet has developer context"],
+        constraints: ["no deploy"],
+      },
+    });
+
+    assertEqual(result.packet_version, "asm-coding-packet-v1", "coding packet version should be stable");
+    assertEqual(result.routing.workstream_type, "coding_execution", "coding packet should force coding_execution workstream");
+    assertEqual(result.routing.route_target.lane, "opencode", "coding packet routing should target opencode lane");
+    assertEqual(typeof result.context.developer_query.query_id, "string", "packet should embed developer_query context");
+    assert(Array.isArray(result.context.primary_files), "packet should expose primary_files list");
+    assert(Array.isArray(result.execution_hints.acceptance_criteria), "packet should preserve execution hints");
+    assertEqual(result.execution_hints.handoff_language, "vi", "A2A handoff language must stay Vietnamese");
+  });
+
   await test("project.list returns registry entries", async () => {
     const rows = await usecase.run<any, any[]>("project.list", {
       ...ctx,
