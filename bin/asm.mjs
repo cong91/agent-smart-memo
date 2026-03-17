@@ -53,6 +53,14 @@ export function parseAsmCliArgs(argv = []) {
     return { command: "setup-openclaw", argv: args.slice(2) };
   }
 
+  if (first === "install" && (args[1] || "")) {
+    return {
+      command: "install-platform",
+      platform: String(args[1] || "").trim().toLowerCase(),
+      argv: args.slice(2),
+    };
+  }
+
   if (first === "init-openclaw") {
     return { command: "init-openclaw", argv: args.slice(1) };
   }
@@ -74,15 +82,50 @@ export function printHelp(log = console.log) {
   log("Usage:");
   log("  asm setup-openclaw [--yes]");
   log("  asm setup openclaw [--yes]");
+  log("  asm install openclaw [--yes]");
+  log("  asm install paperclip");
+  log("  asm install opencode");
   log("  asm init-openclaw [--non-interactive]");
   log("  asm init openclaw [--non-interactive]");
   log("  asm project-event --project-id <id> --repo-root <path> [--event-type post_commit|post_merge|manual] [--source-rev <sha>] [--changed-files a,b] [--deleted-files x,y]");
   log("  asm help");
   log("");
   log("Roadmap commands (not implemented yet):");
-  log("  asm setup-paperclip");
+  log("  asm init-setup");
   log("  asm doctor");
   log("  asm test-openclaw");
+}
+
+export async function runInstallPlatformFlow({
+  platform,
+  runner = createShellRunner(),
+  initOpenClaw = runInitOpenClaw,
+  log = console.log,
+  argv = [],
+} = {}) {
+  const normalized = String(platform || "").trim().toLowerCase();
+
+  if (normalized === "openclaw") {
+    return runSetupOpenClawFlow({ runner, initOpenClaw, log, argv });
+  }
+
+  if (normalized === "paperclip") {
+    log("[ASM-104] install paperclip is not implemented yet.");
+    log("[ASM-104] Intended flow: prepare Paperclip runtime/plugin artifact, then guide/install into Paperclip host using shared ASM config.");
+    log("[ASM-104] Current local references: npm run package:paperclip, npm run package:paperclip:plugin-local, docs/testing/paperclip-local-install-debug-runbook.md");
+    return { ok: false, step: "install-paperclip-not-implemented", platform: normalized };
+  }
+
+  if (normalized === "opencode") {
+    log("[ASM-104] install opencode is not implemented yet.");
+    log("[ASM-104] Intended flow: bootstrap read-only/MCP integration and write OpenCode adapter config using ASM shared config.");
+    log("[ASM-104] Runtime retrieval contract is available via ASM-106; installer wiring remains to be implemented.");
+    return { ok: false, step: "install-opencode-not-implemented", platform: normalized };
+  }
+
+  log(`[ASM-104] Unknown install target: ${normalized || "(empty)"}`);
+  log("[ASM-104] Supported install targets right now: openclaw | paperclip | opencode");
+  return { ok: false, step: "unknown-install-target", platform: normalized || null };
 }
 
 export function detectPluginInstalled(runner = createShellRunner()) {
@@ -236,6 +279,11 @@ export async function main(argv = process.argv.slice(2)) {
 
   if (parsed.command === "setup-openclaw") {
     const result = await runSetupOpenClawFlow({ argv: parsed.argv });
+    return result.ok ? 0 : 1;
+  }
+
+  if (parsed.command === "install-platform") {
+    const result = await runInstallPlatformFlow({ platform: parsed.platform, argv: parsed.argv });
     return result.ok ? 0 : 1;
   }
 
