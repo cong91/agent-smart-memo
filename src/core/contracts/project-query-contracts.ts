@@ -34,6 +34,7 @@ export interface ProjectDeveloperQueryPayload {
   task_title?: string;
   tracker_issue_keys?: string[];
   task_ids?: string[];
+  route_paths?: string[];
 }
 
 export interface ProjectDeveloperQueryPrimaryResult {
@@ -96,5 +97,5 @@ export interface ProjectDeveloperQueryResponseV1 {
   };
   why_this_result: string[];
   generated_at: string;
-  generator_version: "asm-109-slice4";
+  generator_version: "asm-109-slice5";
 }
