@@ -367,6 +367,7 @@ interface ProjectDeveloperQueryParsed {
   route_path?: string;
   tracker_issue_key?: string;
   task_id?: string;
+  task_title?: string;
   feature_key?: FeaturePackKey;
 }
 
@@ -2199,6 +2200,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       ? {
           tracker_issue_key: trackerIssueHint,
           task_id: parsed.task_id,
+          task_title: parsed.task_title,
           include_related: true,
           include_parent_chain: inferredIntent === "trace_flow",
         }
@@ -2580,7 +2582,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       },
       why_this_result: whyThisResult,
       generated_at: new Date().toISOString(),
-      generator_version: "asm-109-slice2",
+      generator_version: "asm-109-slice3",
     };
   }
 
@@ -2663,6 +2665,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
     const routePath = String(payload.route_path || "").trim();
     const trackerIssueKey = String(payload.tracker_issue_key || "").trim();
     const taskId = String(payload.task_id || "").trim();
+    const taskTitle = String(payload.task_title || "").trim();
 
     const canonicalFromExplicit: Record<ProjectDeveloperQueryIntent, ProjectDeveloperQueryCanonicalIntent> = {
       locate_symbol: "locate_symbol",
@@ -2686,6 +2689,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
           routePath,
           trackerIssueKey,
           taskId,
+          taskTitle,
           hasFeatureSelector: Boolean(payload.feature_key || payload.feature_name),
         });
 
@@ -2717,7 +2721,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
           ? (relativePath || query)
           : canonical_intent === "feature_lookup"
             ? (query || payload.feature_name || feature_key || "")
-            : (query || trackerIssueKey || taskId || ""),
+            : (query || trackerIssueKey || taskId || taskTitle || ""),
     ).trim();
 
     if (!query_text) {
@@ -2733,6 +2737,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       ...(routePath ? { route_path: routePath } : {}),
       ...(trackerIssueKey ? { tracker_issue_key: trackerIssueKey } : {}),
       ...(taskId ? { task_id: taskId } : {}),
+      ...(taskTitle ? { task_title: taskTitle } : {}),
       ...(feature_key ? { feature_key } : {}),
     };
   }
@@ -2744,11 +2749,12 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
     routePath?: string;
     trackerIssueKey?: string;
     taskId?: string;
+    taskTitle?: string;
     hasFeatureSelector: boolean;
   }): ProjectDeveloperQueryCanonicalIntent {
     if (input.symbolName) return "locate_symbol";
     if (input.relativePath || input.routePath) return "locate_file";
-    if (input.trackerIssueKey || input.taskId) return "change_lookup";
+    if (input.trackerIssueKey || input.taskId || input.taskTitle) return "change_lookup";
 
     const lowered = input.query.toLowerCase();
     if (input.hasFeatureSelector || /feature|capability|pack|understand/.test(lowered)) {
