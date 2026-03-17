@@ -10,6 +10,7 @@ export type ProjectDeveloperQueryLegacyIntent =
   | "locate"
   | "trace_flow"
   | "impact"
+  | "impact_analysis"
   | "change_aware_lookup"
   | "feature_understanding";
 
@@ -27,6 +28,7 @@ export interface ProjectDeveloperQueryPayload {
   feature_name?: string;
   symbol_name?: string;
   relative_path?: string;
+  route_path?: string;
   tracker_issue_key?: string;
   task_id?: string;
 }
@@ -91,5 +93,5 @@ export interface ProjectDeveloperQueryResponseV1 {
   };
   why_this_result: string[];
   generated_at: string;
-  generator_version: "asm-109-slice1";
+  generator_version: "asm-109-slice2";
 }

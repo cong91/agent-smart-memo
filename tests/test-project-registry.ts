@@ -208,6 +208,84 @@ async function main() {
     assertEqual(thrown, true, "invalid jira mapping should throw");
   });
 
+  await test("project.deindex tombstones indexed artifacts and marks project deindexed", async () => {
+    const current = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_alias: "agent-smart-memo-cmd" },
+    });
+
+    await usecase.run<any, any>("project.reindex_diff", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        trigger_type: "bootstrap",
+        source_rev: "asm-107-slice1",
+        paths: [
+          {
+            relative_path: "src/lifecycle/deindex.ts",
+            checksum: "lifecycle-c1",
+            module: "src/lifecycle",
+            language: "ts",
+            content: "export function deindexProject() { return 'ok'; }",
+          },
+        ],
+      },
+    });
+
+    const deindexed = await usecase.run<any, any>("project.deindex", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        reason: "asm-107-slice1",
+      },
+    });
+
+    assertEqual(deindexed.lifecycle_status, "deindexed", "project should be marked deindexed");
+    assertEqual(deindexed.searchable, false, "deindexed project should be non-searchable");
+    assert(deindexed.affected.files >= 1, "deindex should report affected files");
+    assert(deindexed.affected.chunks >= 1, "deindex should report affected chunks");
+    assert(deindexed.affected.symbols >= 1, "deindex should report affected symbols");
+
+    const afterGet = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_id: current.project.project_id },
+    });
+    assertEqual(afterGet.project.lifecycle_status, "deindexed", "project lifecycle_status should persist as deindexed");
+
+    const searchAfter = await usecase.run<any, any>("project.hybrid_search", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        query: "deindexProject",
+      },
+    });
+    assertEqual(searchAfter.count, 0, "deindexed artifacts should not be returned by hybrid search");
+
+    await usecase.run<any, any>("project.reindex_diff", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        trigger_type: "incremental",
+        source_rev: "asm-107-reactivate",
+        paths: [
+          {
+            relative_path: "src/lifecycle/deindex.ts",
+            checksum: "lifecycle-c2",
+            module: "src/lifecycle",
+            language: "ts",
+            content: "export function deindexProject() { return 'reactivated'; }",
+          },
+        ],
+      },
+    });
+
+    const afterReindex = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_id: current.project.project_id },
+    });
+    assertEqual(afterReindex.project.lifecycle_status, "active", "reindex should reactivate deindexed project");
+  });
+
   await test("project.telegram_onboarding preview validates jira mapping and returns summary card", async () => {
     const preview = await usecase.run<any, any>("project.telegram_onboarding", {
       ...ctx,
@@ -440,7 +518,7 @@ async function main() {
     assert(Array.isArray(locate.primary_results) && locate.primary_results.length >= 1, "locate should return primary results");
     assert(Array.isArray(locate.files), "locate response should expose files[] contract");
     assert(Array.isArray(locate.symbols), "locate response should expose symbols[] contract");
-    assertEqual(locate.generator_version, "asm-109-slice1", "locate response generator should match asm-109 slice1");
+    assertEqual(locate.generator_version, "asm-109-slice2", "locate response generator should match asm-109 slice2");
     assert(Array.isArray(locate.assembly_sources), "locate response should expose assembly_sources");
     assert(locate.assembly_sources.includes("file") || locate.assembly_sources.includes("symbol"), "locate should include file/symbol assembly source");
     assertEqual(locate.answer_template, "locate", "locate should use locate template");
@@ -504,7 +582,7 @@ async function main() {
     assert(Array.isArray(feature.feature_packs) && feature.feature_packs.length === 1, "feature query should return one feature pack");
     assertEqual(feature.feature_packs[0].feature_key, "code_aware_retrieval", "feature query should resolve retrieval pack");
     assert(Array.isArray(feature.primary_results) && feature.primary_results[0]?.type === "feature_pack", "feature query primary result should be feature_pack");
-    assertEqual(feature.generator_version, "asm-109-slice1", "feature response generator should match asm-109 slice1");
+    assertEqual(feature.generator_version, "asm-109-slice2", "feature response generator should match asm-109 slice2");
     assert(Array.isArray(feature.assembly_sources), "feature response should expose assembly_sources");
     assert(feature.assembly_sources.includes("feature_pack"), "feature response should include feature_pack assembly source");
     assertEqual(feature.answer_template, "feature_understanding", "feature response should use feature template");
@@ -582,6 +660,33 @@ async function main() {
     assert(
       typedChangeLookup.explainability.ranking_rules.some((rule: string) => rule.includes("retrieval plan change_lookup")),
       "typed change_lookup should apply change_lookup retrieval plan",
+    );
+
+    const typedImpactAnalysis = await usecase.run<any, any>("project.developer_query", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        intent: "impact_analysis",
+        tracker_issue_key: "ASM-78",
+        query: "impact analysis for asm-78 overlay",
+      },
+    });
+    assertEqual(typedImpactAnalysis.intent, "impact_analysis", "typed impact_analysis should be preserved as legacy intent");
+    assert(typedImpactAnalysis.assembly_sources.includes("change_overlay"), "impact_analysis should include overlay source");
+    assertEqual(typedImpactAnalysis.feature_packs[0].feature_key, "change_aware_impact", "impact_analysis should default to change_aware_impact pack");
+
+    const inferredRouteLookup = await usecase.run<any, any>("project.developer_query", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        query: "which file handles route /project",
+        route_path: "/project",
+      },
+    });
+    assertEqual(inferredRouteLookup.intent, "locate", "route_path selector should infer locate intent");
+    assert(
+      inferredRouteLookup.explainability.ranking_rules.some((rule: string) => rule.includes("retrieval plan locate_file")),
+      "route_path selector should reuse locate_file retrieval plan",
     );
   });
 
@@ -701,6 +806,337 @@ async function main() {
     assert(Array.isArray(overlay.changed_files) && overlay.changed_files.length === 0, "overlay should gracefully return empty changed_files");
     assert(Array.isArray(overlay.related_symbols) && overlay.related_symbols.length === 0, "overlay should gracefully return empty related_symbols");
     assert(Array.isArray(overlay.commit_refs) && overlay.commit_refs.length === 0, "overlay should gracefully return empty commit_refs");
+  });
+
+  await test("project.deindex disables search but keeps registry/tombstone semantics", async () => {
+    const current = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_alias: "agent-smart-memo-cmd" },
+    });
+
+    await usecase.run<any, any>("project.reindex_diff", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        source_rev: "asm-107-deindex-seed",
+        trigger_type: "incremental",
+        paths: [
+          {
+            relative_path: "src/asm-107/deindex.ts",
+            module: "src",
+            language: "ts",
+            content: "export function asm107DeindexSeed() { return 'ok'; }",
+          },
+        ],
+      },
+    });
+
+    const before = await usecase.run<any, any>("project.hybrid_search", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        query: "asm107DeindexSeed",
+        limit: 5,
+      },
+    });
+
+    assertEqual(before.searchable, true, "before deindex search should be enabled");
+    assert(before.results.length >= 1, "before deindex should return indexed result");
+
+    const deindexed = await usecase.run<any, any>("project.deindex", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        reason: "asm-107-slice1-test",
+      },
+    });
+
+    assertEqual(deindexed.lifecycle_status, "deindexed", "deindex should set lifecycle_status=deindexed");
+    assertEqual(deindexed.searchable, false, "deindex response should mark searchable=false");
+    assert(deindexed.affected.files >= 1, "deindex should tombstone at least one file in this fixture");
+
+    const after = await usecase.run<any, any>("project.hybrid_search", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        query: "asm107DeindexSeed",
+        limit: 5,
+      },
+    });
+
+    assertEqual(after.project_lifecycle_status, "deindexed", "hybrid_search should expose deindexed lifecycle state");
+    assertEqual(after.searchable, false, "hybrid_search should report searchable=false when deindexed");
+    assertEqual(after.count, 0, "deindexed project should return no retrieval result");
+    assertEqual(after.results.length, 0, "deindexed project should return empty result list");
+    assert(after.tombstone_summary.files >= 1, "hybrid_search should expose tombstone summary for files");
+
+    const refetched = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_id: current.project.project_id },
+    });
+    assertEqual(refetched.project.lifecycle_status, "deindexed", "project registry should retain deindexed identity");
+
+    await usecase.run<any, any>("project.reindex_diff", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        source_rev: "asm-107-recover",
+        trigger_type: "incremental",
+        paths: [
+          {
+            relative_path: "src/asm-107/deindex.ts",
+            module: "src",
+            language: "ts",
+            content: "export function asm107DeindexSeed() { return 'reindexed'; }",
+          },
+        ],
+      },
+    });
+
+    const recovered = await usecase.run<any, any>("project.hybrid_search", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        query: "asm107DeindexSeed",
+        limit: 5,
+      },
+    });
+
+    assertEqual(recovered.project_lifecycle_status, "active", "reindex should reactivate project lifecycle for retrieval");
+    assertEqual(recovered.searchable, true, "reindex should re-enable searchable retrieval");
+    assert(Array.isArray(recovered.results), "reindex path should return normal retrieval payload");
+  });
+
+  await test("project.detach applies non-destructive detach semantics after deindex safety", async () => {
+    const current = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_alias: "agent-smart-memo-cmd" },
+    });
+
+    await usecase.run<any, any>("project.reindex_diff", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        trigger_type: "incremental",
+        source_rev: "asm-107-slice2-detach-seed",
+        paths: [
+          {
+            relative_path: "src/asm-107/detach.ts",
+            module: "src",
+            language: "ts",
+            content: "export function asm107DetachSeed() { return 'ok'; }",
+          },
+        ],
+      },
+    });
+
+    const detached = await usecase.run<any, any>("project.detach", {
+      ...ctx,
+      payload: {
+        project_ref: { project_id: current.project.project_id },
+        reason: "asm-107-slice2-detach",
+      },
+    });
+
+    assertEqual(detached.lifecycle_status, "detached", "detach should set lifecycle_status=detached");
+    assertEqual(detached.searchable, false, "detached project should be non-searchable");
+    assert(detached.detached_fields.aliases_removed >= 1, "detach should remove aliases");
+
+    const after = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_id: current.project.project_id },
+    });
+    assertEqual(after.project.lifecycle_status, "detached", "project should persist detached lifecycle state");
+
+    let aliasLookupFailed = false;
+    try {
+      await usecase.run<any, any>("project.get", {
+        ...ctx,
+        payload: { project_alias: "agent-smart-memo-cmd" },
+      });
+    } catch {
+      aliasLookupFailed = true;
+    }
+    assertEqual(aliasLookupFailed, false, "project.get by alias should return null, not throw, after detach");
+
+    const aliasLookup = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_alias: "agent-smart-memo-cmd" },
+    });
+    assertEqual(aliasLookup, null, "detached project alias should be removed from active alias map");
+
+    const search = await usecase.run<any, any>("project.hybrid_search", {
+      ...ctx,
+      payload: {
+        project_id: current.project.project_id,
+        query: "asm107DetachSeed",
+        limit: 5,
+      },
+    });
+    assertEqual(search.searchable, false, "detached project should disable retrieval");
+    assertEqual(search.project_lifecycle_status, "detached", "hybrid_search should expose detached lifecycle status");
+  });
+
+  await test("project.unregister requires confirm and performs safe unregister semantics", async () => {
+    await usecase.run<any, any>("project.register_command", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-unreg",
+        project_name: "Agent Smart Memo Unregister",
+        repo_root: "/tmp/agent-smart-memo-unreg",
+        options: {
+          trigger_index: false,
+        },
+      },
+    });
+
+    const current = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_alias: "agent-smart-memo-unreg" },
+    });
+
+    let confirmError = "";
+    try {
+      await usecase.run<any, any>("project.unregister", {
+        ...ctx,
+        payload: {
+          project_ref: { project_id: current.project.project_id },
+          reason: "missing-confirm-should-fail",
+        },
+      });
+    } catch (error) {
+      confirmError = error instanceof Error ? error.message : String(error);
+    }
+    assert(confirmError.includes("confirm=true"), "unregister should require explicit confirm=true");
+
+    const unregistered = await usecase.run<any, any>("project.unregister", {
+      ...ctx,
+      payload: {
+        project_ref: { project_id: current.project.project_id },
+        confirm: true,
+        mode: "safe",
+        reason: "asm-107-slice2-unregister",
+      },
+    });
+
+    assertEqual(unregistered.lifecycle_status, "disabled", "unregister should set lifecycle_status=disabled");
+    assertEqual(unregistered.searchable, false, "unregistered project should be non-searchable");
+    assertEqual(unregistered.registration_state.registration_status, "draft", "unregister should downgrade registration_status to draft");
+    assertEqual(unregistered.registration_state.validation_status, "warn", "unregister should mark validation warn");
+
+    const after = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_id: current.project.project_id },
+    });
+    assertEqual(after.project.lifecycle_status, "disabled", "disabled lifecycle should persist after unregister");
+
+    const byAlias = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_alias: "agent-smart-memo-unreg" },
+    });
+    assertEqual(byAlias, null, "unregister should remove alias from active registry map");
+  });
+
+  await test("project.purge_preview blocks destructive purge unless lifecycle is disabled", async () => {
+    await usecase.run<any, any>("project.register_command", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-purge-blocked",
+        project_name: "Agent Smart Memo Purge Blocked",
+        repo_root: "/tmp/agent-smart-memo-purge-blocked",
+        options: {
+          trigger_index: false,
+        },
+      },
+    });
+
+    const current = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_alias: "agent-smart-memo-purge-blocked" },
+    });
+
+    const preview = await usecase.run<any, any>("project.purge_preview", {
+      ...ctx,
+      payload: {
+        project_ref: { project_id: current.project.project_id },
+      },
+    });
+
+    assertEqual(preview.current_lifecycle_status, "active", "newly registered project should be active");
+    assertEqual(preview.purge_guard.allowed, false, "purge preview must block active lifecycle");
+    assert(preview.purge_guard.reason.includes("must be disabled"), "purge guard reason should explain disabled precondition");
+  });
+
+  await test("project.purge requires confirm=true and lifecycle disabled", async () => {
+    await usecase.run<any, any>("project.register_command", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-purge",
+        project_name: "Agent Smart Memo Purge",
+        repo_root: "/tmp/agent-smart-memo-purge",
+        options: {
+          trigger_index: false,
+        },
+      },
+    });
+
+    const current = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_alias: "agent-smart-memo-purge" },
+    });
+
+    await usecase.run<any, any>("project.unregister", {
+      ...ctx,
+      payload: {
+        project_ref: { project_id: current.project.project_id },
+        confirm: true,
+        mode: "safe",
+        reason: "prepare-for-purge",
+      },
+    });
+
+    const preview = await usecase.run<any, any>("project.purge_preview", {
+      ...ctx,
+      payload: {
+        project_ref: { project_id: current.project.project_id },
+      },
+    });
+
+    assertEqual(preview.current_lifecycle_status, "disabled", "purge preview should observe disabled lifecycle");
+    assertEqual(preview.purge_guard.allowed, true, "purge preview should allow disabled lifecycle");
+    assertEqual(preview.purge_guard.requires_confirm, true, "purge preview should require explicit confirm");
+
+    let confirmError = "";
+    try {
+      await usecase.run<any, any>("project.purge", {
+        ...ctx,
+        payload: {
+          project_ref: { project_id: current.project.project_id },
+        },
+      });
+    } catch (error) {
+      confirmError = error instanceof Error ? error.message : String(error);
+    }
+    assert(confirmError.includes("confirm=true"), "purge should require explicit confirm=true");
+
+    const purged = await usecase.run<any, any>("project.purge", {
+      ...ctx,
+      payload: {
+        project_ref: { project_id: current.project.project_id },
+        confirm: true,
+        reason: "asm-107-slice3",
+      },
+    });
+
+    assertEqual(purged.lifecycle_status, "purged", "purge should return purged lifecycle status");
+    assertEqual(purged.searchable, false, "purge should remain non-searchable");
+    assertEqual(purged.recoverable, false, "purge should be irreversible by design");
+
+    const after = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_id: current.project.project_id },
+    });
+    assertEqual(after, null, "purged project should be removed from registry lookup");
   });
 
   await test("project.list returns registry entries", async () => {

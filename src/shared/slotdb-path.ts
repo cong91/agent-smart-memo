@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { resolveAsmCoreSlotDbDir } from "./asm-config.js";
 
 export interface ResolveSlotDbDirInput {
   stateDir?: string;
@@ -18,18 +19,27 @@ function expandHome(input: string, homeDir?: string): string {
 
 /**
  * Resolve SlotDB directory with priority:
- * 1) OPENCLAW_SLOTDB_DIR
- * 2) plugin config slotDbDir
- * 3) legacy fallback: ${stateDir}/agent-memo
+ * 1) OPENCLAW_SLOTDB_DIR (runtime/env override)
+ * 2) plugin config slotDbDir (runtime-local adapter config)
+ * 3) ASM shared config core.storage.slotDbDir (~/.config/asm/config.json)
+ * 4) legacy fallback: ${stateDir}/agent-memo
  */
 export function resolveSlotDbDir(input: ResolveSlotDbDirInput): string {
   const env = input.env || process.env;
   const envSlotDbDir = env.OPENCLAW_SLOTDB_DIR?.trim();
   const configSlotDbDir = input.slotDbDir?.trim();
 
-  const resolvedFromConfig = envSlotDbDir || configSlotDbDir;
-  if (resolvedFromConfig) {
-    return expandHome(resolvedFromConfig, input.homeDir || env.HOME);
+  const resolvedFromRuntime = envSlotDbDir || configSlotDbDir;
+  if (resolvedFromRuntime) {
+    return expandHome(resolvedFromRuntime, input.homeDir || env.HOME);
+  }
+
+  const sharedCoreSlotDbDir = resolveAsmCoreSlotDbDir({
+    env,
+    homeDir: input.homeDir || env.HOME,
+  });
+  if (sharedCoreSlotDbDir) {
+    return expandHome(sharedCoreSlotDbDir, input.homeDir || env.HOME);
   }
 
   const stateDir = input.stateDir?.trim()
