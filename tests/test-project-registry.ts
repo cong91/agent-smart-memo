@@ -750,6 +750,19 @@ async function main() {
       inferredFeatureLookup.assembly_sources.includes("feature_pack"),
       "feature phrase extraction from raw query should attach feature pack",
     );
+
+    const precedenceLookup = await usecase.run<any, any>("project.developer_query", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo-cmd",
+        query: "show impact of ASM-78 for /project route",
+      },
+    });
+    assertEqual(precedenceLookup.intent, "change_aware_lookup", "change selectors should beat route selectors in precedence rules");
+    assert(
+      precedenceLookup.assembly_sources.includes("change_overlay"),
+      "precedence rules should still attach overlay when change selector wins",
+    );
   });
 
   await test("project.change_overlay.query maps overlay -> feature packs with confidence ordering", async () => {
