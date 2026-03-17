@@ -1324,6 +1324,52 @@ async function main() {
     assertEqual(preview.resolution_status, "resolved", "explicit cross-project should allow resolved preview on repo-root selector");
   });
 
+  await test("project.opencode_search blocks cross-project search unless explicit", async () => {
+    const primary = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_alias: "agent-smart-memo" },
+    });
+    const telegram = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_alias: "asm-telegram-onboarding" },
+    });
+
+    const result = await usecase.run<any, any>("project.opencode_search", {
+      ...ctx,
+      payload: {
+        project_id: primary.project.project_id,
+        project_alias: "asm-telegram-onboarding",
+        query: "code aware retrieval",
+      },
+    });
+
+    assertEqual(result.mode, "read-only", "cross-project blocked result must stay read-only");
+    assertEqual(result.resolution_status, "ambiguous", "cross-project search should not resolve unless explicit");
+    assertEqual(result.results, null, "cross-project blocked result should not execute retrieval");
+    assertEqual(result.binding.candidate_projects.length >= 2, true, "cross-project blocked result should expose multiple candidates");
+    assertEqual(telegram.project.project_id.length > 0, true, "secondary project fixture should exist");
+  });
+
+  await test("project.opencode_search allows cross-project search only when explicit", async () => {
+    const primary = await usecase.run<any, any>("project.get", {
+      ...ctx,
+      payload: { project_alias: "agent-smart-memo" },
+    });
+
+    const result = await usecase.run<any, any>("project.opencode_search", {
+      ...ctx,
+      payload: {
+        project_id: primary.project.project_id,
+        project_alias: "asm-telegram-onboarding",
+        explicit_cross_project: true,
+        query: "code aware retrieval",
+      },
+    });
+
+    assertEqual(result.resolution_status, "resolved", "explicit cross-project flag should allow resolved search");
+    assertEqual(result.mode, "read-only", "explicit cross-project search must remain read-only");
+  });
+
   await test("project.opencode_search prefers explicit project alias over session alias", async () => {
     const result = await usecase.run<any, any>("project.opencode_search", {
       ...ctx,
