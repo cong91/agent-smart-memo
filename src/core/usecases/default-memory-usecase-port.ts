@@ -43,6 +43,7 @@ import type {
   ProjectDeveloperQueryPrimaryResult,
   ProjectDeveloperQueryResponseV1,
 } from "../contracts/project-query-contracts.js";
+import { resolveAsmCoreProjectWorkspaceRoot } from "../../shared/asm-config.js";
 
 interface SlotGetPayload {
   key?: string;
@@ -234,6 +235,45 @@ interface ResolvedRepoSelection {
   notes: string[];
 }
 
+interface ProjectDeindexPayload {
+  project_id: string;
+  reason?: string | null;
+}
+
+interface ProjectDetachPayload {
+  project_ref: {
+    project_id?: string;
+    project_alias?: string;
+  };
+  reason?: string | null;
+}
+
+interface ProjectUnregisterPayload {
+  project_ref: {
+    project_id?: string;
+    project_alias?: string;
+  };
+  confirm?: boolean;
+  mode?: "safe";
+  reason?: string | null;
+}
+
+interface ProjectPurgePreviewPayload {
+  project_ref: {
+    project_id?: string;
+    project_alias?: string;
+  };
+}
+
+interface ProjectPurgePayload {
+  project_ref: {
+    project_id?: string;
+    project_alias?: string;
+  };
+  confirm?: boolean;
+  reason?: string | null;
+}
+
 interface ProjectReindexDiffPayload {
   project_id: string;
   source_rev?: string | null;
@@ -324,6 +364,7 @@ interface ProjectDeveloperQueryParsed {
   query_text: string;
   symbol_name?: string;
   relative_path?: string;
+  route_path?: string;
   tracker_issue_key?: string;
   task_id?: string;
   feature_key?: FeaturePackKey;
@@ -461,6 +502,16 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
         return this.handleProjectLinkTracker(payload as unknown as ProjectLinkTrackerPayload, req) as TRes;
       case "project.trigger_index":
         return this.handleProjectTriggerIndex(payload as unknown as ProjectTriggerIndexPayload, req) as TRes;
+      case "project.deindex":
+        return this.handleProjectDeindex(payload as unknown as ProjectDeindexPayload, req) as TRes;
+      case "project.detach":
+        return this.handleProjectDetach(payload as unknown as ProjectDetachPayload, req) as TRes;
+      case "project.unregister":
+        return this.handleProjectUnregister(payload as unknown as ProjectUnregisterPayload, req) as TRes;
+      case "project.purge_preview":
+        return this.handleProjectPurgePreview(payload as unknown as ProjectPurgePreviewPayload, req) as TRes;
+      case "project.purge":
+        return this.handleProjectPurge(payload as unknown as ProjectPurgePayload, req) as TRes;
       case "project.reindex_diff":
         return this.handleProjectReindexDiff(payload as unknown as ProjectReindexDiffPayload, req) as TRes;
       case "project.index_event":
@@ -1082,6 +1133,19 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       if (existsSync(resolved)) return resolved;
     }
 
+    const sharedWorkspaceRoot = resolveAsmCoreProjectWorkspaceRoot({ env: process.env, homeDir: process.env.HOME });
+    if (sharedWorkspaceRoot) {
+      const resolved = isAbsolute(sharedWorkspaceRoot)
+        ? resolve(sharedWorkspaceRoot)
+        : resolve(process.cwd(), sharedWorkspaceRoot);
+      try {
+        mkdirSync(resolved, { recursive: true });
+      } catch {
+        // ignore and fallback
+      }
+      if (existsSync(resolved)) return resolved;
+    }
+
     const fallback = resolve(process.env.HOME || process.cwd(), ".openclaw", "workspace", "projects");
     mkdirSync(fallback, { recursive: true });
     return fallback;
@@ -1480,6 +1544,61 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
         checksum,
         content,
       };
+    });
+  }
+
+  private handleProjectDeindex(payload: ProjectDeindexPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+
+    if (!payload.project_id) {
+      throw new Error("project.deindex requires payload.project_id");
+    }
+
+    return this.slotDb.deindexProject(identity.userId, identity.agentId, {
+      project_id: payload.project_id,
+      reason: payload.reason,
+    });
+  }
+
+  private handleProjectDetach(payload: ProjectDetachPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+    const project = this.resolveProjectRef(identity.userId, identity.agentId, payload.project_ref || {});
+
+    return this.slotDb.detachProject(identity.userId, identity.agentId, {
+      project_id: project.project_id,
+      reason: payload.reason,
+    });
+  }
+
+  private handleProjectUnregister(payload: ProjectUnregisterPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+    const project = this.resolveProjectRef(identity.userId, identity.agentId, payload.project_ref || {});
+
+    return this.slotDb.unregisterProject(identity.userId, identity.agentId, {
+      project_id: project.project_id,
+      confirm: payload.confirm,
+      mode: payload.mode,
+      reason: payload.reason,
+    });
+  }
+
+  private handleProjectPurgePreview(payload: ProjectPurgePreviewPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+    const project = this.resolveProjectRef(identity.userId, identity.agentId, payload.project_ref || {});
+
+    return this.slotDb.purgePreviewProject(identity.userId, identity.agentId, {
+      project_id: project.project_id,
+    });
+  }
+
+  private handleProjectPurge(payload: ProjectPurgePayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+    const project = this.resolveProjectRef(identity.userId, identity.agentId, payload.project_ref || {});
+
+    return this.slotDb.purgeProject(identity.userId, identity.agentId, {
+      project_id: project.project_id,
+      confirm: payload.confirm,
+      reason: payload.reason,
     });
   }
 
@@ -2461,7 +2580,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       },
       why_this_result: whyThisResult,
       generated_at: new Date().toISOString(),
-      generator_version: "asm-109-slice1",
+      generator_version: "asm-109-slice2",
     };
   }
 
@@ -2541,6 +2660,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
     const query = String(payload.query || "").trim();
     const symbolName = String(payload.symbol_name || "").trim();
     const relativePath = String(payload.relative_path || "").trim();
+    const routePath = String(payload.route_path || "").trim();
     const trackerIssueKey = String(payload.tracker_issue_key || "").trim();
     const taskId = String(payload.task_id || "").trim();
 
@@ -2552,6 +2672,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       locate: "locate_symbol",
       trace_flow: "change_lookup",
       impact: "change_lookup",
+      impact_analysis: "change_lookup",
       change_aware_lookup: "change_lookup",
       feature_understanding: "feature_lookup",
     };
@@ -2562,6 +2683,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
           query,
           symbolName,
           relativePath,
+          routePath,
           trackerIssueKey,
           taskId,
           hasFeatureSelector: Boolean(payload.feature_key || payload.feature_name),
@@ -2571,6 +2693,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       "locate",
       "trace_flow",
       "impact",
+      "impact_analysis",
       "change_aware_lookup",
       "feature_understanding",
     ];
@@ -2607,6 +2730,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       query_text,
       ...(symbolName ? { symbol_name: symbolName } : {}),
       ...(relativePath ? { relative_path: relativePath } : {}),
+      ...(routePath ? { route_path: routePath } : {}),
       ...(trackerIssueKey ? { tracker_issue_key: trackerIssueKey } : {}),
       ...(taskId ? { task_id: taskId } : {}),
       ...(feature_key ? { feature_key } : {}),
@@ -2617,20 +2741,24 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
     query: string;
     symbolName?: string;
     relativePath?: string;
+    routePath?: string;
     trackerIssueKey?: string;
     taskId?: string;
     hasFeatureSelector: boolean;
   }): ProjectDeveloperQueryCanonicalIntent {
     if (input.symbolName) return "locate_symbol";
-    if (input.relativePath) return "locate_file";
+    if (input.relativePath || input.routePath) return "locate_file";
     if (input.trackerIssueKey || input.taskId) return "change_lookup";
 
     const lowered = input.query.toLowerCase();
     if (input.hasFeatureSelector || /feature|capability|pack|understand/.test(lowered)) {
       return "feature_lookup";
     }
-    if (/trace|flow|impact|blast radius|affected|change-aware|change aware|overlay|lookup/.test(lowered)) {
+    if (/trace|flow|impact|impact analysis|blast radius|affected|change-aware|change aware|overlay|lookup/.test(lowered)) {
       return "change_lookup";
+    }
+    if (/route|endpoint|api\//.test(lowered)) {
+      return "locate_file";
     }
     if (/file|path|\.tsx?|\.jsx?|\/src\//.test(lowered)) {
       return "locate_file";
@@ -2649,7 +2777,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       if (resolved) return resolved;
     }
 
-    if (intent === "impact" || intent === "change_aware_lookup" || intent === "change_lookup") {
+    if (intent === "impact" || intent === "impact_analysis" || intent === "change_aware_lookup" || intent === "change_lookup") {
       return "change_aware_impact";
     }
 

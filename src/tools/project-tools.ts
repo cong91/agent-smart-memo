@@ -504,6 +504,249 @@ export function registerProjectTools(
   });
 
   api.registerTool({
+    name: "project_deindex",
+    label: "Project Deindex",
+    description:
+      "Mark a project as deindexed (non-destructive): keep registry identity but tombstone indexed artifacts so retrieval/search no longer returns them.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        reason: { type: "string" },
+      },
+      required: ["project_id"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_id: string;
+        reason?: string;
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.deindex", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_deindex",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
+    name: "project_detach",
+    label: "Project Detach",
+    description:
+      "Detach a project from active bindings (aliases/repo/tracker) after deindex safety step. Non-purge and reversible via re-register.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_ref: {
+          type: "object",
+          properties: {
+            project_id: { type: "string" },
+            project_alias: { type: "string" },
+          },
+        },
+        reason: { type: "string" },
+      },
+      required: ["project_ref"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_ref: { project_id?: string; project_alias?: string };
+        reason?: string;
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.detach", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_detach",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
+    name: "project_unregister",
+    label: "Project Unregister",
+    description:
+      "Safe unregister lifecycle step: requires explicit confirm=true, deindexes first, then disables project and detaches active bindings without destructive purge.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_ref: {
+          type: "object",
+          properties: {
+            project_id: { type: "string" },
+            project_alias: { type: "string" },
+          },
+        },
+        confirm: { type: "boolean" },
+        mode: { type: "string", enum: ["safe"] },
+        reason: { type: "string" },
+      },
+      required: ["project_ref", "confirm"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_ref: { project_id?: string; project_alias?: string };
+        confirm: boolean;
+        mode?: "safe";
+        reason?: string;
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.unregister", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_unregister",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
+    name: "project_purge_preview",
+    label: "Project Purge Preview",
+    description:
+      "Preview destructive purge impact with guardrails. Purge is only allowed when lifecycle_status=disabled and still requires explicit confirm in the purge call.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_ref: {
+          type: "object",
+          properties: {
+            project_id: { type: "string" },
+            project_alias: { type: "string" },
+          },
+        },
+      },
+      required: ["project_ref"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_ref: { project_id?: string; project_alias?: string };
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.purge_preview", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_purge_preview",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
+    name: "project_purge",
+    label: "Project Purge",
+    description:
+      "Destructive lifecycle endpoint. Requires project to be disabled first and explicit confirm=true. Use project_purge_preview before execution.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_ref: {
+          type: "object",
+          properties: {
+            project_id: { type: "string" },
+            project_alias: { type: "string" },
+          },
+        },
+        confirm: { type: "boolean" },
+        reason: { type: "string" },
+      },
+      required: ["project_ref", "confirm"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_ref: { project_id?: string; project_alias?: string };
+        confirm: boolean;
+        reason?: string;
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.purge", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_purge",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
     name: "project_telegram_onboarding",
     label: "Project Telegram Onboarding",
     description:
@@ -1117,6 +1360,7 @@ export function registerProjectTools(
             "locate",
             "trace_flow",
             "impact",
+            "impact_analysis",
             "change_aware_lookup",
             "feature_understanding",
           ],
@@ -1124,6 +1368,7 @@ export function registerProjectTools(
         limit: { type: "number" },
         symbol_name: { type: "string" },
         relative_path: { type: "string" },
+        route_path: { type: "string" },
         tracker_issue_key: { type: "string" },
         task_id: { type: "string" },
         feature_key: {
@@ -1154,11 +1399,13 @@ export function registerProjectTools(
           | "locate"
           | "trace_flow"
           | "impact"
+          | "impact_analysis"
           | "change_aware_lookup"
           | "feature_understanding";
         limit?: number;
         symbol_name?: string;
         relative_path?: string;
+        route_path?: string;
         tracker_issue_key?: string;
         task_id?: string;
         feature_key?:

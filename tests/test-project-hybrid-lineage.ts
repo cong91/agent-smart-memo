@@ -223,6 +223,8 @@ export function registerProjectTools(api: any) {
 
     assertEqual(result.project_id, projectId, "hybrid search should bind project_id");
     assert(result.count > 0, "hybrid search should return results");
+    assertEqual(result.task_context_resolution.status, "resolved", "task_context should resolve for known selector");
+    assertEqual(result.task_context_resolution.recoverable, false, "resolved task_context should be non-recoverable");
     assert(Boolean(result.task_lineage_context), "hybrid search should include lineage context");
     assert(result.results.some((r: any) => r.source === "task_registry" && r.task_id === "ASM-79"), "task result should include ASM-79");
     assert(result.results.some((r: any) => r.source === "file_index_state" && r.relative_path === "src/tools/project-tools.ts"), "file result should include touched file");
@@ -231,6 +233,28 @@ export function registerProjectTools(api: any) {
     for (let i = 1; i < result.results.length; i++) {
       assert(result.results[i - 1].score >= result.results[i].score, "results must be ranked descending by score");
     }
+  });
+
+  await test("project.hybrid_search returns structured unresolved selector result without hard fail", async () => {
+    const result = await usecase.run<any, any>("project.hybrid_search", {
+      ...ctx,
+      payload: {
+        project_id: projectId,
+        query: "project_hybrid_search",
+        task_context: {
+          tracker_issue_key: "ASM-404",
+          include_related: true,
+          include_parent_chain: true,
+        },
+      },
+    });
+
+    assertEqual(result.task_context_resolution.status, "selector_not_resolved", "unresolved selector should surface explicit status");
+    assertEqual(result.task_context_resolution.recoverable, true, "unresolved selector should be recoverable");
+    assertEqual(result.task_context_resolution.selector.tracker_issue_key, "ASM-404", "must return unresolved selector detail");
+    assertEqual(result.task_context_resolution.reason, "task lineage focus not found for provided selector", "must return semantic unresolved reason");
+    assertEqual(result.task_lineage_context, null, "lineage context should be null when unresolved");
+    assert(result.count > 0, "query path should remain usable when selector is unresolved");
   });
 
   await test("project.hybrid_search supports lexical filters", async () => {

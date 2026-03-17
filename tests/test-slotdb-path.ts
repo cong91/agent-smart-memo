@@ -1,4 +1,4 @@
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -12,10 +12,31 @@ function assert(condition: boolean, message: string): void {
 const TEST_ROOT = join(tmpdir(), `agent-memo-slotdb-path-${Date.now()}`);
 const STATE_DIR = join(TEST_ROOT, ".openclaw");
 const TARGET_SLOTDB_DIR = join(TEST_ROOT, "agent-memo");
+const ASM_CONFIG_DIR = join(TEST_ROOT, ".config", "asm");
+const ASM_CONFIG_PATH = join(ASM_CONFIG_DIR, "config.json");
+const ASM_SHARED_SLOTDB_DIR = join(TEST_ROOT, "asm-shared-slotdb");
 
 console.log("\n🧪 SlotDB Path Resolution Tests\n");
 
 try {
+  mkdirSync(ASM_CONFIG_DIR, { recursive: true });
+  writeFileSync(
+    ASM_CONFIG_PATH,
+    JSON.stringify(
+      {
+        schemaVersion: 1,
+        core: {
+          storage: {
+            slotDbDir: ASM_SHARED_SLOTDB_DIR,
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
   const resolvedFromEnv = resolveSlotDbDir({
     stateDir: STATE_DIR,
     slotDbDir: "/should/not/win",
@@ -34,9 +55,17 @@ try {
   assert(resolvedFromConfig === TARGET_SLOTDB_DIR, "config slotDbDir must be used when env absent");
   console.log("✅ config priority over legacy fallback");
 
+  const resolvedFromSharedConfig = resolveSlotDbDir({
+    stateDir: STATE_DIR,
+    env: { ...process.env, OPENCLAW_SLOTDB_DIR: "", ASM_CONFIG: ASM_CONFIG_PATH },
+    homeDir: process.env.HOME,
+  });
+  assert(resolvedFromSharedConfig === ASM_SHARED_SLOTDB_DIR, "shared ASM config slotDbDir must be used when runtime env/config are absent");
+  console.log("✅ shared ASM config priority over legacy fallback");
+
   const resolvedLegacy = resolveSlotDbDir({
     stateDir: STATE_DIR,
-    env: { ...process.env, OPENCLAW_SLOTDB_DIR: "" },
+    env: { ...process.env, OPENCLAW_SLOTDB_DIR: "", ASM_CONFIG: join(TEST_ROOT, ".missing-asm-config.json") },
     homeDir: process.env.HOME,
   });
   assert(resolvedLegacy === join(STATE_DIR, "agent-memo"), "legacy fallback must append agent-memo once");

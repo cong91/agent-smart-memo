@@ -104,9 +104,112 @@ export interface ProjectRecord {
   repo_root: string | null;
   repo_remote_primary: string | null;
   active_version: string | null;
-  lifecycle_status: "active" | "archived";
+  lifecycle_status: "active" | "archived" | "disabled" | "detached" | "deindexed" | "purged";
   created_at: string;
   updated_at: string;
+}
+
+export interface ProjectDeindexResult {
+  project_id: string;
+  lifecycle_status: "deindexed";
+  deindexed_at: string;
+  reason: string | null;
+  affected: {
+    files: number;
+    chunks: number;
+    symbols: number;
+  };
+  searchable: false;
+}
+
+export interface ProjectDetachResult {
+  project_id: string;
+  lifecycle_status: "detached";
+  detached_at: string;
+  reason: string | null;
+  detached_fields: {
+    repo_root: boolean;
+    repo_remote_primary: boolean;
+    active_version: boolean;
+    aliases_removed: number;
+    tracker_mappings_removed: number;
+  };
+  searchable: false;
+  next_actions: {
+    reattach_via_register_or_update: true;
+    reversible_by_re_register: true;
+  };
+}
+
+export interface ProjectUnregisterResult {
+  project_id: string;
+  lifecycle_status: "disabled";
+  unregistered_at: string;
+  mode: "safe";
+  reason: string | null;
+  detached_fields: {
+    aliases_removed: number;
+    tracker_mappings_removed: number;
+  };
+  registration_state: {
+    registration_status: "draft";
+    validation_status: "warn";
+  };
+  searchable: false;
+  audit: {
+    deindexed_first: boolean;
+    confirm_required: true;
+  };
+}
+
+export interface ProjectPurgePreviewResult {
+  project_id: string;
+  current_lifecycle_status: ProjectRecord["lifecycle_status"];
+  purge_guard: {
+    destructive: true;
+    allowed: boolean;
+    reason: string;
+    requires_lifecycle_status: "disabled";
+    requires_confirm: true;
+  };
+  affected: {
+    project_row: 1;
+    aliases: number;
+    tracker_mappings: number;
+    registration_state: number;
+    index_runs: number;
+    watch_state: number;
+    file_index_state: number;
+    chunk_registry: number;
+    symbol_registry: number;
+    task_registry: number;
+  };
+  previewed_at: string;
+}
+
+export interface ProjectPurgeResult {
+  project_id: string;
+  lifecycle_status: "purged";
+  purged_at: string;
+  reason: string | null;
+  deleted: {
+    project_row: 1;
+    aliases: number;
+    tracker_mappings: number;
+    registration_state: number;
+    index_runs: number;
+    watch_state: number;
+    file_index_state: number;
+    chunk_registry: number;
+    symbol_registry: number;
+    task_registry: number;
+  };
+  searchable: false;
+  recoverable: false;
+  audit: {
+    confirm_required: true;
+    allowed_from_lifecycle_status: "disabled";
+  };
 }
 
 export interface ProjectAliasRecord {
@@ -326,11 +429,30 @@ export interface ProjectHybridSearchResultItem {
   snippet: string;
 }
 
+export interface ProjectHybridSearchTaskContextResolution {
+  status: "not_requested" | "resolved" | "selector_not_resolved";
+  reason?: string;
+  selector: {
+    task_id?: string;
+    tracker_issue_key?: string;
+    task_title?: string;
+  };
+  recoverable: boolean;
+}
+
 export interface ProjectHybridSearchResult {
   query: string;
   project_id: string;
+  project_lifecycle_status?: ProjectRecord["lifecycle_status"];
+  searchable?: boolean;
+  tombstone_summary?: {
+    files: number;
+    chunks: number;
+    symbols: number;
+  };
   count: number;
   task_lineage_context: ProjectTaskLineageContextResult | null;
+  task_context_resolution: ProjectHybridSearchTaskContextResolution;
   results: ProjectHybridSearchResultItem[];
   debug?: {
     query_intent: {
@@ -1134,7 +1256,7 @@ export class SlotDB {
         repo_root: row.repo_root ? String(row.repo_root) : null,
         repo_remote_primary: row.repo_remote_primary ? String(row.repo_remote_primary) : null,
         active_version: row.active_version ? String(row.active_version) : null,
-        lifecycle_status: (String(row.lifecycle_status) as "active" | "archived"),
+        lifecycle_status: (String(row.lifecycle_status) as "active" | "archived" | "disabled" | "detached" | "deindexed" | "purged"),
         created_at: String(row.created_at),
         updated_at: String(row.updated_at),
       },
@@ -1325,6 +1447,399 @@ export class SlotDB {
     };
   }
 
+  deindexProject(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: { project_id: string; reason?: string | null },
+  ): ProjectDeindexResult {
+    const projectId = String(input.project_id || "").trim();
+    if (!projectId) throw new Error("project_id is required");
+
+    const project = this.getProjectById(scopeUserId, scopeAgentId, projectId);
+    if (!project) {
+      throw new Error(`project_id '${projectId}' is not registered`);
+    }
+
+    const now = new Date().toISOString();
+    const reason = input.reason == null ? null : String(input.reason).trim() || null;
+
+    const fileCountStmt = this.db.prepare(
+      `SELECT COUNT(*) as cnt FROM file_index_state
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND active = 1`,
+    );
+    const chunkCountStmt = this.db.prepare(
+      `SELECT COUNT(*) as cnt FROM chunk_registry
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND active = 1`,
+    );
+    const symbolCountStmt = this.db.prepare(
+      `SELECT COUNT(*) as cnt FROM symbol_registry
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND active = 1`,
+    );
+
+    const files = Number((fileCountStmt.get(scopeUserId, scopeAgentId, projectId) as { cnt: number } | undefined)?.cnt || 0);
+    const chunks = Number((chunkCountStmt.get(scopeUserId, scopeAgentId, projectId) as { cnt: number } | undefined)?.cnt || 0);
+    const symbols = Number((symbolCountStmt.get(scopeUserId, scopeAgentId, projectId) as { cnt: number } | undefined)?.cnt || 0);
+
+    this.db.prepare(
+      `UPDATE file_index_state
+       SET index_state = 'stale', active = 0, tombstone_at = ?, indexed_at = ?
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND active = 1`,
+    ).run(now, now, scopeUserId, scopeAgentId, projectId);
+
+    this.db.prepare(
+      `UPDATE chunk_registry
+       SET index_state = 'stale', active = 0, tombstone_at = ?, indexed_at = ?
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND active = 1`,
+    ).run(now, now, scopeUserId, scopeAgentId, projectId);
+
+    this.db.prepare(
+      `UPDATE symbol_registry
+       SET index_state = 'stale', active = 0, tombstone_at = ?, indexed_at = ?
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND active = 1`,
+    ).run(now, now, scopeUserId, scopeAgentId, projectId);
+
+    this.db.prepare(
+      `UPDATE projects
+       SET lifecycle_status = 'deindexed', updated_at = ?
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+    ).run(now, scopeUserId, scopeAgentId, projectId);
+
+    this.insertIndexRun(scopeUserId, scopeAgentId, {
+      run_id: randomUUID(),
+      project_id: projectId,
+      index_profile: "default",
+      trigger_type: "manual",
+      state: "indexed",
+      started_at: now,
+      finished_at: now,
+      error_message: reason ? `deindex:${reason}` : "deindex",
+    });
+
+    return {
+      project_id: projectId,
+      lifecycle_status: "deindexed",
+      deindexed_at: now,
+      reason,
+      affected: {
+        files,
+        chunks,
+        symbols,
+      },
+      searchable: false,
+    };
+  }
+
+  detachProject(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: { project_id: string; reason?: string | null },
+  ): ProjectDetachResult {
+    const projectId = String(input.project_id || "").trim();
+    if (!projectId) throw new Error("project_id is required");
+
+    const project = this.getProjectById(scopeUserId, scopeAgentId, projectId);
+    if (!project) {
+      throw new Error(`project_id '${projectId}' is not registered`);
+    }
+
+    const reason = input.reason == null ? null : String(input.reason).trim() || null;
+    if (project.lifecycle_status !== "deindexed") {
+      this.deindexProject(scopeUserId, scopeAgentId, {
+        project_id: projectId,
+        reason: reason || "detach_precondition_deindex",
+      });
+    }
+
+    const now = new Date().toISOString();
+    const aliasesRemoved = Number((this.db.prepare(
+      `SELECT COUNT(*) as cnt FROM project_aliases
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+    ).get(scopeUserId, scopeAgentId, projectId) as { cnt: number } | undefined)?.cnt || 0);
+    const trackerMappingsRemoved = Number((this.db.prepare(
+      `SELECT COUNT(*) as cnt FROM project_tracker_mappings
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+    ).get(scopeUserId, scopeAgentId, projectId) as { cnt: number } | undefined)?.cnt || 0);
+
+    this.db.prepare(
+      `DELETE FROM project_aliases
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+    ).run(scopeUserId, scopeAgentId, projectId);
+
+    this.db.prepare(
+      `DELETE FROM project_tracker_mappings
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+    ).run(scopeUserId, scopeAgentId, projectId);
+
+    this.db.prepare(
+      `UPDATE projects
+       SET lifecycle_status = 'detached', repo_root = NULL, repo_remote_primary = NULL, active_version = NULL, updated_at = ?
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+    ).run(now, scopeUserId, scopeAgentId, projectId);
+
+    return {
+      project_id: projectId,
+      lifecycle_status: "detached",
+      detached_at: now,
+      reason,
+      detached_fields: {
+        repo_root: project.repo_root != null,
+        repo_remote_primary: project.repo_remote_primary != null,
+        active_version: project.active_version != null,
+        aliases_removed: aliasesRemoved,
+        tracker_mappings_removed: trackerMappingsRemoved,
+      },
+      searchable: false,
+      next_actions: {
+        reattach_via_register_or_update: true,
+        reversible_by_re_register: true,
+      },
+    };
+  }
+
+  unregisterProject(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: { project_id: string; confirm?: boolean; mode?: "safe"; reason?: string | null },
+  ): ProjectUnregisterResult {
+    const projectId = String(input.project_id || "").trim();
+    if (!projectId) throw new Error("project_id is required");
+
+    const mode = input.mode || "safe";
+    if (mode !== "safe") {
+      throw new Error("project.unregister currently supports mode='safe' only");
+    }
+    if (input.confirm !== true) {
+      throw new Error("project.unregister requires explicit confirm=true");
+    }
+
+    const project = this.getProjectById(scopeUserId, scopeAgentId, projectId);
+    if (!project) {
+      throw new Error(`project_id '${projectId}' is not registered`);
+    }
+
+    const reason = input.reason == null ? null : String(input.reason).trim() || null;
+    let deindexedFirst = false;
+    if (project.lifecycle_status !== "deindexed") {
+      this.deindexProject(scopeUserId, scopeAgentId, {
+        project_id: projectId,
+        reason: reason || "unregister_precondition_deindex",
+      });
+      deindexedFirst = true;
+    }
+
+    const now = new Date().toISOString();
+    const aliasesRemoved = Number((this.db.prepare(
+      `SELECT COUNT(*) as cnt FROM project_aliases
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+    ).get(scopeUserId, scopeAgentId, projectId) as { cnt: number } | undefined)?.cnt || 0);
+    const trackerMappingsRemoved = Number((this.db.prepare(
+      `SELECT COUNT(*) as cnt FROM project_tracker_mappings
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+    ).get(scopeUserId, scopeAgentId, projectId) as { cnt: number } | undefined)?.cnt || 0);
+
+    this.db.prepare(
+      `DELETE FROM project_aliases
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+    ).run(scopeUserId, scopeAgentId, projectId);
+
+    this.db.prepare(
+      `DELETE FROM project_tracker_mappings
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+    ).run(scopeUserId, scopeAgentId, projectId);
+
+    this.db.prepare(
+      `UPDATE projects
+       SET lifecycle_status = 'disabled', repo_root = NULL, repo_remote_primary = NULL, active_version = NULL, updated_at = ?
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+    ).run(now, scopeUserId, scopeAgentId, projectId);
+
+    this.upsertProjectRegistrationState(scopeUserId, scopeAgentId, {
+      project_id: projectId,
+      registration_status: "draft",
+      validation_status: "warn",
+      validation_notes: reason ? `unregistered:${reason}` : "unregistered",
+      completeness_score: 0,
+      missing_required_fields: ["project_alias", "repo_root"],
+      last_validated_at: now,
+    });
+
+    return {
+      project_id: projectId,
+      lifecycle_status: "disabled",
+      unregistered_at: now,
+      mode,
+      reason,
+      detached_fields: {
+        aliases_removed: aliasesRemoved,
+        tracker_mappings_removed: trackerMappingsRemoved,
+      },
+      registration_state: {
+        registration_status: "draft",
+        validation_status: "warn",
+      },
+      searchable: false,
+      audit: {
+        deindexed_first: deindexedFirst,
+        confirm_required: true,
+      },
+    };
+  }
+
+  purgePreviewProject(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: { project_id: string },
+  ): ProjectPurgePreviewResult {
+    const projectId = String(input.project_id || "").trim();
+    if (!projectId) throw new Error("project_id is required");
+
+    const project = this.getProjectById(scopeUserId, scopeAgentId, projectId);
+    if (!project) {
+      throw new Error(`project_id '${projectId}' is not registered`);
+    }
+
+    const countBy = (table: string) =>
+      Number((this.db.prepare(
+        `SELECT COUNT(*) as cnt FROM ${table}
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+      ).get(scopeUserId, scopeAgentId, projectId) as { cnt: number } | undefined)?.cnt || 0);
+
+    const canPurge = project.lifecycle_status === "disabled";
+    const reason = canPurge
+      ? "safe to purge: lifecycle_status is disabled and explicit confirm is still required"
+      : `purge blocked: lifecycle_status must be disabled (current=${project.lifecycle_status})`;
+
+    return {
+      project_id: projectId,
+      current_lifecycle_status: project.lifecycle_status,
+      purge_guard: {
+        destructive: true,
+        allowed: canPurge,
+        reason,
+        requires_lifecycle_status: "disabled",
+        requires_confirm: true,
+      },
+      affected: {
+        project_row: 1,
+        aliases: countBy("project_aliases"),
+        tracker_mappings: countBy("project_tracker_mappings"),
+        registration_state: countBy("project_registration_state"),
+        index_runs: countBy("index_runs"),
+        watch_state: countBy("project_index_watch_state"),
+        file_index_state: countBy("file_index_state"),
+        chunk_registry: countBy("chunk_registry"),
+        symbol_registry: countBy("symbol_registry"),
+        task_registry: countBy("task_registry"),
+      },
+      previewed_at: new Date().toISOString(),
+    };
+  }
+
+  purgeProject(
+    scopeUserId: string,
+    scopeAgentId: string,
+    input: { project_id: string; confirm?: boolean; reason?: string | null },
+  ): ProjectPurgeResult {
+    const projectId = String(input.project_id || "").trim();
+    if (!projectId) throw new Error("project_id is required");
+    if (input.confirm !== true) {
+      throw new Error("project.purge requires explicit confirm=true");
+    }
+
+    const preview = this.purgePreviewProject(scopeUserId, scopeAgentId, { project_id: projectId });
+    if (!preview.purge_guard.allowed) {
+      throw new Error(preview.purge_guard.reason);
+    }
+
+    const now = new Date().toISOString();
+    const reason = input.reason == null ? null : String(input.reason).trim() || null;
+
+    const deleted = {
+      project_row: 1 as const,
+      aliases: preview.affected.aliases,
+      tracker_mappings: preview.affected.tracker_mappings,
+      registration_state: preview.affected.registration_state,
+      index_runs: preview.affected.index_runs,
+      watch_state: preview.affected.watch_state,
+      file_index_state: preview.affected.file_index_state,
+      chunk_registry: preview.affected.chunk_registry,
+      symbol_registry: preview.affected.symbol_registry,
+      task_registry: preview.affected.task_registry,
+    };
+
+    this.db.exec("BEGIN");
+    try {
+      this.db.prepare(
+        `DELETE FROM project_aliases
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+      ).run(scopeUserId, scopeAgentId, projectId);
+
+      this.db.prepare(
+        `DELETE FROM project_tracker_mappings
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+      ).run(scopeUserId, scopeAgentId, projectId);
+
+      this.db.prepare(
+        `DELETE FROM project_registration_state
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+      ).run(scopeUserId, scopeAgentId, projectId);
+
+      this.db.prepare(
+        `DELETE FROM index_runs
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+      ).run(scopeUserId, scopeAgentId, projectId);
+
+      this.db.prepare(
+        `DELETE FROM project_index_watch_state
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+      ).run(scopeUserId, scopeAgentId, projectId);
+
+      this.db.prepare(
+        `DELETE FROM file_index_state
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+      ).run(scopeUserId, scopeAgentId, projectId);
+
+      this.db.prepare(
+        `DELETE FROM chunk_registry
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+      ).run(scopeUserId, scopeAgentId, projectId);
+
+      this.db.prepare(
+        `DELETE FROM symbol_registry
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+      ).run(scopeUserId, scopeAgentId, projectId);
+
+      this.db.prepare(
+        `DELETE FROM task_registry
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+      ).run(scopeUserId, scopeAgentId, projectId);
+
+      this.db.prepare(
+        `DELETE FROM projects
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?`,
+      ).run(scopeUserId, scopeAgentId, projectId);
+
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+
+    return {
+      project_id: projectId,
+      lifecycle_status: "purged",
+      purged_at: now,
+      reason,
+      deleted,
+      searchable: false,
+      recoverable: false,
+      audit: {
+        confirm_required: true,
+        allowed_from_lifecycle_status: "disabled",
+      },
+    };
+  }
+
   reindexProjectByDiff(
     scopeUserId: string,
     scopeAgentId: string,
@@ -1474,7 +1989,20 @@ export class SlotDB {
         updated_at: nowIso,
       });
 
+      this.db.prepare(
+        `UPDATE projects
+         SET lifecycle_status = 'active', updated_at = ?
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND lifecycle_status = 'deindexed'`,
+      ).run(nowIso, scopeUserId, scopeAgentId, input.project_id);
+
       this.finishIndexRun(scopeUserId, scopeAgentId, runId, "indexed", null, nowIso);
+
+      this.db.prepare(
+        `UPDATE projects
+         SET lifecycle_status = 'active', updated_at = ?
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ?
+           AND lifecycle_status = 'deindexed'`,
+      ).run(nowIso, scopeUserId, scopeAgentId, input.project_id);
 
       return {
         run_id: runId,
@@ -1747,6 +2275,74 @@ export class SlotDB {
       throw new Error(`project_id '${projectId}' is not registered`);
     }
 
+    const isSearchDisabled = ["deindexed", "detached", "disabled", "purged"].includes(project.lifecycle_status);
+    if (isSearchDisabled) {
+      const files = Number((this.db.prepare(
+        `SELECT COUNT(*) as cnt FROM file_index_state
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND tombstone_at IS NOT NULL`,
+      ).get(scopeUserId, scopeAgentId, projectId) as { cnt: number } | undefined)?.cnt || 0);
+      const chunks = Number((this.db.prepare(
+        `SELECT COUNT(*) as cnt FROM chunk_registry
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND tombstone_at IS NOT NULL`,
+      ).get(scopeUserId, scopeAgentId, projectId) as { cnt: number } | undefined)?.cnt || 0);
+      const symbols = Number((this.db.prepare(
+        `SELECT COUNT(*) as cnt FROM symbol_registry
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND tombstone_at IS NOT NULL`,
+      ).get(scopeUserId, scopeAgentId, projectId) as { cnt: number } | undefined)?.cnt || 0);
+
+      const taskContextSelector = {
+        ...(input.task_context?.task_id ? { task_id: String(input.task_context.task_id).trim() } : {}),
+        ...(input.task_context?.tracker_issue_key ? { tracker_issue_key: String(input.task_context.tracker_issue_key).trim() } : {}),
+        ...(input.task_context?.task_title ? { task_title: String(input.task_context.task_title).trim() } : {}),
+      };
+      const reasonByLifecycle: Record<string, string> = {
+        deindexed: "project is deindexed; retrieval is disabled until reindex",
+        detached: "project is detached; retrieval is disabled until project is re-attached and reindexed",
+        disabled: "project is unregistered/disabled; retrieval is disabled until re-registration",
+        purged: "project is purged; retrieval is disabled",
+      };
+
+      return {
+        query,
+        project_id: projectId,
+        project_lifecycle_status: project.lifecycle_status,
+        searchable: false,
+        tombstone_summary: { files, chunks, symbols },
+        count: 0,
+        task_lineage_context: null,
+        task_context_resolution: {
+          status: Object.keys(taskContextSelector).length > 0 ? "selector_not_resolved" : "not_requested",
+          ...(Object.keys(taskContextSelector).length > 0
+            ? { reason: reasonByLifecycle[project.lifecycle_status] || "project lifecycle disables retrieval" }
+            : {}),
+          selector: taskContextSelector,
+          recoverable: project.lifecycle_status !== "purged",
+        },
+        results: [],
+        debug: input.debug
+          ? {
+              query_intent: {
+                looks_code_intent: false,
+                looks_identifier_query: false,
+                query_tokens: [],
+              },
+              candidate_counts: {
+                file_index_state: 0,
+                symbol_registry: 0,
+                chunk_registry: 0,
+                task_registry: 0,
+              },
+              top_candidates: {
+                file_index_state: [],
+                symbol_registry: [],
+                chunk_registry: [],
+                task_registry: [],
+              },
+            }
+          : undefined,
+      };
+    }
+
     const limit = Math.min(Math.max(Number(input.limit || 10), 1), 50);
     const queryLc = query.toLowerCase();
     const queryTokens = Array.from(new Set(queryLc.split(/[^a-z0-9._/-]+/i).map((t) => t.trim()).filter(Boolean)));
@@ -1776,17 +2372,46 @@ export class SlotDB {
       query.includes('.') ||
       query.includes('_');
     const taskContextInput = input.task_context;
+    const taskContextSelector = {
+      ...(taskContextInput?.task_id ? { task_id: String(taskContextInput.task_id).trim() } : {}),
+      ...(taskContextInput?.tracker_issue_key ? { tracker_issue_key: String(taskContextInput.tracker_issue_key).trim() } : {}),
+      ...(taskContextInput?.task_title ? { task_title: String(taskContextInput.task_title).trim() } : {}),
+    };
 
     let lineageContext: ProjectTaskLineageContextResult | null = null;
-    if (taskContextInput && (taskContextInput.task_id || taskContextInput.tracker_issue_key || taskContextInput.task_title)) {
-      lineageContext = this.getTaskLineageContext(scopeUserId, scopeAgentId, {
-        project_id: projectId,
-        task_id: taskContextInput.task_id,
-        tracker_issue_key: taskContextInput.tracker_issue_key,
-        task_title: taskContextInput.task_title,
-        include_parent_chain: taskContextInput.include_parent_chain,
-        include_related: taskContextInput.include_related,
-      });
+    let taskContextResolution: ProjectHybridSearchTaskContextResolution = {
+      status: "not_requested",
+      selector: taskContextSelector,
+      recoverable: false,
+    };
+
+    if (Object.keys(taskContextSelector).length > 0) {
+      try {
+        lineageContext = this.getTaskLineageContext(scopeUserId, scopeAgentId, {
+          project_id: projectId,
+          task_id: taskContextInput?.task_id,
+          tracker_issue_key: taskContextInput?.tracker_issue_key,
+          task_title: taskContextInput?.task_title,
+          include_parent_chain: taskContextInput?.include_parent_chain,
+          include_related: taskContextInput?.include_related,
+        });
+        taskContextResolution = {
+          status: "resolved",
+          selector: taskContextSelector,
+          recoverable: false,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.includes("task lineage focus not found for provided selector")) {
+          throw error;
+        }
+        taskContextResolution = {
+          status: "selector_not_resolved",
+          reason: "task lineage focus not found for provided selector",
+          selector: taskContextSelector,
+          recoverable: true,
+        };
+      }
     }
 
     const lexicalPathPrefix = this.normalizeStringArray(input.path_prefix).map((p) => this.normalizeRelativePath(p)).filter(Boolean);
@@ -2049,8 +2674,11 @@ export class SlotDB {
     return {
       query,
       project_id: projectId,
+      project_lifecycle_status: project.lifecycle_status,
+      searchable: true,
       count: ranked.length,
       task_lineage_context: lineageContext,
+      task_context_resolution: taskContextResolution,
       results: ranked,
       debug: debugEnabled
         ? {
