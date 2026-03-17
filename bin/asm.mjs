@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { runInitOpenClaw } from "../scripts/init-openclaw.mjs";
 import { createShellRunner, runInitSetupFlow, runInstallPlatformFlow } from "../src/cli/platform-installers.ts";
+import { runOpencodeMcpServer } from "./opencode-mcp-server.mjs";
 
 const ASM_PLUGIN_PACKAGE = "@mrc2204/agent-smart-memo";
 const ASM_PLUGIN_ID = "agent-smart-memo";
@@ -60,6 +62,10 @@ export function parseAsmCliArgs(argv = []) {
 
   if (first === "project-event") {
     return { command: "project-event", argv: args.slice(1) };
+  }
+
+  if (first === "mcp" && (args[1] || "") === "opencode") {
+    return { command: "mcp-opencode", argv: args.slice(2) };
   }
 
   return { command: "unknown", argv: args };
@@ -241,12 +247,20 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   if (parsed.command === "install-platform") {
-    const result = await runInstallPlatformFlow({ platform: parsed.platform, argv: parsed.argv });
+    const result = await runInstallPlatformFlow({
+      platform: parsed.platform,
+      runner: createShellRunner(),
+      initOpenClaw: runInitOpenClaw,
+      log: console.log,
+      argv: parsed.argv,
+      env: process.env,
+      homeDir: process.env.HOME,
+    });
     return result.ok ? 0 : 1;
   }
 
   if (parsed.command === "init-setup") {
-    const result = await runInitSetupFlow({ argv: parsed.argv });
+    const result = await runInitSetupFlow({ log: console.log, env: process.env, homeDir: process.env.HOME, argv: parsed.argv });
     return result.ok ? 0 : 1;
   }
 
@@ -259,6 +273,11 @@ export async function main(argv = process.argv.slice(2)) {
       console.error(`[ASM-84] init-openclaw failed: ${error instanceof Error ? error.message : String(error)}`);
       return 1;
     }
+  }
+
+  if (parsed.command === "mcp-opencode") {
+    await runOpencodeMcpServer();
+    return 0;
   }
 
   if (parsed.command === "project-event") {

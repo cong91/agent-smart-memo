@@ -65,6 +65,11 @@ test("parseAsmCliArgs supports help, setup-openclaw, install <platform>, and ini
     "init-setup should parse",
   );
   assertEqual(
+    parseAsmCliArgs(["mcp", "opencode"]),
+    { command: "mcp-opencode", argv: [] },
+    "mcp opencode should parse",
+  );
+  assertEqual(
     parseAsmCliArgs(["init-openclaw", "--non-interactive"]),
     { command: "init-openclaw", argv: ["--non-interactive"] },
     "init-openclaw should parse",
@@ -270,7 +275,10 @@ test("runInstallPlatformFlow returns not-implemented contract for paperclip and 
   assertEqual(opencode.ok, true, "opencode install should now be implemented");
   assertEqual(opencode.step, "install-opencode", "opencode should return implemented install step");
   const written = JSON.parse(fs.readFileSync(path.join(home, ".config", "opencode", "config.json"), "utf8"));
-  assertEqual(written.mcp.servers.asm.mode, "read-only", "opencode config should wire ASM MCP server in read-only mode");
+  assertEqual(written.mcp.servers.asm.type, "local", "opencode config should register local MCP server");
+  assertEqual(JSON.stringify(written.mcp.servers.asm.command), JSON.stringify(["asm", "mcp", "opencode"]), "opencode config should spawn asm mcp opencode");
+  assertEqual(written.mcp.servers.asm.environment.ASM_MCP_AGENT_ID, "opencode", "opencode config should scope MCP agent id");
+  assertEqual(written.mcp.servers.asm.enabled, true, "opencode config should enable ASM MCP server");
 });
 
 test("runSetupOpenClawFlow fails early when openclaw missing", async () => {
