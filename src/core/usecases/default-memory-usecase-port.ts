@@ -2585,7 +2585,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       },
       why_this_result: whyThisResult,
       generated_at: new Date().toISOString(),
-      generator_version: "asm-109-slice5",
+      generator_version: "asm-109-slice6",
     };
   }
 
@@ -2672,6 +2672,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
     const trackerIssueKeys = this.extractTrackerIssueKeys(query);
     const taskIds = this.extractTaskIds(query);
     const routePaths = this.extractRoutePaths(query);
+    const inferredFeatureKey = this.extractFeatureKeyFromQuery(query);
 
     const canonicalFromExplicit: Record<ProjectDeveloperQueryIntent, ProjectDeveloperQueryCanonicalIntent> = {
       locate_symbol: "locate_symbol",
@@ -2718,6 +2719,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
 
     const feature_key = payload.feature_key
       || (payload.feature_name ? this.tryResolveFeatureKeyInput(undefined, payload.feature_name) : null)
+      || ((canonical_intent === "feature_lookup" && !query && inferredFeatureKey) ? inferredFeatureKey : null)
       || (canonical_intent === "change_lookup" ? "change_aware_impact" : undefined);
 
     const query_text = String(
@@ -2766,7 +2768,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
     if (input.trackerIssueKey || input.taskId || input.taskTitle) return "change_lookup";
 
     const lowered = input.query.toLowerCase();
-    if (input.hasFeatureSelector || /feature|capability|pack|understand/.test(lowered)) {
+    if (input.hasFeatureSelector || this.extractFeatureKeyFromQuery(input.query)) {
       return "feature_lookup";
     }
     if (/trace|flow|impact|impact analysis|blast radius|affected|change-aware|change aware|overlay|lookup/.test(lowered)) {
@@ -2839,6 +2841,12 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
   private extractRoutePaths(query: string): string[] {
     const matches = String(query || "").match(/\/(?:[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*)?/g) || [];
     return Array.from(new Set(matches.map((item) => item.trim()).filter((item) => item.startsWith("/") && item.length >= 2)));
+  }
+
+  private extractFeatureKeyFromQuery(query: string): FeaturePackKey | null {
+    const normalized = String(query || "").trim();
+    if (!normalized) return null;
+    return this.tryResolveFeatureKeyInput(undefined, normalized);
   }
 
   private resolveFeatureKeyInput(featureKey?: FeaturePackKey, featureName?: string): FeaturePackKey {
