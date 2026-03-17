@@ -1,9 +1,7 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { doctorAsmSharedConfig, getAsmSharedConfig, resolveAsmConfigPath } from "../src/shared/asm-config.ts";
-import { runInitOpenClaw } from "../scripts/init-openclaw.mjs";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { createShellRunner, runInitSetupFlow, runInstallPlatformFlow } from "../src/cli/platform-installers.ts";
 
 const ASM_PLUGIN_PACKAGE = "@mrc2204/agent-smart-memo";
 const ASM_PLUGIN_ID = "agent-smart-memo";
@@ -18,24 +16,6 @@ function includesAsmPlugin(output) {
     haystack.includes(ASM_PLUGIN_ID) ||
     haystack.includes(ASM_PLUGIN_PACKAGE.toLowerCase())
   );
-}
-
-export function createShellRunner(spawnImpl = spawnSync) {
-  return (command, args = []) => {
-    const result = spawnImpl(command, args, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
-    });
-
-    return {
-      ok: result.status === 0 && !result.error,
-      code: result.status ?? (result.error ? 1 : 0),
-      stdout: text(result.stdout),
-      stderr: text(result.stderr),
-      error: result.error ? String(result.error.message || result.error) : "",
-    };
-  };
 }
 
 export function parseAsmCliArgs(argv = []) {
@@ -104,96 +84,6 @@ export function printHelp(log = console.log) {
   log("Roadmap commands (not implemented yet):");
   log("  asm doctor");
   log("  asm test-openclaw");
-}
-
-export async function runInitSetupFlow({
-  log = console.log,
-  env = process.env,
-  homeDir = process.env.HOME,
-  argv = [],
-} = {}) {
-  const nonInteractive = Array.isArray(argv) && argv.some((item) => ["--yes", "-y", "--non-interactive"].includes(String(item).trim()));
-  const path = resolveAsmConfigPath({ env, homeDir });
-  const doctor = doctorAsmSharedConfig({ env, homeDir });
-  const loaded = getAsmSharedConfig({ env, homeDir });
-
-  const baseConfig = loaded.config || { schemaVersion: 1, core: {}, adapters: {} };
-  const nextConfig = {
-    schemaVersion: typeof baseConfig.schemaVersion === "number" ? baseConfig.schemaVersion : 1,
-    ...baseConfig,
-    core: {
-      ...(baseConfig.core || {}),
-      projectWorkspaceRoot: baseConfig.core?.projectWorkspaceRoot || "~/Work/projects",
-      storage: {
-        ...(baseConfig.core?.storage || {}),
-        slotDbDir: baseConfig.core?.storage?.slotDbDir || "~/.local/share/asm/slotdb",
-      },
-    },
-    adapters: {
-      ...(baseConfig.adapters || {}),
-      openclaw: {
-        enabled: true,
-        ...((baseConfig.adapters || {}).openclaw || {}),
-      },
-      paperclip: {
-        enabled: true,
-        ...((baseConfig.adapters || {}).paperclip || {}),
-      },
-      opencode: {
-        enabled: true,
-        mode: "read-only",
-        ...((baseConfig.adapters || {}).opencode || {}),
-      },
-    },
-  };
-
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
-
-  log(`[ASM-104] init-setup ${doctor.exists ? "updated" : "created"} shared config at: ${path}`);
-  if (!nonInteractive) {
-    log("[ASM-104] shared defaults ensured for core.projectWorkspaceRoot, core.storage.slotDbDir, and adapter enablement.");
-  }
-
-  return {
-    ok: true,
-    step: "init-setup",
-    path,
-    existed: doctor.exists,
-    nonInteractive,
-  };
-}
-
-export async function runInstallPlatformFlow({
-  platform,
-  runner = createShellRunner(),
-  initOpenClaw = runInitOpenClaw,
-  log = console.log,
-  argv = [],
-} = {}) {
-  const normalized = String(platform || "").trim().toLowerCase();
-
-  if (normalized === "openclaw") {
-    return runSetupOpenClawFlow({ runner, initOpenClaw, log, argv });
-  }
-
-  if (normalized === "paperclip") {
-    log("[ASM-104] install paperclip is not implemented yet.");
-    log("[ASM-104] Intended flow: prepare Paperclip runtime/plugin artifact, then guide/install into Paperclip host using shared ASM config.");
-    log("[ASM-104] Current local references: npm run package:paperclip, npm run package:paperclip:plugin-local, docs/testing/paperclip-local-install-debug-runbook.md");
-    return { ok: false, step: "install-paperclip-not-implemented", platform: normalized };
-  }
-
-  if (normalized === "opencode") {
-    log("[ASM-104] install opencode is not implemented yet.");
-    log("[ASM-104] Intended flow: bootstrap read-only/MCP integration and write OpenCode adapter config using ASM shared config.");
-    log("[ASM-104] Runtime retrieval contract is available via ASM-106; installer wiring remains to be implemented.");
-    return { ok: false, step: "install-opencode-not-implemented", platform: normalized };
-  }
-
-  log(`[ASM-104] Unknown install target: ${normalized || "(empty)"}`);
-  log("[ASM-104] Supported install targets right now: openclaw | paperclip | opencode");
-  return { ok: false, step: "unknown-install-target", platform: normalized || null };
 }
 
 export function detectPluginInstalled(runner = createShellRunner()) {
