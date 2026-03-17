@@ -2,6 +2,7 @@ import {
   createShellRunner,
   detectPluginInstalled,
   parseAsmCliArgs,
+  runInitSetupFlow,
   runInstallPlatformFlow,
   runSetupOpenClawFlow,
 } from "../bin/asm.mjs";
@@ -53,6 +54,11 @@ test("parseAsmCliArgs supports help, setup-openclaw, install <platform>, and ini
     parseAsmCliArgs(["install", "paperclip"]),
     { command: "install-platform", platform: "paperclip", argv: [] },
     "install paperclip should parse",
+  );
+  assertEqual(
+    parseAsmCliArgs(["init-setup", "--yes"]),
+    { command: "init-setup", argv: ["--yes"] },
+    "init-setup should parse",
   );
   assertEqual(
     parseAsmCliArgs(["init-openclaw", "--non-interactive"]),
@@ -206,6 +212,20 @@ test("runInstallPlatformFlow routes openclaw to setup-openclaw flow", async () =
 
   assertEqual(result.ok, true, "install openclaw should route through existing setup flow");
   assertEqual(called, 1, "install openclaw should invoke bootstrap path once");
+});
+
+test("runInitSetupFlow creates shared ASM config with platform defaults", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "asm-init-setup-"));
+  const result = await runInitSetupFlow({ env: { ...process.env, HOME: home }, homeDir: home, argv: ["--yes"], log: () => {} });
+  const written = JSON.parse(fs.readFileSync(result.path, "utf8"));
+
+  assertEqual(result.ok, true, "init-setup should succeed");
+  assertEqual(written.core.projectWorkspaceRoot, "~/Work/projects", "init-setup should ensure default shared workspace root");
+  assertEqual(written.adapters.opencode.mode, "read-only", "init-setup should enforce read-only default for opencode adapter");
 });
 
 test("runInstallPlatformFlow returns not-implemented contract for paperclip/opencode", async () => {
