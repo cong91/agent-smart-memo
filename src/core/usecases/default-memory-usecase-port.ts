@@ -2764,13 +2764,10 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
     hasFeatureSelector: boolean;
   }): ProjectDeveloperQueryCanonicalIntent {
     if (input.symbolName) return "locate_symbol";
-    if (input.relativePath || input.routePath) return "locate_file";
     if (input.trackerIssueKey || input.taskId || input.taskTitle) return "change_lookup";
+    if (input.relativePath || input.routePath) return "locate_file";
 
     const lowered = input.query.toLowerCase();
-    if (input.hasFeatureSelector || this.extractFeatureKeyFromQuery(input.query)) {
-      return "feature_lookup";
-    }
     if (/trace|flow|impact|impact analysis|blast radius|affected|change-aware|change aware|overlay|lookup/.test(lowered)) {
       return "change_lookup";
     }
@@ -2779,6 +2776,9 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
     }
     if (/file|path|\.tsx?|\.jsx?|\/src\//.test(lowered)) {
       return "locate_file";
+    }
+    if (input.hasFeatureSelector || this.extractFeatureKeyFromQuery(input.query)) {
+      return "feature_lookup";
     }
     return "locate_symbol";
   }
