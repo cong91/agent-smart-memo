@@ -145,6 +145,53 @@ export function registerProjectTools(
   });
 
   api.registerTool({
+    name: "project_binding_preview",
+    label: "Project Binding Preview",
+    description: "Read-only OpenCode-style project binding preview. Resolves active project by project_id/project_alias/repo_root/session alias, blocks ambiguous multi-project binding unless cross-project is explicit.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        project_alias: { type: "string" },
+        repo_root: { type: "string" },
+        session_project_alias: { type: "string" },
+        allow_cross_project: { type: "boolean" },
+      },
+    },
+    async execute(
+      _id: string,
+      params: {
+        project_id?: string;
+        project_alias?: string;
+        repo_root?: string;
+        session_project_alias?: string;
+        allow_cross_project?: boolean;
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.binding_preview", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_binding_preview",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
     name: "project_registration_state_set",
     label: "Project Registration State Set",
     description: "Update registration/validation state for a project registry identity.",

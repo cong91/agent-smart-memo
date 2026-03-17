@@ -130,6 +130,14 @@ interface ProjectGetPayload {
   project_alias?: string;
 }
 
+interface ProjectBindingPreviewPayload {
+  project_id?: string;
+  project_alias?: string;
+  repo_root?: string;
+  session_project_alias?: string;
+  allow_cross_project?: boolean;
+}
+
 interface ProjectSetRegistrationStatePayload {
   project_id: string;
   registration_status: "draft" | "registered" | "validated" | "blocked";
@@ -494,6 +502,8 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
         return this.handleProjectRegister(payload as unknown as ProjectRegisterPayload, req) as TRes;
       case "project.get":
         return this.handleProjectGet(payload as unknown as ProjectGetPayload, req) as TRes;
+      case "project.binding_preview":
+        return this.handleProjectBindingPreview(payload as unknown as ProjectBindingPreviewPayload, req) as TRes;
       case "project.list":
         return this.handleProjectList(req) as TRes;
       case "project.set_registration_state":
@@ -729,6 +739,89 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
   private handleProjectList(req: CoreRequestEnvelope<unknown>) {
     const identity = normalizePrivateIdentity(req.context);
     return this.slotDb.listProjects(identity.userId, identity.agentId);
+  }
+
+  private handleProjectBindingPreview(payload: ProjectBindingPreviewPayload, req: CoreRequestEnvelope<unknown>) {
+    const identity = normalizePrivateIdentity(req.context);
+    const projects = this.slotDb.listProjects(identity.userId, identity.agentId);
+    const normalizedRepoRoot = this.normalizeRepoRootInput(payload.repo_root);
+    const aliasSelector = String(payload.project_alias || payload.session_project_alias || "").trim();
+    const matches: Array<{
+      project_id: string;
+      project_alias: string | null;
+      project_name: string;
+      repo_root: string | null;
+      lifecycle_status: string;
+      source: "project_id" | "project_alias" | "session_project_alias" | "repo_root";
+    }> = [];
+
+    const pushMatch = (project: any, aliases: any[], source: "project_id" | "project_alias" | "session_project_alias" | "repo_root") => {
+      if (matches.some((item) => item.project_id === project.project_id && item.source === source)) return;
+      matches.push({
+        project_id: project.project_id,
+        project_alias: aliases.find((item) => item.is_primary === 1)?.project_alias || aliases[0]?.project_alias || null,
+        project_name: project.project_name,
+        repo_root: project.repo_root,
+        lifecycle_status: project.lifecycle_status,
+        source,
+      });
+    };
+
+    if (payload.project_id) {
+      const direct = this.slotDb.getProjectById(identity.userId, identity.agentId, payload.project_id);
+      if (direct) {
+        const row = projects.find((item) => item.project.project_id === direct.project_id);
+        pushMatch(direct, row?.aliases || [], "project_id");
+      }
+    }
+
+    if (aliasSelector) {
+      const byAlias = this.slotDb.getProjectByAlias(identity.userId, identity.agentId, aliasSelector);
+      if (byAlias) {
+        const row = projects.find((item) => item.project.project_id === byAlias.project.project_id);
+        pushMatch(byAlias.project, row?.aliases || [byAlias.alias], payload.project_alias ? "project_alias" : "session_project_alias");
+      }
+    }
+
+    if (normalizedRepoRoot) {
+      for (const row of projects) {
+        const projectRepoRoot = this.normalizeRepoRootInput(row.project.repo_root || undefined);
+        if (projectRepoRoot && projectRepoRoot === normalizedRepoRoot) {
+          pushMatch(row.project, row.aliases, "repo_root");
+        }
+      }
+    }
+
+    const uniqueByProject = Array.from(new Map(matches.map((item) => [item.project_id, item] as const)).values());
+    const activeMatches = uniqueByProject.filter((item) => item.lifecycle_status === "active");
+    const crossProjectRequired = activeMatches.length > 1;
+    const allowed = !crossProjectRequired || payload.allow_cross_project === true;
+    const selected = activeMatches[0] || uniqueByProject[0] || null;
+
+    return {
+      mode: "read-only",
+      project_scoped_by_default: true,
+      cross_project_allowed: payload.allow_cross_project === true,
+      resolution_status: selected
+        ? (crossProjectRequired && !allowed ? "ambiguous" : "resolved")
+        : "unresolved",
+      selected_project: selected,
+      candidate_projects: uniqueByProject,
+      resolution: {
+        selectors: {
+          project_id: payload.project_id || null,
+          project_alias: payload.project_alias || null,
+          session_project_alias: payload.session_project_alias || null,
+          repo_root: normalizedRepoRoot || null,
+        },
+        cross_project_required: crossProjectRequired,
+        explicit_cross_project_required: crossProjectRequired,
+        read_only_tool_surface: ["project_registry_get", "project_registry_list", "project_hybrid_search", "project_developer_query"],
+      },
+      errors: selected
+        ? (crossProjectRequired && !allowed ? ["multiple active project matches found; explicit cross-project approval required"] : [])
+        : ["no registered project matched provided selectors"],
+    };
   }
 
   private handleProjectSetRegistrationState(payload: ProjectSetRegistrationStatePayload, req: CoreRequestEnvelope<unknown>) {
