@@ -927,10 +927,13 @@ export function registerProjectTools(
       type: "object",
       properties: {
         project_id: { type: "string" },
+        repo_root: { type: "string" },
         source_rev: { type: "string" },
-        event_type: { type: "string", enum: ["post_commit", "post_merge", "manual"] },
+        event_type: { type: "string", enum: ["post_commit", "post_merge", "post_rewrite", "manual"] },
         changed_files: { type: "array", items: { type: "string" } },
         deleted_files: { type: "array", items: { type: "string" } },
+        trusted_sync: { type: "boolean" },
+        full_snapshot: { type: "boolean" },
       },
       required: ["project_id"],
     },
@@ -938,10 +941,13 @@ export function registerProjectTools(
       _id: string,
       params: {
         project_id: string;
+        repo_root?: string;
         source_rev?: string;
-        event_type?: "post_commit" | "post_merge" | "manual";
+        event_type?: "post_commit" | "post_merge" | "post_rewrite" | "manual";
         changed_files?: string[];
         deleted_files?: string[];
+        trusted_sync?: boolean;
+        full_snapshot?: boolean;
       },
       ctx: any,
     ) {
