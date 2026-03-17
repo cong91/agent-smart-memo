@@ -52,6 +52,7 @@ export type MemoryUseCaseName =
   | "project.feature_pack.query"
   | "project.developer_query"
   | "project.binding_preview"
+  | "project.opencode_search"
   | "memory.capture"
   | "memory.search"
   | "graph.entity.get"

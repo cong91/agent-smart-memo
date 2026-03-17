@@ -1387,6 +1387,63 @@ export function registerProjectTools(
   });
 
   api.registerTool({
+    name: "project_opencode_search",
+    label: "Project OpenCode Search",
+    description:
+      "Read-only OpenCode retrieval surface. Resolves project binding first, then runs project-scoped developer query. Cross-project behavior requires explicit opt-in.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        limit: { type: "number" },
+        project_id: { type: "string" },
+        project_alias: { type: "string" },
+        repo_root: { type: "string" },
+        session_project_alias: { type: "string" },
+        explicit_project_id: { type: "string" },
+        explicit_project_alias: { type: "string" },
+        explicit_cross_project: { type: "boolean" },
+      },
+      required: ["query"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        query: string;
+        limit?: number;
+        project_id?: string;
+        project_alias?: string;
+        repo_root?: string;
+        session_project_alias?: string;
+        explicit_project_id?: string;
+        explicit_project_alias?: string;
+        explicit_cross_project?: boolean;
+      },
+      ctx: any,
+    ) {
+      try {
+        const sessionKey = getSessionKey(ctx);
+        const { userId, agentId } = parseOpenClawSessionIdentity(sessionKey);
+        const useCasePort = getMemoryUseCasePortForContext(ctx);
+
+        const data = await useCasePort.run<typeof params, any>("project.opencode_search", {
+          context: { userId, agentId },
+          payload: params,
+          meta: {
+            source: "openclaw",
+            toolName: "project_opencode_search",
+            requestId: _id,
+          },
+        });
+
+        return createResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        return createResult(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+    },
+  });
+
+  api.registerTool({
     name: "project_developer_query",
     label: "Project Developer Query",
     description:
