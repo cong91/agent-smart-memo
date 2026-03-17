@@ -2,6 +2,7 @@ import {
   createShellRunner,
   detectPluginInstalled,
   parseAsmCliArgs,
+  runInstallPlatformFlow,
   runSetupOpenClawFlow,
 } from "../bin/asm.mjs";
 
@@ -30,7 +31,7 @@ function test(name: string, fn: () => void | Promise<void>): void {
     });
 }
 
-test("parseAsmCliArgs supports help, setup-openclaw, and init-openclaw", () => {
+test("parseAsmCliArgs supports help, setup-openclaw, install <platform>, and init-openclaw", () => {
   assertEqual(parseAsmCliArgs([]), { command: "help", argv: [] }, "empty should map to help");
   assertEqual(parseAsmCliArgs(["--help"]), { command: "help", argv: [] }, "--help should map to help");
   assertEqual(
@@ -42,6 +43,16 @@ test("parseAsmCliArgs supports help, setup-openclaw, and init-openclaw", () => {
     parseAsmCliArgs(["setup", "openclaw", "--x"]),
     { command: "setup-openclaw", argv: ["--x"] },
     "setup openclaw alias should parse",
+  );
+  assertEqual(
+    parseAsmCliArgs(["install", "openclaw", "--yes"]),
+    { command: "install-platform", platform: "openclaw", argv: ["--yes"] },
+    "install openclaw should parse",
+  );
+  assertEqual(
+    parseAsmCliArgs(["install", "paperclip"]),
+    { command: "install-platform", platform: "paperclip", argv: [] },
+    "install paperclip should parse",
   );
   assertEqual(
     parseAsmCliArgs(["init-openclaw", "--non-interactive"]),
@@ -178,6 +189,33 @@ test("runSetupOpenClawFlow supports non-interactive --yes mode", async () => {
 
   assertEqual(result.ok, true, "flow should succeed in --yes mode");
   assertEqual(initParams, { interactive: false, autoApply: true }, "--yes should force non-interactive apply");
+});
+
+test("runInstallPlatformFlow routes openclaw to setup-openclaw flow", async () => {
+  let called = 0;
+  const result = await runInstallPlatformFlow({
+    platform: "openclaw",
+    runner: (() => ({ ok: true, code: 0, stdout: "1.0.0", stderr: "", error: "" })) as any,
+    initOpenClaw: async (params?: any) => {
+      called += 1;
+      return { applied: Boolean(params) };
+    },
+    log: () => {},
+    argv: ["--yes"],
+  });
+
+  assertEqual(result.ok, true, "install openclaw should route through existing setup flow");
+  assertEqual(called, 1, "install openclaw should invoke bootstrap path once");
+});
+
+test("runInstallPlatformFlow returns not-implemented contract for paperclip/opencode", async () => {
+  const paperclip = await runInstallPlatformFlow({ platform: "paperclip", log: () => {} });
+  const opencode = await runInstallPlatformFlow({ platform: "opencode", log: () => {} });
+
+  assertEqual(paperclip.ok, false, "paperclip install should be contract-only for now");
+  assertEqual(opencode.ok, false, "opencode install should be contract-only for now");
+  assertEqual(paperclip.step, "install-paperclip-not-implemented", "paperclip should return structured not-implemented step");
+  assertEqual(opencode.step, "install-opencode-not-implemented", "opencode should return structured not-implemented step");
 });
 
 test("runSetupOpenClawFlow fails early when openclaw missing", async () => {
