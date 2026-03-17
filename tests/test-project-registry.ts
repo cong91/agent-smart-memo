@@ -1267,6 +1267,36 @@ async function main() {
     assert(Array.isArray(preview.errors) && preview.errors.length >= 1, "unresolved preview should return structured errors");
   });
 
+  await test("project.opencode_search resolves binding then runs read-only project-scoped retrieval", async () => {
+    const result = await usecase.run<any, any>("project.opencode_search", {
+      ...ctx,
+      payload: {
+        project_alias: "agent-smart-memo",
+        query: "code aware retrieval",
+      },
+    });
+
+    assertEqual(result.mode, "read-only", "OpenCode search must stay read-only");
+    assertEqual(result.resolution_status, "resolved", "OpenCode search should resolve binding before retrieval");
+    assertEqual(result.binding.selected_project.project_alias, "agent-smart-memo", "binding should resolve requested project alias");
+    assertEqual(result.results.intent, "feature_understanding", "resolved search should run project-scoped developer query");
+  });
+
+  await test("project.opencode_search returns unresolved binding result without crashing", async () => {
+    const result = await usecase.run<any, any>("project.opencode_search", {
+      ...ctx,
+      payload: {
+        project_alias: "does-not-exist",
+        query: "code aware retrieval",
+      },
+    });
+
+    assertEqual(result.mode, "read-only", "OpenCode search unresolved result must stay read-only");
+    assertEqual(result.resolution_status, "unresolved", "unknown project binding should remain unresolved");
+    assertEqual(result.results, null, "unresolved binding should not execute developer query");
+    assert(Array.isArray(result.errors) && result.errors.length >= 1, "unresolved binding should return structured errors");
+  });
+
   await test("project.list returns registry entries", async () => {
     const rows = await usecase.run<any, any[]>("project.list", {
       ...ctx,

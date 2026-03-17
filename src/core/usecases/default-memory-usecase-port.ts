@@ -138,6 +138,14 @@ interface ProjectBindingPreviewPayload {
   allow_cross_project?: boolean;
 }
 
+interface ProjectOpenCodeSearchPayload extends ProjectBindingPreviewPayload {
+  query: string;
+  limit?: number;
+  explicit_project_id?: string;
+  explicit_project_alias?: string;
+  explicit_cross_project?: boolean;
+}
+
 interface ProjectSetRegistrationStatePayload {
   project_id: string;
   registration_status: "draft" | "registered" | "validated" | "blocked";
@@ -504,6 +512,8 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
         return this.handleProjectGet(payload as unknown as ProjectGetPayload, req) as TRes;
       case "project.binding_preview":
         return this.handleProjectBindingPreview(payload as unknown as ProjectBindingPreviewPayload, req) as TRes;
+      case "project.opencode_search":
+        return this.handleProjectOpenCodeSearch(payload as unknown as ProjectOpenCodeSearchPayload, req) as TRes;
       case "project.list":
         return this.handleProjectList(req) as TRes;
       case "project.set_registration_state":
@@ -821,6 +831,51 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
       errors: selected
         ? (crossProjectRequired && !allowed ? ["multiple active project matches found; explicit cross-project approval required"] : [])
         : ["no registered project matched provided selectors"],
+    };
+  }
+
+  private handleProjectOpenCodeSearch(payload: ProjectOpenCodeSearchPayload, req: CoreRequestEnvelope<unknown>) {
+    const binding = this.handleProjectBindingPreview(
+      {
+        project_id: payload.explicit_project_id || payload.project_id,
+        project_alias: payload.explicit_project_alias || payload.project_alias,
+        repo_root: payload.repo_root,
+        session_project_alias: payload.session_project_alias,
+        allow_cross_project: payload.explicit_cross_project || payload.allow_cross_project,
+      },
+      req,
+    ) as any;
+
+    if (binding.resolution_status !== "resolved" || !binding.selected_project?.project_id) {
+      return {
+        mode: "read-only",
+        resolution_status: binding.resolution_status,
+        binding,
+        query: payload.query,
+        results: null,
+        errors: binding.errors || ["project binding could not be resolved for read-only search"],
+      };
+    }
+
+    const selectedProjectId = binding.selected_project.project_id;
+    const selectedProjectAlias = binding.selected_project.project_alias;
+    const results = this.handleProjectDeveloperQuery(
+      {
+        project_id: selectedProjectId,
+        project_alias: selectedProjectAlias || undefined,
+        query: payload.query,
+        limit: payload.limit,
+      },
+      req,
+    );
+
+    return {
+      mode: "read-only",
+      resolution_status: "resolved",
+      binding,
+      query: payload.query,
+      results,
+      errors: [],
     };
   }
 
