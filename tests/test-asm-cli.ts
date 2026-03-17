@@ -245,15 +245,31 @@ test("runInitSetupFlow creates shared ASM config with platform defaults", async 
   assertEqual(written.adapters.opencode.mode, "read-only", "init-setup should enforce read-only default for opencode adapter");
 });
 
-test("runInstallPlatformFlow returns not-implemented contract for paperclip and implemented path for opencode", async () => {
+test("runInstallPlatformFlow implements paperclip artifact preparation and opencode installer", async () => {
   const fs = await import("node:fs");
   const os = await import("node:os");
   const path = await import("node:path");
 
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "asm-opencode-install-"));
+  const runner = ((command: string, args: string[] = []) => {
+    if (command === "npm" && args.join(" ") === "run package:paperclip") {
+      return { ok: true, code: 0, stdout: "packaged paperclip runtime", stderr: "", error: "" };
+    }
+    if (command === "npm" && args.join(" ") === "run package:paperclip:plugin-local") {
+      const artifactDir = path.join(process.cwd(), "artifacts", "paperclip-plugin-local");
+      const runtimeDir = path.join(process.cwd(), "artifacts", "npm", "paperclip");
+      fs.mkdirSync(artifactDir, { recursive: true });
+      fs.mkdirSync(runtimeDir, { recursive: true });
+      fs.writeFileSync(path.join(artifactDir, "package.json"), "{}\n");
+      fs.writeFileSync(path.join(runtimeDir, "package.json"), "{}\n");
+      return { ok: true, code: 0, stdout: "packaged paperclip plugin local", stderr: "", error: "" };
+    }
+    return createShellRunner() (command, args);
+  }) as any;
+
   const paperclip = await runInstallPlatformFlow({
     platform: "paperclip",
-    runner: createShellRunner(),
+    runner,
     initOpenClaw: async () => ({ applied: true }) as any,
     log: () => {},
     argv: [],
@@ -270,8 +286,9 @@ test("runInstallPlatformFlow returns not-implemented contract for paperclip and 
     homeDir: home,
   });
 
-  assertEqual(paperclip.ok, false, "paperclip install should still be contract-only for now");
-  assertEqual(paperclip.step, "install-paperclip-not-implemented", "paperclip should return structured not-implemented step");
+  assertEqual(paperclip.ok, true, "paperclip install should now prepare artifacts successfully");
+  assertEqual(paperclip.step, "install-paperclip", "paperclip should return implemented install step");
+  assert(typeof paperclip.details.installCommand === "string" && paperclip.details.installCommand.includes("paperclipai plugin install"), "paperclip should return host install command");
   assertEqual(opencode.ok, true, "opencode install should now be implemented");
   assertEqual(opencode.step, "install-opencode", "opencode should return implemented install step");
   const written = JSON.parse(fs.readFileSync(path.join(home, ".config", "opencode", "config.json"), "utf8"));
