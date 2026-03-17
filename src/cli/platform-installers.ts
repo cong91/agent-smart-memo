@@ -276,16 +276,64 @@ const openclawInstaller: AsmPlatformInstaller = {
   },
 };
 
-const paperclipInstaller = createPlannedInstaller(
-  "paperclip",
-  "Prepare/install Paperclip runtime or host plugin path using shared ASM config.",
-  ["core.projectWorkspaceRoot", "core.storage.slotDbDir", "adapters.paperclip.enabled"],
-  ["paperclip host/plugin config"],
-  [
-    "[ASM-104] Intended flow: prepare Paperclip runtime/plugin artifact, then guide/install into Paperclip host using shared ASM config.",
-    "[ASM-104] Current local references: npm run package:paperclip, npm run package:paperclip:plugin-local, docs/testing/paperclip-local-install-debug-runbook.md",
-  ],
-);
+function deriveRepoRoot(homeDir?: string): string {
+  return homeDir ? join(homeDir, "Work", "projects") : process.cwd();
+}
+
+function packageArtifactExists(repoRoot: string, relativePath: string): string | null {
+  const full = join(repoRoot, relativePath);
+  return existsSync(full) ? full : null;
+}
+
+const paperclipInstaller: AsmPlatformInstaller = {
+  id: "paperclip",
+  describe() {
+    return {
+      id: "paperclip",
+      displayName: "Paperclip",
+      status: "implemented",
+      summary: "Prepare Paperclip runtime/plugin-local artifacts and print host install guidance using shared ASM config.",
+      requiredSharedConfigKeys: ["core.projectWorkspaceRoot", "core.storage.slotDbDir", "adapters.paperclip.enabled"],
+      platformLocalConfigPaths: ["artifacts/paperclip-plugin-local", "paperclip host/plugin config"],
+    };
+  },
+  async install(ctx) {
+    const initSetup = await runInitSetupFlow({ log: ctx.log, env: ctx.env, homeDir: ctx.homeDir, argv: ["--yes"] });
+    const asmConfigPath = String(initSetup.path);
+    const repoRoot = deriveRepoRoot(ctx.homeDir ? undefined : undefined);
+
+    const packageRuntime = ctx.runner("npm", ["run", "package:paperclip"]);
+    if (!packageRuntime.ok) {
+      return { ok: false, step: "package-paperclip-runtime-failed", platform: "paperclip", details: { stderr: packageRuntime.stderr, stdout: packageRuntime.stdout } };
+    }
+
+    const packageLocal = ctx.runner("npm", ["run", "package:paperclip:plugin-local"]);
+    if (!packageLocal.ok) {
+      return { ok: false, step: "package-paperclip-plugin-local-failed", platform: "paperclip", details: { stderr: packageLocal.stderr, stdout: packageLocal.stdout } };
+    }
+
+    const artifactDir = packageArtifactExists(process.cwd(), "artifacts/paperclip-plugin-local") || join(process.cwd(), "artifacts", "paperclip-plugin-local");
+    const runtimeDir = packageArtifactExists(process.cwd(), "artifacts/npm/paperclip") || join(process.cwd(), "artifacts", "npm", "paperclip");
+
+    const installCommand = `paperclipai plugin install ${artifactDir}`;
+    ctx.log(`[ASM-104] install paperclip prepared local plugin artifact at: ${artifactDir}`);
+    ctx.log(`[ASM-104] install paperclip prepared runtime package at: ${runtimeDir}`);
+    ctx.log(`[ASM-104] Next step on Paperclip host: ${installCommand}`);
+    ctx.log(`[ASM-104] ASM shared config remains source-of-truth at: ${asmConfigPath}`);
+
+    return {
+      ok: true,
+      step: "install-paperclip",
+      platform: "paperclip",
+      details: {
+        asmConfigPath,
+        artifactDir,
+        runtimeDir,
+        installCommand,
+      },
+    };
+  },
+};
 
 const opencodeInstaller: AsmPlatformInstaller = {
   id: "opencode",
