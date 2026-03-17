@@ -17,6 +17,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveSlotDbDir } from "./shared/slotdb-path.js";
+import { resolveAsmCoreConfigValue, resolveAsmCoreProjectWorkspaceRoot } from "./shared/asm-config.js";
 
 // Tool modules
 import { registerSlotTools } from "./tools/slot-tools.js";
@@ -165,15 +166,21 @@ function resolvePluginConfig(
   pluginId: string
 ): { config: AgentMemoConfig; source: string } {
   const pluginConfig = asObject((api as any).pluginConfig);
-  if (hasAnyConfigKey(pluginConfig)) {
-    return { config: pluginConfig as AgentMemoConfig, source: "pluginConfig" };
+  const adapterLocal = asObject(pluginConfig?.adapterLocal || pluginConfig);
+  if (hasAnyConfigKey(adapterLocal)) {
+    return { config: adapterLocal as AgentMemoConfig, source: "pluginConfig" };
   }
 
   const legacyEntryConfig = asObject((api as any)?.config?.plugins?.entries?.[pluginId]?.config);
-  if (hasAnyConfigKey(legacyEntryConfig)) {
+  const asmConfigPath = typeof legacyEntryConfig?.asmConfigPath === "string" ? legacyEntryConfig.asmConfigPath : undefined;
+  const adapterMinimal = {
+    slotDbDir: typeof legacyEntryConfig?.slotDbDir === "string" ? legacyEntryConfig.slotDbDir : undefined,
+    projectWorkspaceRoot: typeof legacyEntryConfig?.projectWorkspaceRoot === "string" ? legacyEntryConfig.projectWorkspaceRoot : undefined,
+  };
+  if (hasAnyConfigKey(adapterMinimal)) {
     return {
-      config: legacyEntryConfig as AgentMemoConfig,
-      source: "api.config.plugins.entries[pluginId].config",
+      config: adapterMinimal as AgentMemoConfig,
+      source: asmConfigPath ? "api.config.plugins.entries[pluginId].config (adapter-local+shared)" : "api.config.plugins.entries[pluginId].config (adapter-local)",
     };
   }
 
@@ -387,32 +394,36 @@ const agentMemoPlugin = {
     const { config, source } = resolvePluginConfig(api, "agent-smart-memo");
 
     const slotCategories = config.slotCategories || DEFAULT_CATEGORIES;
-    const qdrantHost = config.qdrantHost || "localhost";
-    const qdrantPort = config.qdrantPort || 6333;
-    const qdrantCollection = config.qdrantCollection || "mrc_bot";
-    const qdrantVectorSize = config.qdrantVectorSize || 1024;
-    const llmBaseUrl = config.llmBaseUrl || "http://localhost:8317/v1";
-    const llmApiKey = config.llmApiKey || "proxypal-local";
+    const qdrantHost = firstNonEmptyString(config.qdrantHost, resolveAsmCoreConfigValue<string>("qdrantHost")) || "localhost";
+    const qdrantPort = config.qdrantPort || resolveAsmCoreConfigValue<number>("qdrantPort") || 6333;
+    const qdrantCollection = firstNonEmptyString(config.qdrantCollection, resolveAsmCoreConfigValue<string>("qdrantCollection")) || "mrc_bot";
+    const qdrantVectorSize = config.qdrantVectorSize || resolveAsmCoreConfigValue<number>("qdrantVectorSize") || 1024;
+    const llmBaseUrl = firstNonEmptyString(config.llmBaseUrl, resolveAsmCoreConfigValue<string>("llmBaseUrl")) || "http://localhost:8317/v1";
+    const llmApiKey = firstNonEmptyString(config.llmApiKey, resolveAsmCoreConfigValue<string>("llmApiKey")) || "proxypal-local";
     const resolvedLlmModel = firstNonEmptyString(
       config.llmModel,
+      resolveAsmCoreConfigValue<string>("llmModel"),
       findNestedStringKey(rawConfig, "llmModel")
     );
     const llmModel = resolvedLlmModel || "gemini-2.5-flash";
     const llmModelFallbackUsed = !resolvedLlmModel;
-    const embedBaseUrl = config.embedBaseUrl || "http://localhost:11434";
+    const embedBaseUrl = firstNonEmptyString(config.embedBaseUrl, resolveAsmCoreConfigValue<string>("embedBaseUrl")) || "http://localhost:11434";
+    const sharedEmbedBackend = resolveAsmCoreConfigValue<string>("embedBackend");
     const embedBackend =
       config.embedBackend === "ollama" ||
       config.embedBackend === "openai" ||
       config.embedBackend === "docker"
         ? config.embedBackend
-        : undefined;
-    const embedModel = config.embedModel || "qwen3-embedding:0.6b";
-    const embedDimensions = config.embedDimensions || 1024;
-    const autoCaptureEnabled = config.autoCaptureEnabled !== false; // default true
-    const autoCaptureMinConfidence = config.autoCaptureMinConfidence || 0.7;
-    const contextWindowMaxTokens = config.contextWindowMaxTokens || 12000;
-    const summarizeEveryActions = config.summarizeEveryActions || 6;
-    const projectWorkspaceRoot = firstNonEmptyString(config.projectWorkspaceRoot);
+        : sharedEmbedBackend === "ollama" || sharedEmbedBackend === "openai" || sharedEmbedBackend === "docker"
+          ? sharedEmbedBackend
+          : undefined;
+    const embedModel = firstNonEmptyString(config.embedModel, resolveAsmCoreConfigValue<string>("embedModel")) || "qwen3-embedding:0.6b";
+    const embedDimensions = config.embedDimensions || resolveAsmCoreConfigValue<number>("embedDimensions") || 1024;
+    const autoCaptureEnabled = config.autoCaptureEnabled ?? resolveAsmCoreConfigValue<boolean>("autoCaptureEnabled") ?? true;
+    const autoCaptureMinConfidence = config.autoCaptureMinConfidence || resolveAsmCoreConfigValue<number>("autoCaptureMinConfidence") || 0.7;
+    const contextWindowMaxTokens = config.contextWindowMaxTokens || resolveAsmCoreConfigValue<number>("contextWindowMaxTokens") || 12000;
+    const summarizeEveryActions = config.summarizeEveryActions || resolveAsmCoreConfigValue<number>("summarizeEveryActions") || 6;
+    const projectWorkspaceRoot = firstNonEmptyString(config.projectWorkspaceRoot, resolveAsmCoreProjectWorkspaceRoot({ env: process.env, homeDir: process.env.HOME }));
 
     // State directory from env or default
     const stateDir = process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;

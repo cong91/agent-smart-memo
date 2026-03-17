@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
 const PLUGIN_ID = "agent-smart-memo";
 const EMBED_BACKENDS = ["ollama", "openai", "docker"];
+const DEFAULT_ASM_CONFIG_RELATIVE_PATH = ".config/asm/config.json";
 
 export function resolveOpenClawConfigPath(env = process.env) {
   const explicit = String(env.OPENCLAW_CONFIG_PATH || env.OPENCLAW_RUNTIME_CONFIG || "").trim();
@@ -16,6 +17,48 @@ export function resolveOpenClawConfigPath(env = process.env) {
 
 function asObj(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function firstNonEmptyString(...values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function expandHome(input, homeDir) {
+  if (typeof input !== "string" || !input.startsWith("~")) return input;
+  const home = firstNonEmptyString(homeDir, process.env.HOME);
+  if (!home) return input;
+  if (input === "~") return home;
+  if (input.startsWith("~/")) return join(home, input.slice(2));
+  return input;
+}
+
+function resolveAsmConfigPathLocal({ env = process.env, homeDir, configPath } = {}) {
+  const explicit = firstNonEmptyString(configPath);
+  if (explicit) return explicit;
+  const envPath = firstNonEmptyString(env.ASM_CONFIG);
+  if (envPath) return envPath;
+  const home = firstNonEmptyString(homeDir, env.HOME, process.env.HOME);
+  if (!home) return DEFAULT_ASM_CONFIG_RELATIVE_PATH;
+  return join(home, DEFAULT_ASM_CONFIG_RELATIVE_PATH);
+}
+
+function parseJsonFile(path) {
+  if (!path || !existsSync(path)) return null;
+  const raw = readFileSync(path, "utf8").trim();
+  if (!raw) return null;
+  return JSON.parse(raw);
+}
+
+function loadAsmSharedConfigLocal({ env = process.env, homeDir, configPath } = {}) {
+  const path = resolveAsmConfigPathLocal({ env, homeDir, configPath });
+  try {
+    return { path, config: asObj(parseJsonFile(path)) };
+  } catch {
+    return { path, config: {} };
+  }
 }
 
 function toIntOrDefault(value, fallback) {
@@ -248,7 +291,7 @@ export function validateAnswers(answers) {
   return errors;
 }
 
-export function buildPatchedConfig(existingConfig, answers, mapMemorySlot = true) {
+export function buildPatchedConfig(existingConfig, answers, mapMemorySlot = true, options = {}) {
   const root = asObj(existingConfig);
   const plugins = asObj(root.plugins);
   const entries = asObj(plugins.entries);
@@ -259,23 +302,15 @@ export function buildPatchedConfig(existingConfig, answers, mapMemorySlot = true
 
   const prevEntry = asObj(entries[PLUGIN_ID]);
   const prevEntryConfig = asObj(prevEntry.config);
+  const asmConfigPath = String(options.asmConfigPath || prevEntryConfig.asmConfigPath || "").trim();
 
   const entry = {
     ...prevEntry,
     enabled: true,
     config: {
-      ...prevEntryConfig,
-      qdrantHost: answers.qdrantHost,
-      qdrantPort: answers.qdrantPort,
-      qdrantCollection: answers.qdrantCollection,
-      llmBaseUrl: answers.llmBaseUrl,
-      llmModel: answers.llmModel,
-      llmApiKey: answers.llmApiKey,
-      embedBackend: answers.embedBackend,
-      embedModel: answers.embedModel,
-      embedDimensions: answers.embedDimensions,
-      slotDbDir: answers.slotDbDir,
-      projectWorkspaceRoot: answers.projectWorkspaceRoot,
+      ...(asmConfigPath ? { asmConfigPath } : {}),
+      ...(prevEntryConfig.slotDbDir ? { slotDbDir: prevEntryConfig.slotDbDir } : {}),
+      ...(prevEntryConfig.projectWorkspaceRoot ? { projectWorkspaceRoot: prevEntryConfig.projectWorkspaceRoot } : {}),
     },
   };
 
@@ -402,15 +437,7 @@ export function buildSetupSummary(currentConfig, answers, nextConfig) {
   );
 
   const managedConfigKeys = [
-    "qdrantHost",
-    "qdrantPort",
-    "qdrantCollection",
-    "llmBaseUrl",
-    "llmModel",
-    "llmApiKey",
-    "embedBackend",
-    "embedModel",
-    "embedDimensions",
+    "asmConfigPath",
     "slotDbDir",
     "projectWorkspaceRoot",
   ];
@@ -605,32 +632,29 @@ export async function runInitOpenClaw({ env = process.env, interactive = true, a
   const configPath = resolveOpenClawConfigPath(env);
   const current = parseExistingConfig(configPath);
   const pluginCfg = asObj(asObj(asObj(current.plugins).entries)[PLUGIN_ID]).config || {};
+  const asmConfigPath = String(pluginCfg.asmConfigPath || resolveAsmConfigPathLocal({ env, homeDir: env.HOME })).trim();
+  const shared = loadAsmSharedConfigLocal({ configPath: asmConfigPath, env, homeDir: env.HOME }).config || {};
+  const sharedCore = asObj(shared.core);
 
   const defaults = {
-    qdrantHost: String(pluginCfg.qdrantHost || "localhost"),
-    qdrantPort: toIntOrDefault(pluginCfg.qdrantPort, 6333),
-    qdrantCollection: String(pluginCfg.qdrantCollection || "mrc_bot"),
-    llmBaseUrl: String(pluginCfg.llmBaseUrl || "http://localhost:8317/v1"),
-    llmModel: String(pluginCfg.llmModel || "gemini-2.5-flash"),
-    llmApiKey: String(pluginCfg.llmApiKey || ""),
-    embedBackend: String(pluginCfg.embedBackend || "ollama"),
-    embedModel: String(pluginCfg.embedModel || "qwen3-embedding:0.6b"),
-    embedDimensions: toIntOrDefault(pluginCfg.embedDimensions, 1024),
-    slotDbDir: String(pluginCfg.slotDbDir || env.OPENCLAW_SLOTDB_DIR || `${env.HOME}/.openclaw/agent-memo`),
+    qdrantHost: String(sharedCore.qdrantHost || "localhost"),
+    qdrantPort: toIntOrDefault(sharedCore.qdrantPort, 6333),
+    qdrantCollection: String(sharedCore.qdrantCollection || "mrc_bot"),
+    llmBaseUrl: String(sharedCore.llmBaseUrl || "http://localhost:8317/v1"),
+    llmModel: String(sharedCore.llmModel || "gemini-2.5-flash"),
+    llmApiKey: String(sharedCore.llmApiKey || ""),
+    embedBackend: String(sharedCore.embedBackend || "ollama"),
+    embedModel: String(sharedCore.embedModel || "qwen3-embedding:0.6b"),
+    embedDimensions: toIntOrDefault(sharedCore.embedDimensions, 1024),
+    slotDbDir: String(sharedCore.storage?.slotDbDir || env.OPENCLAW_SLOTDB_DIR || `${env.HOME}/.openclaw/agent-memo`),
     projectWorkspaceRoot: String(
-      pluginCfg.projectWorkspaceRoot ||
+      sharedCore.projectWorkspaceRoot ||
         env.AGENT_MEMO_PROJECT_WORKSPACE_ROOT ||
         env.AGENT_MEMO_REPO_CLONE_ROOT ||
         `${env.HOME}/Work/projects` ||
         `${env.HOME}/.openclaw/workspace/projects`,
     ),
-    projectWorkspaceRoot: String(
-      pluginCfg.projectWorkspaceRoot ||
-        env.AGENT_MEMO_REPO_CLONE_ROOT ||
-        env.AGENT_MEMO_PROJECT_WORKSPACE_ROOT ||
-        `${env.HOME}/Work/projects` ||
-        `${env.HOME}/.openclaw/workspace/projects`,
-    ),
+    asmConfigPath,
     mapMemorySlot: asObj(asObj(current.plugins).slots).memory === PLUGIN_ID,
     telegramOnboardingCommands: dedupeStringArray([
       "project",
@@ -644,7 +668,7 @@ export async function runInitOpenClaw({ env = process.env, interactive = true, a
     throw new Error(`Validation failed:\n- ${errors.join("\n- ")}`);
   }
 
-  const next = buildPatchedConfig(current, answers, answers.mapMemorySlot);
+  const next = buildPatchedConfig(current, answers, answers.mapMemorySlot, { asmConfigPath: answers.asmConfigPath });
   const summary = buildSetupSummary(current, answers, next);
   const beforeText = toJson(current);
   const afterText = toJson(next);

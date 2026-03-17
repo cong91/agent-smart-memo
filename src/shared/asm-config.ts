@@ -3,6 +3,21 @@ import { join, resolve } from "node:path";
 
 export interface AsmSharedConfigCore {
   projectWorkspaceRoot?: string;
+  qdrantHost?: string;
+  qdrantPort?: number;
+  qdrantCollection?: string;
+  qdrantVectorSize?: number;
+  llmBaseUrl?: string;
+  llmApiKey?: string;
+  llmModel?: string;
+  embedBaseUrl?: string;
+  embedBackend?: string;
+  embedModel?: string;
+  embedDimensions?: number;
+  autoCaptureEnabled?: boolean;
+  autoCaptureMinConfidence?: number;
+  contextWindowMaxTokens?: number;
+  summarizeEveryActions?: number;
   storage?: {
     slotDbDir?: string;
     [key: string]: unknown;
@@ -321,6 +336,12 @@ export function resolveAsmCoreProjectWorkspaceRoot(input: LoadAsmSharedConfigInp
     config?.projectWorkspaceRoot,
   );
   return value ? expandHome(value, input.homeDir || input.env?.HOME) : undefined;
+}
+
+export function resolveAsmCoreConfigValue<T = unknown>(key: keyof AsmSharedConfigCore, input: LoadAsmSharedConfigInput = {}): T | undefined {
+  const { config } = loadAsmSharedConfig(input);
+  const core = config?.core as Record<string, unknown> | undefined;
+  return core?.[String(key)] as T | undefined;
 }
 
 export function resolveAsmAdapterLocalConfig(
