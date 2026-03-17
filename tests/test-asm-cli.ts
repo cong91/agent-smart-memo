@@ -1,11 +1,15 @@
 import {
-  createShellRunner,
   detectPluginInstalled,
   parseAsmCliArgs,
-  runInitSetupFlow,
-  runInstallPlatformFlow,
   runSetupOpenClawFlow,
 } from "../bin/asm.mjs";
+import {
+  createShellRunner,
+  getAsmPlatformInstaller,
+  listAsmPlatformInstallers,
+  runInitSetupFlow,
+  runInstallPlatformFlow,
+} from "../src/cli/platform-installers.ts";
 
 function assert(condition: boolean, message: string): void {
   if (!condition) throw new Error(message);
@@ -195,6 +199,14 @@ test("runSetupOpenClawFlow supports non-interactive --yes mode", async () => {
 
   assertEqual(result.ok, true, "flow should succeed in --yes mode");
   assertEqual(initParams, { interactive: false, autoApply: true }, "--yes should force non-interactive apply");
+});
+
+test("installer registry exposes openclaw/paperclip/opencode descriptors", () => {
+  const installers = listAsmPlatformInstallers();
+  assert(installers.some((item) => item.id === "openclaw" && item.status === "implemented"), "openclaw installer descriptor should exist");
+  assert(installers.some((item) => item.id === "paperclip"), "paperclip installer descriptor should exist");
+  assert(installers.some((item) => item.id === "opencode"), "opencode installer descriptor should exist");
+  assertEqual(Boolean(getAsmPlatformInstaller("openclaw")), true, "installer lookup should resolve openclaw");
 });
 
 test("runInstallPlatformFlow routes openclaw to setup-openclaw flow", async () => {
