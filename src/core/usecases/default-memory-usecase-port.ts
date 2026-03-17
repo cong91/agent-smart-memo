@@ -307,10 +307,13 @@ interface ProjectReindexDiffPayload {
 
 interface ProjectIndexEventPayload {
   project_id: string;
+  repo_root?: string | null;
   source_rev?: string | null;
-  event_type?: "post_commit" | "post_merge" | "manual";
+  event_type?: "post_commit" | "post_merge" | "post_rewrite" | "manual";
   changed_files?: string[];
   deleted_files?: string[];
+  trusted_sync?: boolean;
+  full_snapshot?: boolean;
 }
 
 interface ProjectInstallHooksPayload {
@@ -1231,15 +1234,43 @@ export class DefaultMemoryUseCasePort implements MemoryUseCasePort {
     const listener = `#!/bin/sh
 PROJECT_ID="${projectId}"
 REPO_ROOT="${repoRoot}"
+EVENT_TYPE="$1"
 SOURCE_REV="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
-CHANGED_FILES="$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null | paste -sd, -)"
-DELETED_FILES="$(git diff-tree --no-commit-id --name-only --diff-filter=D -r HEAD 2>/dev/null | paste -sd, -)"
-asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-type "$1" --source-rev "$SOURCE_REV" --changed-files "$CHANGED_FILES" --deleted-files "$DELETED_FILES" >/dev/null 2>&1 || true
+DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+WORKTREE_DIRTY="$(if git diff --quiet --ignore-submodules HEAD -- 2>/dev/null && git diff --cached --quiet --ignore-submodules -- 2>/dev/null; then echo 0; else echo 1; fi)"
+TRUSTED_SYNC="0"
+FULL_SNAPSHOT="0"
+CHANGED_FILES=""
+DELETED_FILES=""
+
+if [ "$EVENT_TYPE" = "post_commit" ]; then
+  CHANGED_FILES="$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null | paste -sd, -)"
+  DELETED_FILES="$(git diff-tree --no-commit-id --name-only --diff-filter=D -r HEAD 2>/dev/null | paste -sd, -)"
+fi
+
+if [ -n "$DEFAULT_BRANCH" ] && [ "$CURRENT_BRANCH" = "$DEFAULT_BRANCH" ] && [ "$WORKTREE_DIRTY" = "0" ]; then
+  if git rev-parse --verify "origin/$DEFAULT_BRANCH" >/dev/null 2>&1; then
+    LOCAL_HEAD="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+    REMOTE_HEAD="$(git rev-parse "origin/$DEFAULT_BRANCH" 2>/dev/null || echo unknown)"
+    if [ "$LOCAL_HEAD" = "$REMOTE_HEAD" ]; then
+      TRUSTED_SYNC="1"
+      FULL_SNAPSHOT="1"
+    fi
+  fi
+fi
+
+if [ "$TRUSTED_SYNC" = "1" ]; then
+  CHANGED_FILES="$(git ls-files 2>/dev/null | paste -sd, -)"
+  DELETED_FILES=""
+fi
+
+asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-type "$EVENT_TYPE" --source-rev "$SOURCE_REV" --changed-files "$CHANGED_FILES" --deleted-files "$DELETED_FILES" --trusted-sync "$TRUSTED_SYNC" --full-snapshot "$FULL_SNAPSHOT" >/dev/null 2>&1 || true
 `;
     writeFileSync(listenerPath, listener, 'utf8');
     chmodSync(listenerPath, 0o755);
 
-    const attachHook = (name: string, eventType: 'post_commit' | 'post_merge') => {
+    const attachHook = (name: string, eventType: 'post_commit' | 'post_merge' | 'post_rewrite') => {
       const hookPath = resolve(hooksDir, name);
       const callLine = `${marker}\n\"${listenerPath}\" ${eventType} || true`;
       let content = existsSync(hookPath) ? readFileSync(hookPath, 'utf8') : '';
@@ -1262,7 +1293,12 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       return hookPath;
     };
 
-    const hooks = [attachHook('post-commit', 'post_commit'), attachHook('post-merge', 'post_merge'), listenerPath];
+    const hooks = [
+      attachHook('post-commit', 'post_commit'),
+      attachHook('post-merge', 'post_merge'),
+      attachHook('post-rewrite', 'post_rewrite'),
+      listenerPath,
+    ];
     return { installed: true, hooks };
   }
 
@@ -1818,8 +1854,16 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       throw new Error("project.index_event requires a registered project with repo_root");
     }
 
+    const registeredRepoRoot = this.normalizeRepoRootInput(project.repo_root || undefined);
+    const eventRepoRoot = this.normalizeRepoRootInput(payload.repo_root || undefined);
+    if (eventRepoRoot && registeredRepoRoot && eventRepoRoot !== registeredRepoRoot) {
+      throw new Error(`project.index_event repo_root mismatch: event='${eventRepoRoot}' registered='${registeredRepoRoot}'`);
+    }
+
     const changedFiles = Array.from(new Set((payload.changed_files || []).map((x) => String(x || "").trim()).filter(Boolean)));
     const deletedFiles = Array.from(new Set((payload.deleted_files || []).map((x) => String(x || "").trim()).filter(Boolean)));
+    const trustedSync = payload.trusted_sync === true;
+    const fullSnapshot = payload.full_snapshot === true || trustedSync;
 
     const paths = changedFiles.map((relativePath) => {
       const abs = resolve(project.repo_root as string, relativePath);
@@ -1841,9 +1885,9 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
     const reindex = this.slotDb.reindexProjectByDiff(identity.userId, identity.agentId, {
       project_id: payload.project_id,
       source_rev: payload.source_rev || null,
-      trigger_type: "incremental",
-      index_profile: "default",
-      full_snapshot: false,
+      trigger_type: trustedSync ? "repair" : "incremental",
+      index_profile: trustedSync ? "authoritative" : "default",
+      full_snapshot: fullSnapshot,
       paths,
     });
 
@@ -1858,6 +1902,8 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       project_id: payload.project_id,
       event_type: payload.event_type || "manual",
       source_rev: payload.source_rev || null,
+      trusted_sync: trustedSync,
+      full_snapshot: fullSnapshot,
       changed_files: changedFiles,
       deleted_files: deletedFiles,
       reindex,

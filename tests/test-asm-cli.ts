@@ -3,6 +3,10 @@ import {
   parseAsmCliArgs,
   runSetupOpenClawFlow,
 } from "../bin/asm.mjs";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import {
   createShellRunner,
   getAsmPlatformInstaller,
@@ -78,6 +82,11 @@ test("parseAsmCliArgs supports help, setup-openclaw, install <platform>, and ini
     parseAsmCliArgs(["init", "openclaw", "--non-interactive"]),
     { command: "init-openclaw", argv: ["--non-interactive"] },
     "init openclaw alias should parse",
+  );
+  assertEqual(
+    parseAsmCliArgs(["project-event", "--project-id", "p1"]),
+    { command: "project-event", argv: ["--project-id", "p1"] },
+    "project-event should parse",
   );
 });
 

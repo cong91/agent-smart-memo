@@ -84,7 +84,7 @@ export function printHelp(log = console.log) {
   log("  asm init setup [--yes]");
   log("  asm init-openclaw [--non-interactive]");
   log("  asm init openclaw [--non-interactive]");
-  log("  asm project-event --project-id <id> --repo-root <path> [--event-type post_commit|post_merge|manual] [--source-rev <sha>] [--changed-files a,b] [--deleted-files x,y]");
+  log("  asm project-event --project-id <id> --repo-root <path> [--event-type post_commit|post_merge|post_rewrite|manual] [--source-rev <sha>] [--changed-files a,b] [--deleted-files x,y] [--trusted-sync 0|1] [--full-snapshot 0|1]");
   log("  asm help");
   log("");
   log("Roadmap commands (not implemented yet):");
@@ -144,6 +144,8 @@ function parseProjectEventArgs(argv = []) {
     eventType: "manual",
     changedFiles: [],
     deletedFiles: [],
+    trustedSync: false,
+    fullSnapshot: false,
   };
   for (let i = 0; i < args.length; i++) {
     const cur = args[i];
@@ -154,6 +156,8 @@ function parseProjectEventArgs(argv = []) {
     if (cur === "--event-type") { out.eventType = next || "manual"; i++; continue; }
     if (cur === "--changed-files") { out.changedFiles = next ? next.split(",").map((s) => s.trim()).filter(Boolean) : []; i++; continue; }
     if (cur === "--deleted-files") { out.deletedFiles = next ? next.split(",").map((s) => s.trim()).filter(Boolean) : []; i++; continue; }
+    if (cur === "--trusted-sync") { out.trustedSync = next === "1" || next === "true"; i++; continue; }
+    if (cur === "--full-snapshot") { out.fullSnapshot = next === "1" || next === "true"; i++; continue; }
   }
   return out;
 }
@@ -330,10 +334,13 @@ export async function main(argv = process.argv.slice(2)) {
         meta: { source: 'cli', toolName: 'asm.project-event', projectWorkspaceRoot: event.repoRoot },
         payload: {
           project_id: event.projectId,
+          repo_root: event.repoRoot,
           source_rev: event.sourceRev || null,
           event_type: event.eventType,
           changed_files: event.changedFiles,
           deleted_files: event.deletedFiles,
+          trusted_sync: event.trustedSync,
+          full_snapshot: event.fullSnapshot,
         },
       });
       console.log(JSON.stringify(result, null, 2));
