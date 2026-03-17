@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { doctorAsmSharedConfig, getAsmSharedConfig, resolveAsmConfigPath } from "../shared/asm-config.ts";
 import { runInitOpenClaw } from "../../scripts/init-openclaw.mjs";
 
@@ -206,6 +207,12 @@ function resolveOpencodeConfigPath(homeDir?: string): string {
   return join(home, ".config", "opencode", "config.json");
 }
 
+function resolveAsmCliCommandForOpencode(): string[] {
+  const installerDir = dirname(fileURLToPath(import.meta.url));
+  const asmCliPath = join(installerDir, "..", "..", "bin", "asm.mjs");
+  return [process.execPath, asmCliPath, "mcp", "opencode"];
+}
+
 function ensureOpencodeConfig(
   opencodeConfigPath: string,
   asmConfigPath: string,
@@ -223,22 +230,26 @@ function ensureOpencodeConfig(
     }
   }
 
-  const currentMcp = current.mcp || {};
-  const currentServers = (currentMcp as Record<string, unknown>).servers || {};
+  const currentMcp = current.mcp && typeof current.mcp === "object" && !Array.isArray(current.mcp)
+    ? { ...(current.mcp as Record<string, unknown>) }
+    : {};
+  const legacyServers = currentMcp.servers && typeof currentMcp.servers === "object" && !Array.isArray(currentMcp.servers)
+    ? (currentMcp.servers as Record<string, unknown>)
+    : {};
+  delete currentMcp.servers;
+
   const next = {
     ...current,
     mcp: {
-      ...(currentMcp as Record<string, unknown>),
-      servers: {
-        ...(currentServers as Record<string, unknown>),
-        asm: {
-          type: "local",
-          command: ["asm", "mcp", "opencode"],
-          enabled: true,
-          environment: {
-            ASM_CONFIG: asmConfigPath,
-            ASM_MCP_AGENT_ID: "opencode",
-          },
+      ...legacyServers,
+      ...currentMcp,
+      asm: {
+        type: "local",
+        command: resolveAsmCliCommandForOpencode(),
+        enabled: true,
+        environment: {
+          ASM_CONFIG: asmConfigPath,
+          ASM_MCP_AGENT_ID: "opencode",
         },
       },
     },

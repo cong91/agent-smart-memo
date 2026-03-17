@@ -304,10 +304,13 @@ test("runInstallPlatformFlow implements paperclip artifact preparation and openc
   assertEqual(opencode.ok, true, "opencode install should now be implemented");
   assertEqual(opencode.step, "install-opencode", "opencode should return implemented install step");
   const written = JSON.parse(fs.readFileSync(path.join(home, ".config", "opencode", "config.json"), "utf8"));
-  assertEqual(written.mcp.servers.asm.type, "local", "opencode config should register local MCP server");
-  assertEqual(JSON.stringify(written.mcp.servers.asm.command), JSON.stringify(["asm", "mcp", "opencode"]), "opencode config should spawn asm mcp opencode");
-  assertEqual(written.mcp.servers.asm.environment.ASM_MCP_AGENT_ID, "opencode", "opencode config should scope MCP agent id");
-  assertEqual(written.mcp.servers.asm.enabled, true, "opencode config should enable ASM MCP server");
+  assertEqual(written.mcp.asm.type, "local", "opencode config should register local MCP server at mcp.<name>");
+  assert(Array.isArray(written.mcp.asm.command), "opencode config should store command array");
+  assertEqual(written.mcp.asm.command[0], process.execPath, "opencode config should invoke node runtime explicitly");
+  assert(typeof written.mcp.asm.command[1] === "string" && written.mcp.asm.command[1].endsWith("/bin/asm.mjs"), "opencode config should point to local asm CLI script");
+  assertEqual(JSON.stringify(written.mcp.asm.command.slice(2)), JSON.stringify(["mcp", "opencode"]), "opencode config should forward mcp opencode args");
+  assertEqual(written.mcp.asm.environment.ASM_MCP_AGENT_ID, "opencode", "opencode config should scope MCP agent id");
+  assertEqual(written.mcp.asm.enabled, true, "opencode config should enable ASM MCP server");
 });
 
 test("runSetupOpenClawFlow fails early when openclaw missing", async () => {

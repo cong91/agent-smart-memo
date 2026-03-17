@@ -71,10 +71,24 @@ function errorResponse(id, code, message) {
   return { jsonrpc: "2.0", id, error: { code, message } };
 }
 
+let outputTransportMode = "content-length";
+
+function setOutputTransportMode(mode) {
+  if (mode === "json-line" || mode === "content-length") {
+    outputTransportMode = mode;
+  }
+}
+
 function writeMessage(message) {
-  const body = Buffer.from(JSON.stringify(message), "utf8");
-  process.stdout.write(`Content-Length: ${body.length}\r\n\r\n`);
-  process.stdout.write(body);
+  const encoded = JSON.stringify(message);
+  if (outputTransportMode === "json-line") {
+    process.stdout.write(`${encoded}\n`);
+    return;
+  }
+
+  const body = Buffer.from(encoded, "utf8");
+  const header = Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, "utf8");
+  process.stdout.write(Buffer.concat([header, body]));
 }
 
 async function handleToolCall(name, args) {
@@ -105,14 +119,16 @@ async function handleToolCall(name, args) {
   return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
 }
 
-async function handleMessage(message) {
+async function processRpcMessage(message) {
   const { id, method, params } = message || {};
+  const hasId = id !== undefined && id !== null;
 
   if (method === "initialize") {
+    if (!hasId) return;
     writeMessage(response(id, {
       protocolVersion: PROTOCOL_VERSION,
       serverInfo: { name: "asm-opencode-mcp", version: "1.0.0" },
-      capabilities: { tools: {} },
+      capabilities: { tools: { listChanged: false } },
     }));
     return;
   }
@@ -122,11 +138,13 @@ async function handleMessage(message) {
   }
 
   if (method === "tools/list") {
+    if (!hasId) return;
     writeMessage(response(id, { tools: buildOpencodeMcpToolDescriptors() }));
     return;
   }
 
   if (method === "tools/call") {
+    if (!hasId) return;
     try {
       const result = await handleToolCall(params?.name, params?.arguments || {});
       writeMessage(response(id, result));
@@ -139,34 +157,128 @@ async function handleMessage(message) {
     return;
   }
 
+  if (!hasId) {
+    return;
+  }
+
   writeMessage(errorResponse(id, -32601, `Method not found: ${method}`));
+}
+
+function findHeaderBoundary(buffer) {
+  const crlf = buffer.indexOf("\r\n\r\n");
+  if (crlf !== -1) {
+    return { headerEnd: crlf, separatorLength: 4 };
+  }
+
+  const lf = buffer.indexOf("\n\n");
+  if (lf !== -1) {
+    return { headerEnd: lf, separatorLength: 2 };
+  }
+
+  return null;
+}
+
+function takeJsonLineMessage(buffer) {
+  if (!buffer.length) return null;
+  const first = String.fromCharCode(buffer[0]);
+  if (first !== "{" && first !== "[") return null;
+
+  const newlineIndex = buffer.indexOf("\n");
+  if (newlineIndex === -1) return null;
+
+  const line = buffer.slice(0, newlineIndex).toString("utf8").trim();
+  if (!line) {
+    return { consumed: newlineIndex + 1, message: null };
+  }
+
+  return { consumed: newlineIndex + 1, message: line };
 }
 
 export async function runOpencodeMcpServer() {
   let buffer = Buffer.alloc(0);
-  process.stdin.on("data", async (chunk) => {
+  let requestChain = Promise.resolve();
+
+  const enqueue = (message) => {
+    requestChain = requestChain
+      .then(() => processRpcMessage(message))
+      .catch((error) => {
+        writeMessage(errorResponse(null, -32603, error instanceof Error ? error.message : String(error)));
+      });
+  };
+
+  const onData = (chunk) => {
     buffer = Buffer.concat([buffer, chunk]);
+
     while (true) {
-      const headerEnd = buffer.indexOf("\r\n\r\n");
-      if (headerEnd === -1) break;
-      const headerText = buffer.slice(0, headerEnd).toString("utf8");
-      const match = headerText.match(/Content-Length:\s*(\d+)/i);
-      if (!match) {
-        buffer = buffer.slice(headerEnd + 4);
+      const boundary = findHeaderBoundary(buffer);
+      if (boundary) {
+        const { headerEnd, separatorLength } = boundary;
+        const headerText = buffer.slice(0, headerEnd).toString("utf8");
+        const match = headerText.match(/Content-Length:\s*(\d+)/i);
+        if (!match) {
+          buffer = buffer.slice(headerEnd + separatorLength);
+          continue;
+        }
+
+        const contentLength = Number(match[1]);
+        const totalLength = headerEnd + separatorLength + contentLength;
+        if (!Number.isFinite(contentLength) || contentLength < 0) {
+          buffer = buffer.slice(headerEnd + separatorLength);
+          continue;
+        }
+        if (buffer.length < totalLength) break;
+
+        const body = buffer.slice(headerEnd + separatorLength, totalLength).toString("utf8");
+        buffer = buffer.slice(totalLength);
+        setOutputTransportMode("content-length");
+
+        try {
+          const message = JSON.parse(body);
+          enqueue(message);
+        } catch (error) {
+          writeMessage(errorResponse(null, -32700, error instanceof Error ? error.message : String(error)));
+        }
         continue;
       }
-      const contentLength = Number(match[1]);
-      const totalLength = headerEnd + 4 + contentLength;
-      if (buffer.length < totalLength) break;
-      const body = buffer.slice(headerEnd + 4, totalLength).toString("utf8");
-      buffer = buffer.slice(totalLength);
+
+      const jsonLine = takeJsonLineMessage(buffer);
+      if (!jsonLine) {
+        break;
+      }
+
+      buffer = buffer.slice(jsonLine.consumed);
+      if (!jsonLine.message) {
+        continue;
+      }
+      setOutputTransportMode("json-line");
+
       try {
-        const message = JSON.parse(body);
-        await handleMessage(message);
+        const message = JSON.parse(jsonLine.message);
+        enqueue(message);
       } catch (error) {
         writeMessage(errorResponse(null, -32700, error instanceof Error ? error.message : String(error)));
       }
     }
+  };
+
+  if (typeof process.stdin.resume === "function") {
+    process.stdin.resume();
+  }
+
+  process.stdin.on("data", onData);
+
+  await new Promise((resolve) => {
+    let closed = false;
+    const finish = () => {
+      if (closed) return;
+      closed = true;
+      resolve(undefined);
+    };
+
+    process.stdin.on("end", finish);
+    process.stdin.on("close", finish);
+    process.on("SIGINT", finish);
+    process.on("SIGTERM", finish);
   });
 }
 
