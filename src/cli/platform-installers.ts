@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { doctorAsmSharedConfig, getAsmSharedConfig, resolveAsmConfigPath } from "../shared/asm-config.ts";
 import { runInitOpenClaw } from "../../scripts/init-openclaw.mjs";
 
@@ -186,6 +186,51 @@ async function runSetupOpenClawInstall(ctx: AsmInstallContext): Promise<AsmInsta
   };
 }
 
+function resolveOpencodeConfigPath(homeDir?: string): string {
+  const home = homeDir || process.env.HOME || process.cwd();
+  return join(home, ".config", "opencode", "config.json");
+}
+
+function ensureOpencodeConfig(
+  opencodeConfigPath: string,
+  asmConfigPath: string,
+): { existed: boolean; config: Record<string, unknown> } {
+  const existed = existsSync(opencodeConfigPath);
+  let current: Record<string, unknown> = {};
+  if (existed) {
+    try {
+      const parsed = JSON.parse(readFileSync(opencodeConfigPath, "utf8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        current = parsed as Record<string, unknown>;
+      }
+    } catch {
+      current = {};
+    }
+  }
+
+  const currentMcp = current.mcp || {};
+  const currentServers = (currentMcp as Record<string, unknown>).servers || {};
+  const next = {
+    ...current,
+    mcp: {
+      ...(currentMcp as Record<string, unknown>),
+      servers: {
+        ...(currentServers as Record<string, unknown>),
+        asm: {
+          command: "asm",
+          args: ["project-event", "--project-id", "<project-id>", "--repo-root", "<repo-root>"],
+          mode: "read-only",
+          asmConfigPath,
+        },
+      },
+    },
+  };
+
+  mkdirSync(dirname(opencodeConfigPath), { recursive: true });
+  writeFileSync(opencodeConfigPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  return { existed, config: next };
+}
+
 function createPlannedInstaller(
   id: "paperclip" | "opencode",
   summary: string,
@@ -239,16 +284,37 @@ const paperclipInstaller = createPlannedInstaller(
   ],
 );
 
-const opencodeInstaller = createPlannedInstaller(
-  "opencode",
-  "Bootstrap OpenCode read-only/MCP integration using ASM shared config and ASM-106 retrieval contract.",
-  ["core.projectWorkspaceRoot", "core.storage.slotDbDir", "adapters.opencode.enabled", "adapters.opencode.mode"],
-  ["opencode config", "mcp config"],
-  [
-    "[ASM-104] Intended flow: bootstrap read-only/MCP integration and write OpenCode adapter config using ASM shared config.",
-    "[ASM-104] Runtime retrieval contract is available via ASM-106; installer wiring remains to be implemented.",
-  ],
-);
+const opencodeInstaller: AsmPlatformInstaller = {
+  id: "opencode",
+  describe() {
+    return {
+      id: "opencode",
+      displayName: "OpenCode",
+      status: "implemented",
+      summary: "Bootstrap OpenCode read-only/MCP integration using ASM shared config and ASM-106 retrieval contract.",
+      requiredSharedConfigKeys: ["core.projectWorkspaceRoot", "core.storage.slotDbDir", "adapters.opencode.enabled", "adapters.opencode.mode"],
+      platformLocalConfigPaths: ["~/.config/opencode/config.json"],
+    };
+  },
+  async install(ctx) {
+    const initSetup = await runInitSetupFlow({ log: ctx.log, env: ctx.env, homeDir: ctx.homeDir, argv: ["--yes"] });
+    const asmConfigPath = String(initSetup.path);
+    const opencodeConfigPath = resolveOpencodeConfigPath(ctx.homeDir);
+    const ensured = ensureOpencodeConfig(opencodeConfigPath, asmConfigPath);
+    ctx.log(`[ASM-104] install opencode ${ensured.existed ? "updated" : "created"} config at: ${opencodeConfigPath}`);
+    ctx.log("[ASM-104] OpenCode MCP/read-only integration now points to ASM shared config and should use ASM-106 retrieval contract.");
+    return {
+      ok: true,
+      step: "install-opencode",
+      platform: "opencode",
+      details: {
+        asmConfigPath,
+        opencodeConfigPath,
+        existed: ensured.existed,
+      },
+    };
+  },
+};
 
 const REGISTRY = new Map<string, AsmPlatformInstaller>([
   [openclawInstaller.id, openclawInstaller],

@@ -240,14 +240,37 @@ test("runInitSetupFlow creates shared ASM config with platform defaults", async 
   assertEqual(written.adapters.opencode.mode, "read-only", "init-setup should enforce read-only default for opencode adapter");
 });
 
-test("runInstallPlatformFlow returns not-implemented contract for paperclip/opencode", async () => {
-  const paperclip = await runInstallPlatformFlow({ platform: "paperclip", log: () => {} });
-  const opencode = await runInstallPlatformFlow({ platform: "opencode", log: () => {} });
+test("runInstallPlatformFlow returns not-implemented contract for paperclip and implemented path for opencode", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
 
-  assertEqual(paperclip.ok, false, "paperclip install should be contract-only for now");
-  assertEqual(opencode.ok, false, "opencode install should be contract-only for now");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "asm-opencode-install-"));
+  const paperclip = await runInstallPlatformFlow({
+    platform: "paperclip",
+    runner: createShellRunner(),
+    initOpenClaw: async () => ({ applied: true }) as any,
+    log: () => {},
+    argv: [],
+    env: { ...process.env, HOME: home },
+    homeDir: home,
+  });
+  const opencode = await runInstallPlatformFlow({
+    platform: "opencode",
+    runner: createShellRunner(),
+    initOpenClaw: async () => ({ applied: true }) as any,
+    log: () => {},
+    argv: [],
+    env: { ...process.env, HOME: home },
+    homeDir: home,
+  });
+
+  assertEqual(paperclip.ok, false, "paperclip install should still be contract-only for now");
   assertEqual(paperclip.step, "install-paperclip-not-implemented", "paperclip should return structured not-implemented step");
-  assertEqual(opencode.step, "install-opencode-not-implemented", "opencode should return structured not-implemented step");
+  assertEqual(opencode.ok, true, "opencode install should now be implemented");
+  assertEqual(opencode.step, "install-opencode", "opencode should return implemented install step");
+  const written = JSON.parse(fs.readFileSync(path.join(home, ".config", "opencode", "config.json"), "utf8"));
+  assertEqual(written.mcp.servers.asm.mode, "read-only", "opencode config should wire ASM MCP server in read-only mode");
 });
 
 test("runSetupOpenClawFlow fails early when openclaw missing", async () => {
