@@ -1,12 +1,16 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { runInitOpenClaw } from "../scripts/init-openclaw.mjs";
 import { createShellRunner, runInitSetupFlow, runInstallPlatformFlow } from "../dist/cli/platform-installers.js";
 import { runOpencodeMcpServer } from "./opencode-mcp-server.mjs";
 
 const ASM_PLUGIN_PACKAGE = "@mrc2204/agent-smart-memo";
 const ASM_PLUGIN_ID = "agent-smart-memo";
+
+console.error("[ASM-TRACE] import.meta.url=", import.meta.url);
+console.error("[ASM-TRACE] argv=", JSON.stringify(process.argv));
+console.error("[ASM-TRACE] cwd=", process.cwd());
 
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -171,15 +175,82 @@ function parseProjectEventArgs(argv = []) {
   return out;
 }
 
+function resolveUserBinDir() {
+  const home = process.env.HOME || process.cwd();
+  return join(home, '.local', 'bin');
+}
+
+function pathContains(dir) {
+  return String(process.env.PATH || '').split(':').includes(dir);
+}
+
+function detectShellProfile() {
+  const shell = String(process.env.SHELL || '').trim();
+  const home = process.env.HOME || process.cwd();
+  if (shell.endsWith('/zsh')) return { shell: 'zsh', profilePath: join(home, '.zshrc') };
+  if (shell.endsWith('/bash')) return { shell: 'bash', profilePath: join(home, '.bashrc') };
+  return { shell: shell || 'unknown', profilePath: join(home, '.profile') };
+}
+
+function profileHasPathLine(profilePath, userBin) {
+  try {
+    const content = readFileSync(profilePath, 'utf8');
+    return content.includes(userBin) || content.includes('$HOME/.local/bin');
+  } catch {
+    return false;
+  }
+}
+
+function appendPathLine(profilePath, userBin) {
+  const exportLine = `\n# Added by ASM CLI installer\nexport PATH=\"${userBin}:$PATH\"\n`;
+  const existing = (() => { try { return readFileSync(profilePath, 'utf8'); } catch { return ''; } })();
+  if (!existing.includes(userBin) && !existing.includes('$HOME/.local/bin')) {
+    writeFileSync(profilePath, `${existing}${exportLine}`, 'utf8');
+  }
+}
+
+function createAsmLauncher() {
+  const userBin = resolveUserBinDir();
+  mkdirSync(userBin, { recursive: true });
+  const launcherPath = join(userBin, 'asm');
+  const packageRoot = resolve(dirname(new URL(import.meta.url).pathname), '..');
+  const launcher = `#!/usr/bin/env bash\nnode \"${join(packageRoot, 'bin', 'asm.mjs')}\" \"$@\"\n`;
+  writeFileSync(launcherPath, launcher, 'utf8');
+  chmodSync(launcherPath, 0o755);
+  return { launcherPath, userBin };
+}
+
 export async function runCliBootstrapFlow({ log = console.log } = {}) {
-  log("[ASM-CLI] Installing / exposing ASM CLI only...");
+  log('[ASM-CLI] Installing / exposing ASM CLI only...');
   log(`[ASM-CLI] Package: ${ASM_PLUGIN_PACKAGE}`);
-  log("[ASM-CLI] The CLI entrypoint is now available as: asm");
-  log("[ASM-CLI] Next steps:");
-  log("  1) asm install openclaw");
-  log("  2) asm install opencode");
-  log("  3) asm install paperclip");
-  return { ok: true, step: "install-cli" };
+  const installed = createAsmLauncher();
+  log(`[ASM-CLI] Installed launcher: ${installed.launcherPath}`);
+  if (!pathContains(installed.userBin)) {
+    const detected = detectShellProfile();
+    log(`[ASM-CLI] ${installed.userBin} is not currently on PATH.`);
+    const shouldPatch = process.stdin.isTTY
+      ? await askYesNo(`[ASM-CLI] Add ${installed.userBin} to ${detected.profilePath} now? [y/N] `)
+      : false;
+    if (shouldPatch) {
+      appendPathLine(detected.profilePath, installed.userBin);
+      log(`[ASM-CLI] Updated ${detected.profilePath}`);
+      log(`[ASM-CLI] Run: source ${detected.profilePath}  (or open a new terminal)`);
+      process.env.PATH = `${installed.userBin}:${process.env.PATH || ''}`;
+    } else {
+      log(`[ASM-CLI] To enable 'asm' in future shells, add this line to ${detected.profilePath}:`);
+      log(`  export PATH=\"${installed.userBin}:$PATH\"`);
+    }
+  }
+  const verify = createShellRunner()('bash', ['-lc', `"${installed.launcherPath}" --help`]);
+  if (!verify.ok) {
+    return { ok: false, step: 'verify-cli-launcher', details: { stdout: verify.stdout, stderr: verify.stderr, launcherPath: installed.launcherPath } };
+  }
+  log('[ASM-CLI] asm launcher verified successfully.');
+  log('[ASM-CLI] Next steps:');
+  log('  1) asm install openclaw');
+  log('  2) asm install opencode');
+  log('  3) asm install paperclip');
+  return { ok: true, step: 'install-cli', details: installed };
 }
 
 export async function runSetupOpenClawFlow({
