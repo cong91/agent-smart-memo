@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { stdin as input, stdout as output } from "node:process";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import type { runInitOpenClaw } from "../../scripts/init-openclaw.mjs";
 import {
@@ -53,6 +55,8 @@ export interface AsmPlatformInstaller {
 	install(ctx: AsmInstallContext): Promise<AsmInstallerResult>;
 }
 
+const ASM_PLUGIN_ID = "agent-smart-memo";
+
 function text(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
 }
@@ -95,6 +99,250 @@ function parseNonInteractive(argv: string[] = []): {
 		args.includes("-y") ||
 		args.includes("--non-interactive");
 	return { nonInteractive: enabled, autoApply: enabled };
+}
+
+function toInt(value: unknown, fallback: number): number {
+	const parsed = Number(value);
+	return Number.isFinite(parsed) ? Math.trunc(parsed) : fallback;
+}
+
+function toFloat(value: unknown, fallback: number): number {
+	const parsed = Number(value);
+	return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function toBool(value: unknown, fallback: boolean): boolean {
+	if (typeof value === "boolean") return value;
+	if (typeof value === "string") {
+		const normalized = value.trim().toLowerCase();
+		if (["1", "true", "yes", "y"].includes(normalized)) return true;
+		if (["0", "false", "no", "n"].includes(normalized)) return false;
+	}
+	return fallback;
+}
+
+async function promptYesNo(
+	question: string,
+	fallback = false,
+): Promise<boolean> {
+	if (!input.isTTY || !output.isTTY) return fallback;
+	const rl = createInterface({ input, output });
+	try {
+		const answer = String(await rl.question(question))
+			.trim()
+			.toLowerCase();
+		if (!answer) return fallback;
+		if (["y", "yes", "1", "true"].includes(answer)) return true;
+		if (["n", "no", "0", "false"].includes(answer)) return false;
+		return fallback;
+	} finally {
+		rl.close();
+	}
+}
+
+async function promptText(question: string, fallback: string): Promise<string> {
+	if (!input.isTTY || !output.isTTY) return fallback;
+	const rl = createInterface({ input, output });
+	try {
+		const answer = String(
+			await rl.question(`${question} [${fallback}]: `),
+		).trim();
+		return answer || fallback;
+	} finally {
+		rl.close();
+	}
+}
+
+async function buildWizardCoreConfig(
+	existing: Record<string, unknown> | undefined,
+	defaults: {
+		projectWorkspaceRoot: string;
+		qdrantHost: string;
+		qdrantPort: number;
+		qdrantCollection: string;
+		qdrantVectorSize: number;
+		llmBaseUrl: string;
+		llmApiKey: string;
+		llmModel: string;
+		embedBaseUrl: string;
+		embedBackend: string;
+		embedModel: string;
+		embedDimensions: number;
+		autoCaptureEnabled: boolean;
+		autoCaptureMinConfidence: number;
+		contextWindowMaxTokens: number;
+		summarizeEveryActions: number;
+		slotDbDir: string;
+	},
+	mode: { nonInteractive: boolean },
+): Promise<Record<string, unknown>> {
+	const current = existing || {};
+
+	if (mode.nonInteractive) {
+		return {
+			projectWorkspaceRoot:
+				text(current.projectWorkspaceRoot) || defaults.projectWorkspaceRoot,
+			qdrantHost: text(current.qdrantHost) || defaults.qdrantHost,
+			qdrantPort: toInt(current.qdrantPort, defaults.qdrantPort),
+			qdrantCollection:
+				text(current.qdrantCollection) || defaults.qdrantCollection,
+			qdrantVectorSize: toInt(
+				current.qdrantVectorSize,
+				defaults.qdrantVectorSize,
+			),
+			llmBaseUrl: text(current.llmBaseUrl) || defaults.llmBaseUrl,
+			llmApiKey: text(current.llmApiKey) || defaults.llmApiKey,
+			llmModel: text(current.llmModel) || defaults.llmModel,
+			embedBaseUrl: text(current.embedBaseUrl) || defaults.embedBaseUrl,
+			embedBackend: text(current.embedBackend) || defaults.embedBackend,
+			embedModel: text(current.embedModel) || defaults.embedModel,
+			embedDimensions: toInt(current.embedDimensions, defaults.embedDimensions),
+			autoCaptureEnabled: toBool(
+				current.autoCaptureEnabled,
+				defaults.autoCaptureEnabled,
+			),
+			autoCaptureMinConfidence: toFloat(
+				current.autoCaptureMinConfidence,
+				defaults.autoCaptureMinConfidence,
+			),
+			contextWindowMaxTokens: toInt(
+				current.contextWindowMaxTokens,
+				defaults.contextWindowMaxTokens,
+			),
+			summarizeEveryActions: toInt(
+				current.summarizeEveryActions,
+				defaults.summarizeEveryActions,
+			),
+			storage: {
+				slotDbDir:
+					text(
+						(current.storage as Record<string, unknown> | undefined)?.slotDbDir,
+					) || defaults.slotDbDir,
+			},
+		};
+	}
+
+	const projectWorkspaceRoot = await promptText(
+		"projectWorkspaceRoot",
+		text(current.projectWorkspaceRoot) || defaults.projectWorkspaceRoot,
+	);
+	const qdrantHost = await promptText(
+		"Qdrant host",
+		text(current.qdrantHost) || defaults.qdrantHost,
+	);
+	const qdrantPort = toInt(
+		await promptText(
+			"Qdrant port",
+			String(toInt(current.qdrantPort, defaults.qdrantPort)),
+		),
+		defaults.qdrantPort,
+	);
+	const qdrantCollection = await promptText(
+		"Qdrant collection",
+		text(current.qdrantCollection) || defaults.qdrantCollection,
+	);
+	const qdrantVectorSize = toInt(
+		await promptText(
+			"Qdrant vector size",
+			String(toInt(current.qdrantVectorSize, defaults.qdrantVectorSize)),
+		),
+		defaults.qdrantVectorSize,
+	);
+	const llmBaseUrl = await promptText(
+		"LLM base URL",
+		text(current.llmBaseUrl) || defaults.llmBaseUrl,
+	);
+	const llmApiKey = await promptText(
+		"LLM API key",
+		text(current.llmApiKey) || defaults.llmApiKey,
+	);
+	const llmModel = await promptText(
+		"LLM model",
+		text(current.llmModel) || defaults.llmModel,
+	);
+	const embedBaseUrl = await promptText(
+		"Embedding base URL",
+		text(current.embedBaseUrl) || defaults.embedBaseUrl,
+	);
+	const embedBackend = await promptText(
+		"Embedding backend",
+		text(current.embedBackend) || defaults.embedBackend,
+	);
+	const embedModel = await promptText(
+		"Embedding model",
+		text(current.embedModel) || defaults.embedModel,
+	);
+	const embedDimensions = toInt(
+		await promptText(
+			"Embedding dimensions",
+			String(toInt(current.embedDimensions, defaults.embedDimensions)),
+		),
+		defaults.embedDimensions,
+	);
+	const autoCaptureEnabled = toBool(
+		await promptText(
+			"autoCaptureEnabled (true/false)",
+			String(toBool(current.autoCaptureEnabled, defaults.autoCaptureEnabled)),
+		),
+		defaults.autoCaptureEnabled,
+	);
+	const autoCaptureMinConfidence = toFloat(
+		await promptText(
+			"autoCaptureMinConfidence",
+			String(
+				toFloat(
+					current.autoCaptureMinConfidence,
+					defaults.autoCaptureMinConfidence,
+				),
+			),
+		),
+		defaults.autoCaptureMinConfidence,
+	);
+	const contextWindowMaxTokens = toInt(
+		await promptText(
+			"contextWindowMaxTokens",
+			String(
+				toInt(current.contextWindowMaxTokens, defaults.contextWindowMaxTokens),
+			),
+		),
+		defaults.contextWindowMaxTokens,
+	);
+	const summarizeEveryActions = toInt(
+		await promptText(
+			"summarizeEveryActions",
+			String(
+				toInt(current.summarizeEveryActions, defaults.summarizeEveryActions),
+			),
+		),
+		defaults.summarizeEveryActions,
+	);
+	const slotDbDir = await promptText(
+		"slotDbDir",
+		text((current.storage as Record<string, unknown> | undefined)?.slotDbDir) ||
+			defaults.slotDbDir,
+	);
+
+	return {
+		projectWorkspaceRoot,
+		qdrantHost,
+		qdrantPort,
+		qdrantCollection,
+		qdrantVectorSize,
+		llmBaseUrl,
+		llmApiKey,
+		llmModel,
+		embedBaseUrl,
+		embedBackend,
+		embedModel,
+		embedDimensions,
+		autoCaptureEnabled,
+		autoCaptureMinConfidence,
+		contextWindowMaxTokens,
+		summarizeEveryActions,
+		storage: {
+			slotDbDir,
+		},
+	};
 }
 
 export async function runInitSetupFlow({
@@ -140,67 +388,80 @@ export async function runInitSetupFlow({
 		core: {},
 		adapters: {},
 	};
+
+	const adapters = {
+		...(baseConfig.adapters || {}),
+		openclaw: {
+			enabled: true,
+			...((baseConfig.adapters || {}).openclaw || {}),
+		},
+		paperclip: {
+			enabled: true,
+			...((baseConfig.adapters || {}).paperclip || {}),
+		},
+		opencode: {
+			enabled: true,
+			mode: "read-only",
+			...((baseConfig.adapters || {}).opencode || {}),
+		},
+	};
+
+	const shouldRunWizard = mode.nonInteractive
+		? true
+		: await promptYesNo(
+				"[ASM-104] Run shared ASM setup wizard now? [y/N] ",
+				false,
+			);
+
+	if (!shouldRunWizard) {
+		if (doctor.exists) {
+			log(`[ASM-104] init-setup kept existing shared config at: ${path}`);
+			log(
+				"[ASM-104] You can re-run `asm init-setup` anytime to open the full wizard.",
+			);
+			return {
+				ok: true,
+				step: "init-setup",
+				path,
+				existed: true,
+				nonInteractive: mode.nonInteractive,
+			};
+		}
+
+		const minimalConfig = {
+			schemaVersion: 1,
+			core: {},
+			adapters,
+		};
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, `${JSON.stringify(minimalConfig, null, 2)}\n`, "utf8");
+		log(`[ASM-104] init-setup created minimal shared config at: ${path}`);
+		log(
+			"[ASM-104] Shared config wizard was skipped. Edit this file later or rerun `asm init-setup` for full prompts.",
+		);
+		return {
+			ok: true,
+			step: "init-setup",
+			path,
+			existed: false,
+			nonInteractive: mode.nonInteractive,
+		};
+	}
+
+	const wizardCore = await buildWizardCoreConfig(
+		baseConfig.core as Record<string, unknown> | undefined,
+		bootstrapDefaults,
+		mode,
+	);
+
 	const nextConfig = {
 		schemaVersion:
 			typeof baseConfig.schemaVersion === "number"
 				? baseConfig.schemaVersion
 				: 1,
 		...baseConfig,
-		core: {
-			...(baseConfig.core || {}),
-			projectWorkspaceRoot:
-				baseConfig.core?.projectWorkspaceRoot ||
-				bootstrapDefaults.projectWorkspaceRoot,
-			qdrantHost: baseConfig.core?.qdrantHost || bootstrapDefaults.qdrantHost,
-			qdrantPort: baseConfig.core?.qdrantPort || bootstrapDefaults.qdrantPort,
-			qdrantCollection:
-				baseConfig.core?.qdrantCollection || bootstrapDefaults.qdrantCollection,
-			qdrantVectorSize:
-				baseConfig.core?.qdrantVectorSize || bootstrapDefaults.qdrantVectorSize,
-			llmBaseUrl: baseConfig.core?.llmBaseUrl || bootstrapDefaults.llmBaseUrl,
-			llmApiKey: baseConfig.core?.llmApiKey || bootstrapDefaults.llmApiKey,
-			llmModel: baseConfig.core?.llmModel || bootstrapDefaults.llmModel,
-			embedBaseUrl:
-				baseConfig.core?.embedBaseUrl || bootstrapDefaults.embedBaseUrl,
-			embedBackend:
-				baseConfig.core?.embedBackend || bootstrapDefaults.embedBackend,
-			embedModel: baseConfig.core?.embedModel || bootstrapDefaults.embedModel,
-			embedDimensions:
-				baseConfig.core?.embedDimensions || bootstrapDefaults.embedDimensions,
-			autoCaptureEnabled:
-				baseConfig.core?.autoCaptureEnabled ??
-				bootstrapDefaults.autoCaptureEnabled,
-			autoCaptureMinConfidence:
-				baseConfig.core?.autoCaptureMinConfidence ||
-				bootstrapDefaults.autoCaptureMinConfidence,
-			contextWindowMaxTokens:
-				baseConfig.core?.contextWindowMaxTokens ||
-				bootstrapDefaults.contextWindowMaxTokens,
-			summarizeEveryActions:
-				baseConfig.core?.summarizeEveryActions ||
-				bootstrapDefaults.summarizeEveryActions,
-			storage: {
-				...(baseConfig.core?.storage || {}),
-				slotDbDir:
-					baseConfig.core?.storage?.slotDbDir || bootstrapDefaults.slotDbDir,
-			},
-		},
-		adapters: {
-			...(baseConfig.adapters || {}),
-			openclaw: {
-				enabled: true,
-				...((baseConfig.adapters || {}).openclaw || {}),
-			},
-			paperclip: {
-				enabled: true,
-				...((baseConfig.adapters || {}).paperclip || {}),
-			},
-			opencode: {
-				enabled: true,
-				mode: "read-only",
-				...((baseConfig.adapters || {}).opencode || {}),
-			},
-		},
+		core: wizardCore,
+		adapters,
 	};
 
 	mkdirSync(dirname(path), { recursive: true });
@@ -224,7 +485,7 @@ export async function runInitSetupFlow({
 async function runSetupOpenClawInstall(
 	ctx: AsmInstallContext,
 ): Promise<AsmInstallerResult> {
-	const { runner, initOpenClaw, log, argv } = ctx;
+	const { runner, log, env, homeDir } = ctx;
 	log("[ASM-84] setup-openclaw: checking OpenClaw CLI ...");
 	const openclawVersion = runner("openclaw", ["--version"]);
 	if (!openclawVersion.ok) {
@@ -261,16 +522,114 @@ async function runSetupOpenClawInstall(
 	if (install.stdout) log(install.stdout);
 	if (install.stderr) log(install.stderr);
 
-	const mode = parseNonInteractive(argv);
-	const initResult = await initOpenClaw({
-		interactive: !mode.nonInteractive,
-		autoApply: mode.autoApply,
-	});
+	const asmConfigPath = resolveAsmConfigPath({ env, homeDir });
+	if (!existsSync(asmConfigPath)) {
+		log(`[ASM-104] ❌ Shared ASM config not found at: ${asmConfigPath}`);
+		log(
+			"[ASM-104] Run `asm init-setup` first to create shared config, then rerun `asm install openclaw`.",
+		);
+		return {
+			ok: false,
+			step: "missing-shared-config",
+			platform: "openclaw",
+			details: { asmConfigPath },
+		};
+	}
+
+	const openclawConfigPath =
+		text(env.OPENCLAW_CONFIG_PATH) ||
+		text(env.OPENCLAW_RUNTIME_CONFIG) ||
+		join(homeDir || env.HOME || process.cwd(), ".openclaw", "openclaw.json");
+	const openclawConfigExisted = existsSync(openclawConfigPath);
+
+	let openclawConfig: Record<string, unknown> = {};
+	if (existsSync(openclawConfigPath)) {
+		try {
+			const parsed = JSON.parse(readFileSync(openclawConfigPath, "utf8"));
+			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+				openclawConfig = parsed as Record<string, unknown>;
+			}
+		} catch (error) {
+			return {
+				ok: false,
+				step: "invalid-openclaw-config-json",
+				platform: "openclaw",
+				details: {
+					openclawConfigPath,
+					error: error instanceof Error ? error.message : String(error),
+				},
+			};
+		}
+	}
+
+	const plugins =
+		openclawConfig.plugins &&
+		typeof openclawConfig.plugins === "object" &&
+		!Array.isArray(openclawConfig.plugins)
+			? { ...(openclawConfig.plugins as Record<string, unknown>) }
+			: {};
+	const entries =
+		plugins.entries &&
+		typeof plugins.entries === "object" &&
+		!Array.isArray(plugins.entries)
+			? { ...(plugins.entries as Record<string, unknown>) }
+			: {};
+	const prevEntry =
+		entries[ASM_PLUGIN_ID] &&
+		typeof entries[ASM_PLUGIN_ID] === "object" &&
+		!Array.isArray(entries[ASM_PLUGIN_ID])
+			? (entries[ASM_PLUGIN_ID] as Record<string, unknown>)
+			: {};
+	const prevEntryConfig =
+		prevEntry.config &&
+		typeof prevEntry.config === "object" &&
+		!Array.isArray(prevEntry.config)
+			? (prevEntry.config as Record<string, unknown>)
+			: {};
+	const allow = Array.isArray(plugins.allow)
+		? (plugins.allow as unknown[]).map((item) => text(item)).filter(Boolean)
+		: [];
+	if (!allow.includes(ASM_PLUGIN_ID)) allow.push(ASM_PLUGIN_ID);
+
+	const nextOpenClawConfig = {
+		...openclawConfig,
+		plugins: {
+			...plugins,
+			allow,
+			entries: {
+				...entries,
+				[ASM_PLUGIN_ID]: {
+					...prevEntry,
+					enabled: true,
+					config: {
+						...prevEntryConfig,
+						asmConfigPath,
+					},
+				},
+			},
+		},
+	};
+
+	mkdirSync(dirname(openclawConfigPath), { recursive: true });
+	writeFileSync(
+		openclawConfigPath,
+		`${JSON.stringify(nextOpenClawConfig, null, 2)}\n`,
+		"utf8",
+	);
+	log(
+		`[ASM-104] install openclaw bound plugins.entries.${ASM_PLUGIN_ID}.config.asmConfigPath -> ${asmConfigPath}`,
+	);
+	log(
+		`[ASM-104] install openclaw ${openclawConfigExisted ? "updated" : "created"} config at: ${openclawConfigPath}`,
+	);
 	return {
 		ok: true,
-		step: initResult?.applied ? "done" : "init-openclaw",
+		step: "bind-openclaw-config",
 		platform: "openclaw",
-		details: { applied: Boolean(initResult?.applied) },
+		details: {
+			asmConfigPath,
+			openclawConfigPath,
+		},
 	};
 }
 
@@ -402,10 +761,6 @@ const openclawInstaller: AsmPlatformInstaller = {
 	},
 };
 
-function deriveRepoRoot(homeDir?: string): string {
-	return homeDir ? join(homeDir, "Work", "projects") : process.cwd();
-}
-
 function packageArtifactExists(
 	repoRoot: string,
 	relativePath: string,
@@ -442,7 +797,6 @@ const paperclipInstaller: AsmPlatformInstaller = {
 			argv: ["--yes"],
 		});
 		const asmConfigPath = String(initSetup.path);
-		const repoRoot = deriveRepoRoot(ctx.homeDir ? undefined : undefined);
 
 		const packageRuntime = ctx.runner("npm", ["run", "package:paperclip"]);
 		if (!packageRuntime.ok) {
