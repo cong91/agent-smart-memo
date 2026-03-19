@@ -33,9 +33,9 @@ const DEFAULT_CONFIG: AutoCaptureConfig = {
   enabled: true,
   minConfidence: 0.7,
   useLLM: true,
-  llmBaseUrl: "http://localhost:8317/v1",
-  llmApiKey: "proxypal-local",
-  llmModel: "gemini-2.5-flash",
+  llmBaseUrl: "",
+  llmApiKey: "",
+  llmModel: "",
   summarizeEveryActions: 6,
 };
 

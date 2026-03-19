@@ -6,6 +6,7 @@ import { QdrantClient } from "../../services/qdrant.js";
 import { EmbeddingClient } from "../../services/embedding.js";
 import { DeduplicationService } from "../../services/dedupe.js";
 import { SemanticMemoryUseCase } from "../../core/usecases/semantic-memory-usecase.js";
+import { resolveAsmRuntimeConfig } from "../../shared/asm-config.js";
 
 export interface PaperclipRuntimeOptions {
   stateDir?: string;
@@ -29,10 +30,11 @@ export interface PaperclipRuntime {
 }
 
 export function createPaperclipRuntime(options?: PaperclipRuntimeOptions): PaperclipRuntime {
+  const runtime = resolveAsmRuntimeConfig({ env: process.env, homeDir: process.env.HOME });
   const stateDir = options?.stateDir || process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
   const slotDbDir = resolveSlotDbDir({
     stateDir,
-    slotDbDir: options?.slotDbDir,
+    slotDbDir: options?.slotDbDir || runtime.slotDbDir,
     env: process.env,
     homeDir: process.env.HOME,
   });
@@ -41,17 +43,17 @@ export function createPaperclipRuntime(options?: PaperclipRuntimeOptions): Paper
 
   const semanticUseCase = options?.semanticUseCase || (() => {
     const qdrant = new QdrantClient({
-      host: options?.qdrantHost || process.env.AGENT_MEMO_QDRANT_HOST || "localhost",
-      port: Number(options?.qdrantPort || process.env.AGENT_MEMO_QDRANT_PORT || 6333),
-      collection: options?.qdrantCollection || process.env.AGENT_MEMO_QDRANT_COLLECTION || "mrc_bot",
-      vectorSize: Number(options?.qdrantVectorSize || process.env.AGENT_MEMO_QDRANT_VECTOR_SIZE || 1024),
+      host: options?.qdrantHost || process.env.AGENT_MEMO_QDRANT_HOST || runtime.qdrantHost,
+      port: Number(options?.qdrantPort || process.env.AGENT_MEMO_QDRANT_PORT || runtime.qdrantPort),
+      collection: options?.qdrantCollection || process.env.AGENT_MEMO_QDRANT_COLLECTION || runtime.qdrantCollection,
+      vectorSize: Number(options?.qdrantVectorSize || process.env.AGENT_MEMO_QDRANT_VECTOR_SIZE || runtime.qdrantVectorSize),
     });
 
     const embedding = new EmbeddingClient({
-      embeddingApiUrl: options?.embedBaseUrl || process.env.AGENT_MEMO_EMBED_BASE_URL || "http://localhost:11434",
-      backend: options?.embedBackend,
-      model: options?.embedModel || process.env.AGENT_MEMO_EMBED_MODEL || "qwen3-embedding:0.6b",
-      dimensions: Number(options?.embedDimensions || process.env.AGENT_MEMO_EMBED_DIMENSIONS || 1024),
+      embeddingApiUrl: options?.embedBaseUrl || process.env.AGENT_MEMO_EMBED_BASE_URL || runtime.embedBaseUrl,
+      backend: options?.embedBackend || runtime.embedBackend,
+      model: options?.embedModel || process.env.AGENT_MEMO_EMBED_MODEL || runtime.embedModel,
+      dimensions: Number(options?.embedDimensions || process.env.AGENT_MEMO_EMBED_DIMENSIONS || runtime.embedDimensions),
       stateDir,
     });
 

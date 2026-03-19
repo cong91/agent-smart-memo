@@ -633,23 +633,17 @@ export async function runInitOpenClaw({ env = process.env, interactive = true, a
   const sharedCore = asObj(shared.core);
 
   const defaults = {
-    qdrantHost: String(sharedCore.qdrantHost || "localhost"),
-    qdrantPort: toIntOrDefault(sharedCore.qdrantPort, 6333),
-    qdrantCollection: String(sharedCore.qdrantCollection || "mrc_bot"),
-    llmBaseUrl: String(sharedCore.llmBaseUrl || "http://localhost:8317/v1"),
-    llmModel: String(sharedCore.llmModel || "gemini-2.5-flash"),
+    qdrantHost: String(sharedCore.qdrantHost || ""),
+    qdrantPort: toIntOrDefault(sharedCore.qdrantPort, 0),
+    qdrantCollection: String(sharedCore.qdrantCollection || ""),
+    llmBaseUrl: String(sharedCore.llmBaseUrl || ""),
+    llmModel: String(sharedCore.llmModel || ""),
     llmApiKey: String(sharedCore.llmApiKey || ""),
-    embedBackend: String(sharedCore.embedBackend || "ollama"),
-    embedModel: String(sharedCore.embedModel || "qwen3-embedding:0.6b"),
-    embedDimensions: toIntOrDefault(sharedCore.embedDimensions, 1024),
-    slotDbDir: String(sharedCore.storage?.slotDbDir || env.OPENCLAW_SLOTDB_DIR || `${env.HOME}/.openclaw/agent-memo`),
-    projectWorkspaceRoot: String(
-      sharedCore.projectWorkspaceRoot ||
-        env.AGENT_MEMO_PROJECT_WORKSPACE_ROOT ||
-        env.AGENT_MEMO_REPO_CLONE_ROOT ||
-        `${env.HOME}/Work/projects` ||
-        `${env.HOME}/.openclaw/workspace/projects`,
-    ),
+    embedBackend: String(sharedCore.embedBackend || ""),
+    embedModel: String(sharedCore.embedModel || ""),
+    embedDimensions: toIntOrDefault(sharedCore.embedDimensions, 0),
+    slotDbDir: String(sharedCore.storage?.slotDbDir || ""),
+    projectWorkspaceRoot: String(sharedCore.projectWorkspaceRoot || ""),
     asmConfigPath,
     mapMemorySlot: asObj(asObj(current.plugins).slots).memory === PLUGIN_ID,
     telegramOnboardingCommands: dedupeStringArray([
