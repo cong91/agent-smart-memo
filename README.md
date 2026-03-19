@@ -91,12 +91,17 @@ asm install opencode
 
 ## 3) Install ASM
 
-### Global install
+There are currently **two supported install flows**.
+
+### Flow A — CLI-first (recommended for ASM CLI usage)
+Install the CLI globally first:
+
 ```bash
 npm install -g @mrc2204/agent-smart-memo
 ```
 
-### Initialize shared ASM config
+Then initialize shared config:
+
 ```bash
 asm init-setup --yes
 ```
@@ -106,18 +111,31 @@ This creates or updates:
 ~/.config/asm/config.json
 ```
 
-### Install into a platform
+Then install a runtime target:
+
 ```bash
 asm install openclaw
 asm install paperclip
 asm install opencode
 ```
 
-Legacy compatibility still exists for older OpenClaw flows, but the preferred path is now:
+### Flow B — Plugin-first (direct OpenClaw plugin install)
+If you only want the OpenClaw plugin directly, install it through OpenClaw:
 
-```text
-asm init-setup -> asm install <platform>
+```bash
+openclaw plugins install @mrc2204/agent-smart-memo
 ```
+
+Then continue with OpenClaw-side config/bootstrap as needed.
+
+### Important note
+The command below is **not the recommended primary flow right now**:
+
+```bash
+npx @mrc2204/agent-smart-memo install
+```
+
+Use the two supported flows above until CLI bootstrap is fully separated/standardized.
 
 ---
 
@@ -177,11 +195,16 @@ This keeps `openclaw.json` from becoming a second core source-of-truth.
 
 ## 5) OpenClaw quick start
 
-### Install from npm
+### Install from npm (CLI-first)
 ```bash
 npm install -g @mrc2204/agent-smart-memo
 asm init-setup --yes
 asm install openclaw --yes
+```
+
+### Install plugin directly into OpenClaw (plugin-first)
+```bash
+openclaw plugins install @mrc2204/agent-smart-memo
 ```
 
 ### Install locally from source
