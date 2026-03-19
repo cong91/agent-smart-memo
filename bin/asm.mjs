@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { runInitOpenClaw } from "../scripts/init-openclaw.mjs";
-import { createShellRunner, runInitSetupFlow, runInstallPlatformFlow } from "../src/cli/platform-installers.ts";
+import { createShellRunner, runInitSetupFlow, runInstallPlatformFlow } from "../dist/cli/platform-installers.js";
 import { runOpencodeMcpServer } from "./opencode-mcp-server.mjs";
 
 const ASM_PLUGIN_PACKAGE = "@mrc2204/agent-smart-memo";
