@@ -36,11 +36,13 @@ export function parseAsmCliArgs(argv = []) {
     return { command: "setup-openclaw", argv: args.slice(2) };
   }
 
-  if (first === "install" && (args[1] || "")) {
+  if (first === "install") {
+    const platform = String(args[1] || "openclaw").trim().toLowerCase();
+    const hasExplicitPlatform = Boolean(args[1]);
     return {
       command: "install-platform",
-      platform: String(args[1] || "").trim().toLowerCase(),
-      argv: args.slice(2),
+      platform,
+      argv: hasExplicitPlatform ? args.slice(2) : args.slice(1),
     };
   }
 
