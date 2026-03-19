@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { runInitOpenClaw } from "../scripts/init-openclaw.mjs";
 import { createShellRunner, runInitSetupFlow, runInstallPlatformFlow } from "../dist/cli/platform-installers.js";
 import { runOpencodeMcpServer } from "./opencode-mcp-server.mjs";
+import { resolveAsmRuntimeConfig } from "../dist/shared/asm-config.js";
 
 const ASM_PLUGIN_PACKAGE = "@mrc2204/agent-smart-memo";
 const ASM_PLUGIN_ID = "agent-smart-memo";
@@ -386,39 +387,29 @@ export async function main(argv = process.argv.slice(2)) {
       console.error('[ASM-87] project-event requires --project-id and --repo-root');
       return 1;
     }
-    const pluginId = 'agent-smart-memo';
-    const cfgPath = resolve(process.env.HOME || '', '.openclaw', 'openclaw.json');
-    let qdrantCollection = 'mrc_bot';
-    let llmBaseUrl = 'http://localhost:8317/v1';
-    let llmApiKey = 'proxypal-local';
-    let llmModel = 'gpt-5.4';
-    let embedModel = 'qwen3-embedding:0.6b';
-    let embedDimensions = 1024;
-    let slotDbDir = resolve(process.env.HOME || '', '.openclaw', 'agent-memo');
-    try {
-      const raw = JSON.parse(readFileSync(cfgPath, 'utf8'));
-      const cfg = raw?.plugins?.entries?.[pluginId]?.config || {};
-      qdrantCollection = cfg.qdrantCollection || qdrantCollection;
-      llmBaseUrl = cfg.llmBaseUrl || llmBaseUrl;
-      llmApiKey = cfg.llmApiKey || llmApiKey;
-      llmModel = cfg.llmModel || llmModel;
-      embedModel = cfg.embedModel || embedModel;
-      embedDimensions = cfg.embedDimensions || embedDimensions;
-      slotDbDir = cfg.slotDbDir || slotDbDir;
-    } catch {}
+    const runtime = resolveAsmRuntimeConfig({ env: process.env, homeDir: process.env.HOME });
 
-    process.env.OPENCLAW_SLOTDB_DIR = slotDbDir;
+    process.env.OPENCLAW_SLOTDB_DIR = runtime.slotDbDir;
     process.env.AGENT_MEMO_PROJECT_WORKSPACE_ROOT = event.repoRoot;
     process.env.AGENT_MEMO_REPO_CLONE_ROOT = event.repoRoot;
     process.env.PROJECT_WORKSPACE_ROOT = event.repoRoot;
     process.env.REPO_CLONE_ROOT = event.repoRoot;
-    process.env.QDRANT_COLLECTION = qdrantCollection;
-    process.env.LLM_BASE_URL = llmBaseUrl;
-    process.env.LLM_API_KEY = llmApiKey;
-    process.env.LLM_MODEL = llmModel;
-    process.env.EMBED_MODEL = embedModel;
-    process.env.EMBEDDING_MODEL = embedModel;
-    process.env.EMBEDDING_DIMENSIONS = String(embedDimensions);
+    process.env.QDRANT_COLLECTION = runtime.qdrantCollection;
+    process.env.LLM_BASE_URL = runtime.llmBaseUrl;
+    process.env.LLM_API_KEY = runtime.llmApiKey;
+    process.env.LLM_MODEL = runtime.llmModel;
+    process.env.EMBED_MODEL = runtime.embedModel;
+    process.env.EMBEDDING_MODEL = runtime.embedModel;
+    process.env.EMBEDDING_DIMENSIONS = String(runtime.embedDimensions);
+    process.env.AGENT_MEMO_QDRANT_HOST = runtime.qdrantHost;
+    process.env.AGENT_MEMO_QDRANT_PORT = String(runtime.qdrantPort);
+    process.env.AGENT_MEMO_QDRANT_COLLECTION = runtime.qdrantCollection;
+    process.env.AGENT_MEMO_QDRANT_VECTOR_SIZE = String(runtime.qdrantVectorSize);
+    process.env.AGENT_MEMO_EMBED_BASE_URL = runtime.embedBaseUrl;
+    process.env.AGENT_MEMO_EMBED_MODEL = runtime.embedModel;
+    process.env.AGENT_MEMO_EMBED_DIMENSIONS = String(runtime.embedDimensions);
+
+    const slotDbDir = runtime.slotDbDir;
 
     const { SlotDB } = await import('../dist/db/slot-db.js');
     const { DefaultMemoryUseCasePort } = await import('../dist/core/usecases/default-memory-usecase-port.js');

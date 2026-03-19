@@ -64,6 +64,27 @@ export interface LoadAsmSharedConfigResult {
   };
 }
 
+export interface AsmResolvedRuntimeConfig {
+  asmConfigPath: string;
+  projectWorkspaceRoot: string;
+  qdrantHost: string;
+  qdrantPort: number;
+  qdrantCollection: string;
+  qdrantVectorSize: number;
+  llmBaseUrl: string;
+  llmApiKey: string;
+  llmModel: string;
+  embedBaseUrl: string;
+  embedBackend?: "ollama" | "openai" | "docker";
+  embedModel: string;
+  embedDimensions: number;
+  autoCaptureEnabled: boolean;
+  autoCaptureMinConfidence: number;
+  contextWindowMaxTokens: number;
+  summarizeEveryActions: number;
+  slotDbDir: string;
+}
+
 export interface AsmSharedConfigDoctorResult {
   path: string;
   source: "explicit" | "env" | "default";
@@ -358,6 +379,56 @@ export function resolveAsmAdapterLocalConfig(
 
 export function getAsmSharedConfig(input: LoadAsmSharedConfigInput = {}): LoadAsmSharedConfigResult {
   return loadAsmSharedConfig(input);
+}
+
+function requireString(value: unknown, field: string): string {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  throw new Error(`ASM shared config missing required field: core.${field}`);
+}
+
+function requireNumber(value: unknown, field: string): number {
+  const n = Number(value);
+  if (Number.isFinite(n)) return n;
+  throw new Error(`ASM shared config missing/invalid required field: core.${field}`);
+}
+
+function requireBoolean(value: unknown, field: string): boolean {
+  if (typeof value === "boolean") return value;
+  throw new Error(`ASM shared config missing/invalid required field: core.${field}`);
+}
+
+export function resolveAsmRuntimeConfig(input: LoadAsmSharedConfigInput = {}): AsmResolvedRuntimeConfig {
+  const path = resolveAsmConfigPath(input);
+  const loaded = loadAsmSharedConfig(input);
+  if (!loaded.config || !loaded.config.core) {
+    throw new Error(`ASM shared config not loaded or missing core at: ${path}`);
+  }
+  const core = loaded.config.core as Record<string, unknown>;
+  const embedBackend = firstNonEmptyString(core.embedBackend);
+  const slotDbDir = resolveAsmCoreSlotDbDir(input);
+  const projectWorkspaceRoot = resolveAsmCoreProjectWorkspaceRoot(input);
+  if (!slotDbDir) throw new Error(`ASM shared config missing required field: core.storage.slotDbDir at ${path}`);
+  if (!projectWorkspaceRoot) throw new Error(`ASM shared config missing required field: core.projectWorkspaceRoot at ${path}`);
+  return {
+    asmConfigPath: path,
+    projectWorkspaceRoot,
+    qdrantHost: requireString(core.qdrantHost, 'qdrantHost'),
+    qdrantPort: requireNumber(core.qdrantPort, 'qdrantPort'),
+    qdrantCollection: requireString(core.qdrantCollection, 'qdrantCollection'),
+    qdrantVectorSize: requireNumber(core.qdrantVectorSize, 'qdrantVectorSize'),
+    llmBaseUrl: requireString(core.llmBaseUrl, 'llmBaseUrl'),
+    llmApiKey: requireString(core.llmApiKey, 'llmApiKey'),
+    llmModel: requireString(core.llmModel, 'llmModel'),
+    embedBaseUrl: requireString(core.embedBaseUrl, 'embedBaseUrl'),
+    embedBackend: embedBackend === 'ollama' || embedBackend === 'openai' || embedBackend === 'docker' ? embedBackend : undefined,
+    embedModel: requireString(core.embedModel, 'embedModel'),
+    embedDimensions: requireNumber(core.embedDimensions, 'embedDimensions'),
+    autoCaptureEnabled: requireBoolean(core.autoCaptureEnabled, 'autoCaptureEnabled'),
+    autoCaptureMinConfidence: requireNumber(core.autoCaptureMinConfidence, 'autoCaptureMinConfidence'),
+    contextWindowMaxTokens: requireNumber(core.contextWindowMaxTokens, 'contextWindowMaxTokens'),
+    summarizeEveryActions: requireNumber(core.summarizeEveryActions, 'summarizeEveryActions'),
+    slotDbDir,
+  };
 }
 
 export function doctorAsmSharedConfig(input: LoadAsmSharedConfigInput = {}): AsmSharedConfigDoctorResult {
