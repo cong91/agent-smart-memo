@@ -164,33 +164,20 @@ async function runSetupOpenClawInstall(ctx: AsmInstallContext): Promise<AsmInsta
     return { ok: false, step: "check-openclaw", platform: "openclaw" };
   }
 
-  const tryJson = runner("openclaw", ["plugins", "list", "--json"]);
-  let installed = false;
-  if (tryJson.ok) {
-    try {
-      const parsed = JSON.parse(tryJson.stdout || "{}");
-      const pool = [
-        ...(Array.isArray(parsed) ? parsed : []),
-        ...(Array.isArray(parsed?.plugins) ? parsed.plugins : []),
-      ];
-      installed = pool.some((item: any) => includesAsmPlugin(item?.name || item?.id || item?.package || item?.pluginId));
-    } catch {
-      installed = includesAsmPlugin(tryJson.stdout);
-    }
-  }
-  if (!installed) {
-    const tryText = runner("openclaw", ["plugins", "list"]);
-    installed = tryText.ok && includesAsmPlugin(tryText.stdout);
+  log("[ASM-84] attempting direct plugin install/update: @mrc2204/agent-smart-memo");
+  const install = runner("openclaw", ["plugins", "install", "@mrc2204/agent-smart-memo"]);
+  const installOutput = `${install.stdout || ""}\n${install.stderr || ""}`;
+  const installedLikeSuccess = install.ok || includesAsmPlugin(installOutput) || /already installed|already exists|linked plugin path|plugin install command completed|Config overwrite/i.test(installOutput);
+
+  if (!installedLikeSuccess) {
+    log("[ASM-84] ❌ failed to install or verify plugin via OpenClaw CLI.");
+    if (install.stdout) log(install.stdout);
+    if (install.stderr) log(install.stderr);
+    return { ok: false, step: "install-plugin", platform: "openclaw" };
   }
 
-  if (!installed) {
-    log("[ASM-84] plugin not detected. Installing: @mrc2204/agent-smart-memo");
-    const install = runner("openclaw", ["plugins", "install", "@mrc2204/agent-smart-memo"]);
-    if (!install.ok) {
-      if (install.stderr) log(install.stderr);
-      return { ok: false, step: "install-plugin", platform: "openclaw" };
-    }
-  }
+  if (install.stdout) log(install.stdout);
+  if (install.stderr) log(install.stderr);
 
   const mode = parseNonInteractive(argv);
   const initResult = await initOpenClaw({ interactive: !mode.nonInteractive, autoApply: mode.autoApply });
