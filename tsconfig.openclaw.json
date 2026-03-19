@@ -3,6 +3,6 @@
   "compilerOptions": {
     "outDir": "./dist-openclaw"
   },
-  "files": ["src/index.ts"],
+  "files": ["src/index.ts", "src/cli/platform-installers.ts", "src/shared/asm-config.ts", "src/types/mjs.d.ts"],
   "exclude": ["node_modules", "dist", "dist-openclaw", "dist-paperclip", "dist-core", "tests"]
 }
