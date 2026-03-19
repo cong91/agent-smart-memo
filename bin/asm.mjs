@@ -358,8 +358,6 @@ export async function main(argv = process.argv.slice(2)) {
   return 1;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main().then((code) => {
-    process.exitCode = code;
-  });
-}
+main().then((code) => {
+  process.exitCode = code;
+});
