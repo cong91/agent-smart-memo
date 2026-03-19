@@ -42,11 +42,16 @@ export function createPaperclipRuntime(options?: PaperclipRuntimeOptions): Paper
   const slotDb = new SlotDB(stateDir, { slotDbDir });
 
   const semanticUseCase = options?.semanticUseCase || (() => {
+    const qdrantCollection = options?.qdrantCollection || process.env.AGENT_MEMO_QDRANT_COLLECTION || runtime.qdrantCollection;
     const qdrant = new QdrantClient({
       host: options?.qdrantHost || process.env.AGENT_MEMO_QDRANT_HOST || runtime.qdrantHost,
       port: Number(options?.qdrantPort || process.env.AGENT_MEMO_QDRANT_PORT || runtime.qdrantPort),
-      collection: options?.qdrantCollection || process.env.AGENT_MEMO_QDRANT_COLLECTION || runtime.qdrantCollection,
+      collection: qdrantCollection,
       vectorSize: Number(options?.qdrantVectorSize || process.env.AGENT_MEMO_QDRANT_VECTOR_SIZE || runtime.qdrantVectorSize),
+    });
+
+    void qdrant.createCollection().catch((error: any) => {
+      console.error(`[ASM-Paperclip] Failed to ensure Qdrant collection '${qdrantCollection}': ${error instanceof Error ? error.message : String(error)}`);
     });
 
     const embedding = new EmbeddingClient({
