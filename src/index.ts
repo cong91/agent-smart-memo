@@ -17,7 +17,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveSlotDbDir } from "./shared/slotdb-path.js";
-import { getAsmSharedConfig, resolveAsmCoreProjectWorkspaceRoot, resolveAsmCoreSlotDbDir } from "./shared/asm-config.js";
+import { resolveAsmRuntimeConfig } from "./shared/asm-config.js";
 
 // Tool modules
 import { registerSlotTools } from "./tools/slot-tools.js";
@@ -289,39 +289,27 @@ const agentMemoPlugin = {
 
     const slotCategories = DEFAULT_CATEGORIES;
     const asmConfigPath = firstNonEmptyString(config.asmConfigPath);
-    const shared = getAsmSharedConfig({ configPath: asmConfigPath, env: process.env, homeDir: process.env.HOME }).config || {};
-    const sharedCore = (shared.core || {}) as Record<string, any>;
-    const qdrantHost = firstNonEmptyString(sharedCore.qdrantHost) || "localhost";
-    const qdrantPort = Number(sharedCore.qdrantPort) || 6333;
-    const qdrantCollection = firstNonEmptyString(sharedCore.qdrantCollection) || "mrc_bot";
-    const qdrantVectorSize = Number(sharedCore.qdrantVectorSize) || 1024;
-    const llmBaseUrl = firstNonEmptyString(sharedCore.llmBaseUrl) || "http://localhost:8317/v1";
-    const llmApiKey = firstNonEmptyString(sharedCore.llmApiKey) || "proxypal-local";
-    const resolvedLlmModel = firstNonEmptyString(sharedCore.llmModel, findNestedStringKey(rawConfig, "llmModel"));
-    const llmModel = resolvedLlmModel || "gemini-2.5-flash";
-    const llmModelFallbackUsed = !resolvedLlmModel;
-    const embedBaseUrl = firstNonEmptyString(sharedCore.embedBaseUrl) || "http://localhost:11434";
-    const sharedEmbedBackend = firstNonEmptyString(sharedCore.embedBackend);
-    const embedBackend =
-      sharedEmbedBackend === "ollama" || sharedEmbedBackend === "openai" || sharedEmbedBackend === "docker"
-        ? sharedEmbedBackend as EmbedBackend
-        : undefined;
-    const embedModel = firstNonEmptyString(sharedCore.embedModel) || "qwen3-embedding:0.6b";
-    const embedDimensions = Number(sharedCore.embedDimensions) || 1024;
-    const autoCaptureEnabled = sharedCore.autoCaptureEnabled ?? true;
-    const autoCaptureMinConfidence = Number(sharedCore.autoCaptureMinConfidence) || 0.7;
-    const contextWindowMaxTokens = Number(sharedCore.contextWindowMaxTokens) || 12000;
-    const summarizeEveryActions = Number(sharedCore.summarizeEveryActions) || 6;
-    const projectWorkspaceRoot = resolveAsmCoreProjectWorkspaceRoot({ configPath: asmConfigPath, env: process.env, homeDir: process.env.HOME });
+    const runtime = resolveAsmRuntimeConfig({ configPath: asmConfigPath, env: process.env, homeDir: process.env.HOME });
+    const qdrantHost = runtime.qdrantHost;
+    const qdrantPort = runtime.qdrantPort;
+    const qdrantCollection = runtime.qdrantCollection;
+    const qdrantVectorSize = runtime.qdrantVectorSize;
+    const llmBaseUrl = runtime.llmBaseUrl;
+    const llmApiKey = runtime.llmApiKey;
+    const llmModel = runtime.llmModel;
+    const llmModelFallbackUsed = false;
+    const embedBaseUrl = runtime.embedBaseUrl;
+    const embedBackend = runtime.embedBackend as EmbedBackend | undefined;
+    const embedModel = runtime.embedModel;
+    const embedDimensions = runtime.embedDimensions;
+    const autoCaptureEnabled = runtime.autoCaptureEnabled;
+    const autoCaptureMinConfidence = runtime.autoCaptureMinConfidence;
+    const contextWindowMaxTokens = runtime.contextWindowMaxTokens;
+    const summarizeEveryActions = runtime.summarizeEveryActions;
+    const projectWorkspaceRoot = runtime.projectWorkspaceRoot;
 
-    // State directory from env or default
     const stateDir = process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`;
-    const slotDbDir = resolveSlotDbDir({
-      stateDir,
-      slotDbDir: resolveAsmCoreSlotDbDir({ configPath: asmConfigPath, env: process.env, homeDir: process.env.HOME }),
-      env: process.env,
-      homeDir: process.env.HOME,
-    });
+    const slotDbDir = runtime.slotDbDir;
 
     if (projectWorkspaceRoot) {
       process.env.AGENT_MEMO_PROJECT_WORKSPACE_ROOT = projectWorkspaceRoot;
