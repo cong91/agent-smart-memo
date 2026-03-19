@@ -40,12 +40,15 @@ export function parseAsmCliArgs(argv = []) {
   }
 
   if (first === "install") {
-    const platform = String(args[1] || "openclaw").trim().toLowerCase();
     const hasExplicitPlatform = Boolean(args[1]);
+    if (!hasExplicitPlatform) {
+      return { command: "install-cli", argv: [] };
+    }
+    const platform = String(args[1] || "").trim().toLowerCase();
     return {
       command: "install-platform",
       platform,
-      argv: hasExplicitPlatform ? args.slice(2) : args.slice(1),
+      argv: args.slice(2),
     };
   }
 
@@ -80,6 +83,7 @@ export function printHelp(log = console.log) {
   log("asm - Agent Smart Memo CLI");
   log("");
   log("Usage:");
+  log("  asm install                # install / expose CLI only");
   log("  asm setup-openclaw [--yes]");
   log("  asm setup openclaw [--yes]");
   log("  asm install openclaw [--yes]");
@@ -167,6 +171,17 @@ function parseProjectEventArgs(argv = []) {
   return out;
 }
 
+export async function runCliBootstrapFlow({ log = console.log } = {}) {
+  log("[ASM-CLI] Installing / exposing ASM CLI only...");
+  log(`[ASM-CLI] Package: ${ASM_PLUGIN_PACKAGE}`);
+  log("[ASM-CLI] The CLI entrypoint is now available as: asm");
+  log("[ASM-CLI] Next steps:");
+  log("  1) asm install openclaw");
+  log("  2) asm install opencode");
+  log("  3) asm install paperclip");
+  return { ok: true, step: "install-cli" };
+}
+
 export async function runSetupOpenClawFlow({
   runner = createShellRunner(),
   initOpenClaw = runInitOpenClaw,
@@ -248,6 +263,11 @@ export async function main(argv = process.argv.slice(2)) {
   if (parsed.command === "help") {
     printHelp();
     return 0;
+  }
+
+  if (parsed.command === "install-cli") {
+    const result = await runCliBootstrapFlow({ log: console.log });
+    return result.ok ? 0 : 1;
   }
 
   if (parsed.command === "setup-openclaw") {
