@@ -73,13 +73,11 @@ let usecasePortPromise = null;
 async function getUseCasePort() {
   if (!usecasePortPromise) {
     usecasePortPromise = (async () => {
-      const { resolveAsmCoreSlotDbDir } = await import(new URL("../dist/shared/asm-config.js", import.meta.url));
+      const { resolveAsmRuntimeConfig } = await import(new URL("../dist/shared/asm-config.js", import.meta.url));
       const { SlotDB } = await import(new URL("../dist/db/slot-db.js", import.meta.url));
       const { DefaultMemoryUseCasePort } = await import(new URL("../dist/core/usecases/default-memory-usecase-port.js", import.meta.url));
-      const slotDbDir =
-        resolveAsmCoreSlotDbDir({ env: process.env, homeDir: process.env.HOME }) ||
-        process.env.OPENCLAW_SLOTDB_DIR ||
-        `${process.env.HOME}/.openclaw/agent-memo`;
+      const runtimeConfig = resolveAsmRuntimeConfig({ env: process.env, homeDir: process.env.HOME });
+      const slotDbDir = runtimeConfig.slotDbDir;
       const db = new SlotDB(slotDbDir);
       return { db, usecase: new DefaultMemoryUseCasePort(db) };
     })();
