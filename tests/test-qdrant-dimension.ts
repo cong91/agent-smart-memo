@@ -54,8 +54,50 @@ async function testDimensionMismatchFailFast() {
   }
 }
 
+async function testCreateCollectionSkipsWhenExists() {
+  const originalFetch = global.fetch as any;
+  const calls: string[] = [];
+
+  (global as any).fetch = async (url: string, init?: any) => {
+    calls.push(`${init?.method || 'GET'} ${String(url)}`);
+    return {
+      ok: true,
+      status: 200,
+      headers: { get(name: string) { return name === 'content-type' ? 'application/json' : null; } },
+      async json() {
+        return {
+          result: {
+            config: {
+              params: {
+                vectors: { size: 1024 },
+              },
+            },
+          },
+        };
+      },
+      async text() { return JSON.stringify({ ok: true }); },
+    } as any;
+  };
+
+  try {
+    const qdrant = new QdrantClient({
+      host: 'localhost',
+      port: 6333,
+      collection: 'existing_collection',
+      vectorSize: 1024,
+    });
+    await qdrant.createCollection();
+    assert(calls.length >= 1, 'should at least query collection existence/info');
+    assert(calls.some((c) => c.includes('/collections/existing_collection')), 'should inspect target collection');
+    assert(!calls.some((c) => c.startsWith('PUT ')), 'should not create collection when already exists');
+  } finally {
+    (global as any).fetch = originalFetch;
+  }
+}
+
 async function main() {
   await testDimensionMismatchFailFast();
+  await testCreateCollectionSkipsWhenExists();
   console.log("✅ qdrant dimension tests passed");
 }
 

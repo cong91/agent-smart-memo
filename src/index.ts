@@ -475,6 +475,10 @@ const agentMemoPlugin = {
 			dimensionRouteMap: routeMap,
 		});
 
+		void qdrant.createCollection().catch((error: any) => {
+			console.error(`[AgentMemo] Failed to ensure Qdrant collection '${qdrantCollection}': ${error instanceof Error ? error.message : String(error)}`);
+		});
+
 		const embedding = new EmbeddingClient({
 			embeddingApiUrl: embedBaseUrl,
 			backend: embedBackend,
