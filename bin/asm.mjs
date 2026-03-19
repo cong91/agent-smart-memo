@@ -21,7 +21,10 @@ function includesAsmPlugin(output) {
 }
 
 export function parseAsmCliArgs(argv = []) {
-  const args = Array.isArray(argv) ? argv.map((x) => String(x)) : [];
+  let args = Array.isArray(argv) ? argv.map((x) => String(x)) : [];
+  if (args[0] === 'agent-smart-memo' || args[0] === '@mrc2204/agent-smart-memo') {
+    args = args.slice(1);
+  }
   const first = args[0] || "";
 
   if (!first || first === "help" || first === "--help" || first === "-h") {
