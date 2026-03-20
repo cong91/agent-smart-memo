@@ -99,6 +99,21 @@ test("parseAsmCliArgs supports help, setup-openclaw, install <platform>, and ini
 		{ command: "project-event", argv: ["--project-id", "p1"] },
 		"project-event should parse",
 	);
+	assertEqual(
+		parseAsmCliArgs(["migrate-asm115", "plan", "--preflight-limit", "10"]),
+		{ command: "migrate-asm115", argv: ["plan", "--preflight-limit", "10"] },
+		"migrate-asm115 command should parse",
+	);
+	assertEqual(
+		parseAsmCliArgs(["migrate", "asm115", "verify"]),
+		{ command: "migrate-asm115", argv: ["verify"] },
+		"migrate asm115 alias should parse",
+	);
+	assertEqual(
+		parseAsmCliArgs(["check-asm115", "--preflight-limit", "5"]),
+		{ command: "check-asm115", argv: ["--preflight-limit", "5"] },
+		"check-asm115 should parse",
+	);
 });
 
 test("createShellRunner normalizes process output", () => {
