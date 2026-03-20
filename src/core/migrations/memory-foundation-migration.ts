@@ -6,8 +6,8 @@ import {
 	resolveMemoryTypeFromNamespace,
 } from "../../shared/memory-config.js";
 
-export const ASM115_SCHEMA_VERSION = "asm115.v1";
-export const ASM115_MIGRATION_ID = "asm115-memory-foundation";
+export const MEMORY_FOUNDATION_SCHEMA_VERSION = "memory-foundation.v1";
+export const MEMORY_FOUNDATION_MIGRATION_ID = "memory-foundation-v1";
 
 export interface SemanticPointPayload {
 	namespace?: string;
@@ -62,8 +62,8 @@ export function buildSemanticPayloadPatch(
 	).trim();
 	const sourceType = asSourceType(payload.source_type);
 
-	if (String(payload.schema_version || "") !== ASM115_SCHEMA_VERSION) {
-		payload.schema_version = ASM115_SCHEMA_VERSION;
+	if (String(payload.schema_version || "") !== MEMORY_FOUNDATION_SCHEMA_VERSION) {
+		payload.schema_version = MEMORY_FOUNDATION_SCHEMA_VERSION;
 		changedFields.push("schema_version");
 	}
 
@@ -115,7 +115,7 @@ export function planSemanticPayloadMigration(points: SemanticPointRecord[]): {
 	};
 }
 
-export function isAsm115Noop(input: {
+export function isMemoryFoundationMigrationNoop(input: {
 	pendingSemanticChanges: number;
 	migrationStatus?: string;
 	migrationSchemaTo?: string;
@@ -123,6 +123,6 @@ export function isAsm115Noop(input: {
 	return (
 		input.pendingSemanticChanges === 0 &&
 		input.migrationStatus === "migrated" &&
-		input.migrationSchemaTo === ASM115_SCHEMA_VERSION
+		input.migrationSchemaTo === MEMORY_FOUNDATION_SCHEMA_VERSION
 	);
 }

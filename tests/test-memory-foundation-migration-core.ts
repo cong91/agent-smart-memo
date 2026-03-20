@@ -1,9 +1,9 @@
 import {
-	ASM115_SCHEMA_VERSION,
+	MEMORY_FOUNDATION_SCHEMA_VERSION,
 	buildSemanticPayloadPatch,
-	isAsm115Noop,
+	isMemoryFoundationMigrationNoop,
 	planSemanticPayloadMigration,
-} from "../src/core/migrations/asm115-migration-core.js";
+} from "../src/core/migrations/memory-foundation-migration.js";
 
 function assert(condition: unknown, message: string): void {
 	if (!condition) throw new Error(message);
@@ -43,7 +43,7 @@ test("buildSemanticPayloadPatch adds missing ASM-115 fields", () => {
 
 	assertEqual(
 		patch.payload.schema_version,
-		ASM115_SCHEMA_VERSION,
+		MEMORY_FOUNDATION_SCHEMA_VERSION,
 		"must set schema version",
 	);
 	assertEqual(patch.payload.memory_scope, "agent", "must infer memory_scope");
@@ -76,7 +76,7 @@ test("planSemanticPayloadMigration reports changed patches only", () => {
 			id: "already",
 			payload: {
 				namespace: "agent.assistant.working_memory",
-				schema_version: ASM115_SCHEMA_VERSION,
+				schema_version: MEMORY_FOUNDATION_SCHEMA_VERSION,
 				memory_scope: "agent",
 				memory_type: "episodic_trace",
 				promotion_state: "raw",
@@ -91,21 +91,21 @@ test("planSemanticPayloadMigration reports changed patches only", () => {
 	assertEqual(result.patches[0]?.id, "legacy", "should only patch legacy row");
 });
 
-test("isAsm115Noop only true when migration already applied and no pending semantic updates", () => {
+test("isMemoryFoundationMigrationNoop only true when migration already applied and no pending semantic updates", () => {
 	assert(
-		isAsm115Noop({
+		isMemoryFoundationMigrationNoop({
 			pendingSemanticChanges: 0,
 			migrationStatus: "migrated",
-			migrationSchemaTo: ASM115_SCHEMA_VERSION,
+			migrationSchemaTo: MEMORY_FOUNDATION_SCHEMA_VERSION,
 		}),
 		"should be noop when already migrated and no pending changes",
 	);
 
 	assert(
-		!isAsm115Noop({
+		!isMemoryFoundationMigrationNoop({
 			pendingSemanticChanges: 1,
 			migrationStatus: "migrated",
-			migrationSchemaTo: ASM115_SCHEMA_VERSION,
+			migrationSchemaTo: MEMORY_FOUNDATION_SCHEMA_VERSION,
 		}),
 		"pending changes must disable noop",
 	);

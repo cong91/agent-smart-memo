@@ -78,16 +78,20 @@ export function parseAsmCliArgs(argv = []) {
     return { command: "project-event", argv: args.slice(1) };
   }
 
-  if (first === "check-asm115") {
-    return { command: "check-asm115", argv: args.slice(1) };
+  if (first === "check-memory-foundation") {
+    return { command: "check-memory-foundation", argv: args.slice(1) };
   }
 
-  if (first === "migrate-asm115") {
-    return { command: "migrate-asm115", argv: args.slice(1) };
+  if (first === "migrate-memory-foundation") {
+    return { command: "migrate-memory-foundation", argv: args.slice(1) };
   }
 
-  if (first === "migrate" && (args[1] || "") === "asm115") {
-    return { command: "migrate-asm115", argv: args.slice(2) };
+  if (first === "memory" && (args[1] || "") === "migrate") {
+    return { command: "migrate-memory-foundation", argv: args.slice(2) };
+  }
+
+  if (first === "memory" && (args[1] || "") === "check") {
+    return { command: "check-memory-foundation", argv: args.slice(2) };
   }
 
   if (first === "mcp" && (args[1] || "") === "opencode") {
@@ -112,9 +116,10 @@ export function printHelp(log = console.log) {
   log("  asm init-openclaw [--non-interactive]");
   log("  asm init openclaw [--non-interactive]");
   log("  asm project-event --project-id <id> --repo-root <path> [--event-type post_commit|post_merge|post_rewrite|manual] [--source-rev <sha>] [--changed-files a,b] [--deleted-files x,y] [--trusted-sync 0|1] [--full-snapshot 0|1]");
-  log("  asm migrate-asm115 <preflight|plan|apply|verify|rollback> [--user-id <id>] [--agent-id <id>] [--snapshot-dir <path>] [--rollback-snapshot <path>] [--preflight-limit <n>]");
-  log("  asm migrate asm115 <preflight|plan|apply|verify|rollback> [flags...]");
-  log("  asm check-asm115 [--user-id <id>] [--agent-id <id>] [--preflight-limit <n>]  # alias: verify status/version");
+  log("  asm migrate-memory-foundation <preflight|plan|apply|verify|rollback> [--user-id <id>] [--agent-id <id>] [--snapshot-dir <path>] [--rollback-snapshot <path>] [--preflight-limit <n>]");
+  log("  asm memory migrate <preflight|plan|apply|verify|rollback> [flags...]");
+  log("  asm check-memory-foundation [--user-id <id>] [--agent-id <id>] [--preflight-limit <n>]  # alias: verify status/version");
+  log("  asm memory check [--user-id <id>] [--agent-id <id>] [--preflight-limit <n>]");
   log("  asm help");
   log("");
   log("Roadmap commands (not implemented yet):");
@@ -456,11 +461,11 @@ export async function main(argv = process.argv.slice(2)) {
     }
   }
 
-  if (parsed.command === "migrate-asm115") {
+  if (parsed.command === "migrate-memory-foundation") {
     try {
       const proc = spawnSync(
         "npx",
-        ["tsx", "scripts/asm115-migrate.ts", ...(parsed.argv || [])],
+        ["tsx", "scripts/migrate-memory-foundation.ts", ...(parsed.argv || [])],
         {
           stdio: "inherit",
           cwd: process.cwd(),
@@ -474,11 +479,11 @@ export async function main(argv = process.argv.slice(2)) {
     }
   }
 
-  if (parsed.command === "check-asm115") {
+  if (parsed.command === "check-memory-foundation") {
     try {
       const proc = spawnSync(
         "npx",
-        ["tsx", "scripts/asm115-migrate.ts", "verify", ...(parsed.argv || [])],
+        ["tsx", "scripts/migrate-memory-foundation.ts", "verify", ...(parsed.argv || [])],
         {
           stdio: "inherit",
           cwd: process.cwd(),

@@ -1,23 +1,23 @@
-import { cpSync, existsSync, mkdirSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
-	ASM115_MIGRATION_ID,
-	ASM115_SCHEMA_VERSION,
-	isAsm115Noop,
+	MEMORY_FOUNDATION_MIGRATION_ID,
+	MEMORY_FOUNDATION_SCHEMA_VERSION,
+	isMemoryFoundationMigrationNoop,
 	planSemanticPayloadMigration,
 	type SemanticPointRecord,
-} from "../core/migrations/asm115-migration-core.js";
+} from "../core/migrations/memory-foundation-migration.js";
 import { GraphDB } from "../db/graph-db.js";
 import { SlotDB } from "../db/slot-db.js";
 import { QdrantClient } from "../services/qdrant.js";
 import { resolveAsmRuntimeConfig } from "../shared/asm-config.js";
 import { resolveSlotDbDir } from "../shared/slotdb-path.js";
 
-export type Asm115Mode = "preflight" | "plan" | "apply" | "verify" | "rollback";
+export type MemoryFoundationMigrationMode = "preflight" | "plan" | "apply" | "verify" | "rollback";
 
-export interface RunAsm115MigrationInput {
-	mode: Asm115Mode;
+export interface RunMemoryFoundationMigrationInput {
+	mode: MemoryFoundationMigrationMode;
 	env?: NodeJS.ProcessEnv;
 	homeDir?: string;
 	userId?: string;
@@ -33,10 +33,24 @@ interface PlaneStatus {
 	details: Record<string, unknown>;
 }
 
-interface Asm115Plan {
+interface MemoryFoundationMigrationPlan {
 	slotdb: PlaneStatus;
 	graph: PlaneStatus;
 	semantic: PlaneStatus;
+}
+
+interface SemanticSnapshotEntry {
+	id: string | number | Record<string, unknown>;
+	payload: Record<string, unknown>;
+	keys: string[];
+}
+
+interface SemanticSnapshotFile {
+	migration_id: string;
+	collection: string;
+	schema_target: string;
+	created_at: string;
+	entries: SemanticSnapshotEntry[];
 }
 
 function nowIso(): string {
@@ -125,6 +139,73 @@ function ensureSnapshotDir(dir: string): void {
 	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 }
 
+function createSemanticSnapshot(
+	entries: SemanticPointRecord[],
+	collection: string,
+	snapshotDir: string,
+): string {
+	ensureSnapshotDir(snapshotDir);
+	const target = join(snapshotDir, `semantic-payload.${Date.now()}.json`);
+	const snapshot: SemanticSnapshotFile = {
+		migration_id: MEMORY_FOUNDATION_MIGRATION_ID,
+		collection,
+		schema_target: MEMORY_FOUNDATION_SCHEMA_VERSION,
+		created_at: nowIso(),
+		entries: entries.map((entry) => ({
+			id: entry.id,
+			payload: JSON.parse(JSON.stringify(entry.payload || {})),
+			keys: Object.keys(entry.payload || {}),
+		})),
+	};
+	writeFileSync(target, JSON.stringify(snapshot, null, 2));
+	return target;
+}
+
+async function restoreSemanticSnapshot(
+	qdrant: QdrantClient,
+	snapshotPath: string,
+): Promise<void> {
+	if (!existsSync(snapshotPath)) {
+		throw new Error(`semantic rollback snapshot not found: ${snapshotPath}`);
+	}
+	const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as SemanticSnapshotFile;
+	if (!Array.isArray(snapshot.entries)) {
+		throw new Error("semantic rollback snapshot invalid: entries missing");
+	}
+
+	const managedKeys = Array.from(
+		new Set(
+			snapshot.entries.flatMap((entry) =>
+				Array.isArray(entry.keys) ? entry.keys : Object.keys(entry.payload || {}),
+			),
+		),
+	);
+
+	if (managedKeys.length > 0) {
+		await qdrant.deletePayloadKeys(
+			snapshot.entries.map((entry) => entry.id),
+			managedKeys,
+		);
+	}
+
+	const entriesWithCurrentPayload = await collectSemanticPoints(qdrant, 500);
+	const currentById = new Map(
+		entriesWithCurrentPayload.map((entry) => [JSON.stringify(entry.id), entry]),
+	);
+
+	const restoreEntries = snapshot.entries.map((entry) => {
+		const key = JSON.stringify(entry.id);
+		const current = currentById.get(key);
+		const restoredPayload = { ...(current?.payload || {}), ...(entry.payload || {}) };
+		return {
+			id: entry.id,
+			payload: restoredPayload,
+		};
+	});
+
+	await qdrant.setPayload(restoreEntries);
+}
+
 function createSlotDbSnapshot(slotDbDir: string, snapshotDir: string): string {
 	ensureSnapshotDir(snapshotDir);
 	const source = join(slotDbDir, "slots.db");
@@ -143,8 +224,8 @@ function restoreSlotDbSnapshot(snapshotPath: string, slotDbDir: string): void {
 	cpSync(snapshotPath, target, { force: true });
 }
 
-export async function runAsm115Migration(
-	input: RunAsm115MigrationInput,
+export async function runMemoryFoundationMigration(
+	input: RunMemoryFoundationMigrationInput,
 ): Promise<Record<string, unknown>> {
 	const env = input.env || process.env;
 	const runtime = resolveAsmRuntimeConfig({
@@ -178,10 +259,26 @@ export async function runAsm115Migration(
 	const existingMigration = slotDb.getMigrationState(
 		userId,
 		agentId,
-		ASM115_MIGRATION_ID,
+		MEMORY_FOUNDATION_MIGRATION_ID,
 	);
+	let effectiveMigrationStatus = existingMigration?.status;
+	let effectiveMigrationSchemaTo = existingMigration?.schema_to;
+	if (existingMigration?.status === "rolled_back" && existingMigration?.notes) {
+		try {
+			const rollbackNotes = JSON.parse(existingMigration.notes) as Record<string, unknown>;
+			if (typeof rollbackNotes.previous_status === "string") {
+				effectiveMigrationStatus = rollbackNotes.previous_status;
+			}
+			if (typeof rollbackNotes.previous_schema_to === "string") {
+				effectiveMigrationSchemaTo = rollbackNotes.previous_schema_to;
+			}
+		} catch {
+			effectiveMigrationStatus = undefined;
+			effectiveMigrationSchemaTo = undefined;
+		}
+	}
 
-	const plan: Asm115Plan = {
+	const plan: MemoryFoundationMigrationPlan = {
 		slotdb: {
 			version: slotVersion,
 			needsMigration: slotVersion !== "missing",
@@ -198,7 +295,7 @@ export async function runAsm115Migration(
 			},
 		},
 		semantic: {
-			version: semanticPlan.changed === 0 ? ASM115_SCHEMA_VERSION : "mixed",
+			version: semanticPlan.changed === 0 ? MEMORY_FOUNDATION_SCHEMA_VERSION : "mixed",
 			needsMigration: semanticPlan.changed > 0,
 			details: {
 				collection: runtime.qdrantCollection,
@@ -209,20 +306,20 @@ export async function runAsm115Migration(
 	};
 
 	if (input.mode === "preflight" || input.mode === "plan") {
-		const noop = isAsm115Noop({
+		const noop = isMemoryFoundationMigrationNoop({
 			pendingSemanticChanges: semanticPlan.changed,
-			migrationStatus: existingMigration?.status,
-			migrationSchemaTo: existingMigration?.schema_to,
+			migrationStatus: effectiveMigrationStatus,
+			migrationSchemaTo: effectiveMigrationSchemaTo,
 		});
 		slotDb.close();
 		return {
 			mode: input.mode,
-			migration_id: ASM115_MIGRATION_ID,
-			schema_target: ASM115_SCHEMA_VERSION,
+			migration_id: MEMORY_FOUNDATION_MIGRATION_ID,
+			schema_target: MEMORY_FOUNDATION_SCHEMA_VERSION,
 			no_op: noop,
 			plan,
 			existing_migration_state: existingMigration,
-			semantic_patch_preview: semanticPlan.patches.slice(0, 20).map((p) => ({
+			semantic_patch_preview: semanticPlan.patches.slice(0, 20).map((p: { id: string | number | Record<string, unknown>; changedFields: string[] }) => ({
 				id: p.id,
 				changed_fields: p.changedFields,
 			})),
@@ -230,16 +327,16 @@ export async function runAsm115Migration(
 	}
 
 	if (input.mode === "verify") {
-		const noop = isAsm115Noop({
+		const noop = isMemoryFoundationMigrationNoop({
 			pendingSemanticChanges: semanticPlan.changed,
-			migrationStatus: existingMigration?.status,
-			migrationSchemaTo: existingMigration?.schema_to,
+			migrationStatus: effectiveMigrationStatus,
+			migrationSchemaTo: effectiveMigrationSchemaTo,
 		});
 		slotDb.close();
 		return {
 			mode: "verify",
-			migration_id: ASM115_MIGRATION_ID,
-			schema_target: ASM115_SCHEMA_VERSION,
+			migration_id: MEMORY_FOUNDATION_MIGRATION_ID,
+			schema_target: MEMORY_FOUNDATION_SCHEMA_VERSION,
 			verified: noop,
 			remaining_semantic_points: semanticPlan.changed,
 			migration_state: existingMigration,
@@ -253,23 +350,34 @@ export async function runAsm115Migration(
 			throw new Error("rollback requires --rollback-snapshot <path>");
 		}
 		restoreSlotDbSnapshot(input.rollbackSnapshotPath, slotDbDir);
+		let semanticRollbackSnapshot: string | null = null;
+		const existingNotes = existingMigration?.notes ? JSON.parse(existingMigration.notes) : {};
+		semanticRollbackSnapshot = typeof existingNotes.semantic_snapshot_path === "string" ? existingNotes.semantic_snapshot_path : null;
+		if (semanticRollbackSnapshot) {
+			await restoreSemanticSnapshot(qdrant, semanticRollbackSnapshot);
+		}
 		slotDb.recordMigrationState(userId, agentId, {
-			migration_id: ASM115_MIGRATION_ID,
-			schema_from: ASM115_SCHEMA_VERSION,
+			migration_id: MEMORY_FOUNDATION_MIGRATION_ID,
+			schema_from: MEMORY_FOUNDATION_SCHEMA_VERSION,
 			schema_to: "rollback",
 			applied_at: nowIso(),
 			status: "rolled_back",
-			notes: JSON.stringify({ rollback_snapshot: input.rollbackSnapshotPath }),
+			notes: JSON.stringify({
+				rollback_snapshot: input.rollbackSnapshotPath,
+				semantic_snapshot_path: semanticRollbackSnapshot,
+				previous_status: existingMigration?.status || null,
+				previous_schema_to: existingMigration?.schema_to || null,
+			}),
 		});
 		const state = slotDb.getMigrationState(
 			userId,
 			agentId,
-			ASM115_MIGRATION_ID,
+			MEMORY_FOUNDATION_MIGRATION_ID,
 		);
 		slotDb.close();
 		return {
 			mode: "rollback",
-			migration_id: ASM115_MIGRATION_ID,
+			migration_id: MEMORY_FOUNDATION_MIGRATION_ID,
 			rolled_back: true,
 			migration_state: state,
 		};
@@ -278,10 +386,15 @@ export async function runAsm115Migration(
 	const snapshotDir =
 		input.snapshotDir || join(slotDbDir, "migration-snapshots");
 	const snapshotPath = createSlotDbSnapshot(slotDbDir, snapshotDir);
+	const semanticSnapshotPath = createSemanticSnapshot(
+		points,
+		runtime.qdrantCollection,
+		snapshotDir,
+	);
 
 	if (semanticPlan.patches.length > 0) {
 		await qdrant.setPayload(
-			semanticPlan.patches.map((patch) => ({
+			semanticPlan.patches.map((patch: { id: string | number | Record<string, unknown>; payload: Record<string, any> }) => ({
 				id: patch.id,
 				payload: patch.payload,
 			})),
@@ -289,26 +402,28 @@ export async function runAsm115Migration(
 	}
 
 	slotDb.recordMigrationState(userId, agentId, {
-		migration_id: ASM115_MIGRATION_ID,
+		migration_id: MEMORY_FOUNDATION_MIGRATION_ID,
 		schema_from: existingMigration?.schema_to || "legacy",
-		schema_to: ASM115_SCHEMA_VERSION,
+		schema_to: MEMORY_FOUNDATION_SCHEMA_VERSION,
 		applied_at: nowIso(),
 		status: "migrated",
 		notes: JSON.stringify({
 			snapshot_path: snapshotPath,
+			semantic_snapshot_path: semanticSnapshotPath,
 			semantic_updates: semanticPlan.changed,
 			total_semantic_points: semanticPlan.total,
 		}),
 	});
-	const state = slotDb.getMigrationState(userId, agentId, ASM115_MIGRATION_ID);
+	const state = slotDb.getMigrationState(userId, agentId, MEMORY_FOUNDATION_MIGRATION_ID);
 	slotDb.close();
 
 	return {
 		mode: "apply",
-		migration_id: ASM115_MIGRATION_ID,
-		schema_target: ASM115_SCHEMA_VERSION,
+		migration_id: MEMORY_FOUNDATION_MIGRATION_ID,
+		schema_target: MEMORY_FOUNDATION_SCHEMA_VERSION,
 		applied: true,
 		snapshot_path: snapshotPath,
+		semantic_snapshot_path: semanticSnapshotPath,
 		semantic_updates: semanticPlan.changed,
 		total_semantic_points: semanticPlan.total,
 		migration_state: state,
