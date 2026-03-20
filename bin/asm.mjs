@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { runInitOpenClaw } from "../scripts/init-openclaw.mjs";
 import { createShellRunner, runInitSetupFlow, runInstallPlatformFlow } from "../dist/cli/platform-installers.js";
@@ -77,6 +78,18 @@ export function parseAsmCliArgs(argv = []) {
     return { command: "project-event", argv: args.slice(1) };
   }
 
+  if (first === "check-asm115") {
+    return { command: "check-asm115", argv: args.slice(1) };
+  }
+
+  if (first === "migrate-asm115") {
+    return { command: "migrate-asm115", argv: args.slice(1) };
+  }
+
+  if (first === "migrate" && (args[1] || "") === "asm115") {
+    return { command: "migrate-asm115", argv: args.slice(2) };
+  }
+
   if (first === "mcp" && (args[1] || "") === "opencode") {
     return { command: "mcp-opencode", argv: args.slice(2) };
   }
@@ -99,6 +112,9 @@ export function printHelp(log = console.log) {
   log("  asm init-openclaw [--non-interactive]");
   log("  asm init openclaw [--non-interactive]");
   log("  asm project-event --project-id <id> --repo-root <path> [--event-type post_commit|post_merge|post_rewrite|manual] [--source-rev <sha>] [--changed-files a,b] [--deleted-files x,y] [--trusted-sync 0|1] [--full-snapshot 0|1]");
+  log("  asm migrate-asm115 <preflight|plan|apply|verify|rollback> [--user-id <id>] [--agent-id <id>] [--snapshot-dir <path>] [--rollback-snapshot <path>] [--preflight-limit <n>]");
+  log("  asm migrate asm115 <preflight|plan|apply|verify|rollback> [flags...]");
+  log("  asm check-asm115 [--user-id <id>] [--agent-id <id>] [--preflight-limit <n>]  # alias: verify status/version");
   log("  asm help");
   log("");
   log("Roadmap commands (not implemented yet):");
@@ -436,6 +452,42 @@ export async function main(argv = process.argv.slice(2)) {
     } catch (error) {
       db.close();
       console.error(`[ASM-87] project-event failed: ${error instanceof Error ? error.message : String(error)}`);
+      return 1;
+    }
+  }
+
+  if (parsed.command === "migrate-asm115") {
+    try {
+      const proc = spawnSync(
+        "npx",
+        ["tsx", "scripts/asm115-migrate.ts", ...(parsed.argv || [])],
+        {
+          stdio: "inherit",
+          cwd: process.cwd(),
+          env: process.env,
+        },
+      );
+      return typeof proc.status === "number" ? proc.status : 1;
+    } catch (error) {
+      console.error(`[ASM-115] migrate failed: ${error instanceof Error ? error.message : String(error)}`);
+      return 1;
+    }
+  }
+
+  if (parsed.command === "check-asm115") {
+    try {
+      const proc = spawnSync(
+        "npx",
+        ["tsx", "scripts/asm115-migrate.ts", "verify", ...(parsed.argv || [])],
+        {
+          stdio: "inherit",
+          cwd: process.cwd(),
+          env: process.env,
+        },
+      );
+      return typeof proc.status === "number" ? proc.status : 1;
+    } catch (error) {
+      console.error(`[ASM-115] check failed: ${error instanceof Error ? error.message : String(error)}`);
       return 1;
     }
   }
