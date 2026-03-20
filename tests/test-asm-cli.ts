@@ -100,19 +100,24 @@ test("parseAsmCliArgs supports help, setup-openclaw, install <platform>, and ini
 		"project-event should parse",
 	);
 	assertEqual(
-		parseAsmCliArgs(["migrate-asm115", "plan", "--preflight-limit", "10"]),
-		{ command: "migrate-asm115", argv: ["plan", "--preflight-limit", "10"] },
-		"migrate-asm115 command should parse",
+		parseAsmCliArgs(["migrate-memory-foundation", "plan", "--preflight-limit", "10"]),
+		{ command: "migrate-memory-foundation", argv: ["plan", "--preflight-limit", "10"] },
+		"migrate-memory-foundation command should parse",
 	);
 	assertEqual(
-		parseAsmCliArgs(["migrate", "asm115", "verify"]),
-		{ command: "migrate-asm115", argv: ["verify"] },
-		"migrate asm115 alias should parse",
+		parseAsmCliArgs(["memory", "migrate", "verify"]),
+		{ command: "migrate-memory-foundation", argv: ["verify"] },
+		"memory migrate alias should parse",
 	);
 	assertEqual(
-		parseAsmCliArgs(["check-asm115", "--preflight-limit", "5"]),
-		{ command: "check-asm115", argv: ["--preflight-limit", "5"] },
-		"check-asm115 should parse",
+		parseAsmCliArgs(["check-memory-foundation", "--preflight-limit", "5"]),
+		{ command: "check-memory-foundation", argv: ["--preflight-limit", "5"] },
+		"check-memory-foundation should parse",
+	);
+	assertEqual(
+		parseAsmCliArgs(["memory", "check", "--preflight-limit", "5"]),
+		{ command: "check-memory-foundation", argv: ["--preflight-limit", "5"] },
+		"memory check alias should parse",
 	);
 });
 

@@ -323,6 +323,25 @@ export class QdrantClient {
 		}
 	}
 
+	async deletePayloadKeys(
+		ids: Array<string | number | Record<string, unknown>>,
+		keys: string[],
+	): Promise<void> {
+		if (ids.length === 0 || keys.length === 0) return;
+
+		await this.request(
+			`/collections/${this.config.collection}/points/payload/delete`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					keys,
+					points: ids,
+				}),
+			},
+		);
+	}
+
 	async scroll(
 		limit: number,
 		offset?: any,

@@ -1,11 +1,11 @@
 import {
-	type Asm115Mode,
-	runAsm115Migration,
-} from "../src/scripts/asm115-migration-runner.js";
+	type MemoryFoundationMigrationMode,
+	runMemoryFoundationMigration,
+} from "../src/scripts/memory-foundation-migration-runner.js";
 
 function parseArgs(argv: string[]) {
 	const args = Array.isArray(argv) ? argv.map((x) => String(x)) : [];
-	const mode = (args[0] || "preflight") as Asm115Mode;
+	const mode = (args[0] || "preflight") as MemoryFoundationMigrationMode;
 	const get = (flag: string): string | undefined => {
 		const idx = args.indexOf(flag);
 		if (idx < 0) return undefined;
@@ -33,7 +33,7 @@ async function main() {
 	}
 
 	try {
-		const result = await runAsm115Migration(parsed);
+		const result = await runMemoryFoundationMigration(parsed);
 		console.log(JSON.stringify(result, null, 2));
 	} catch (error) {
 		console.error(
