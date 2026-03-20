@@ -9,6 +9,7 @@ import crypto from "crypto";
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { resolvePromotionMetadata } from "../core/promotion/promotion-lifecycle.js";
+import { MEMORY_FOUNDATION_SCHEMA_VERSION } from "../core/migrations/memory-foundation-migration.js";
 import type { SlotDB } from "../db/slot-db.js";
 import type { DeduplicationService } from "../services/dedupe.js";
 import type { EmbeddingClient } from "../services/embedding.js";
@@ -22,6 +23,7 @@ import {
 	evaluateNoiseV2,
 	getAutoCaptureNamespace,
 	isLearningContent,
+	resolveMemoryScopeFromNamespace,
 	type MemoryNamespace,
 	normalizeNamespace,
 	normalizeUserId,
@@ -724,9 +726,11 @@ async function storeSemanticMemory(
 			id: crypto.randomUUID(),
 			vector,
 			payload: {
+				schema_version: MEMORY_FOUNDATION_SCHEMA_VERSION,
 				text: normalizedText,
 				agent: toCoreAgent(sourceAgent),
 				namespace,
+				memory_scope: resolveMemoryScopeFromNamespace(namespace),
 				...embeddingResult.metadata,
 				metadata: {
 					...((payloadExtras as any)?.metadata || {}),
@@ -1290,14 +1294,16 @@ export function registerAutoCapture(
 										id: duplicateId,
 										vector,
 										payload: {
-											text,
-											agent: coreAgent,
-											namespace: targetNamespace,
-											source_agent: coreAgent,
-											source_type: "auto_capture",
-											memory_type: lifecycle.memoryType,
-											promotion_state: lifecycle.promotionState,
-											confidence: lifecycle.confidence,
+										schema_version: MEMORY_FOUNDATION_SCHEMA_VERSION,
+										text,
+										agent: coreAgent,
+										namespace: targetNamespace,
+										memory_scope: resolveMemoryScopeFromNamespace(targetNamespace),
+										source_agent: coreAgent,
+										source_type: "auto_capture",
+										memory_type: lifecycle.memoryType,
+										promotion_state: lifecycle.promotionState,
+										confidence: lifecycle.confidence,
 											userId: userId,
 											...embeddingMeta,
 											metadata: {
@@ -1330,14 +1336,16 @@ export function registerAutoCapture(
 										id,
 										vector,
 										payload: {
-											text,
-											agent: coreAgent,
-											namespace: targetNamespace,
-											source_agent: coreAgent,
-											source_type: "auto_capture",
-											memory_type: lifecycle.memoryType,
-											promotion_state: lifecycle.promotionState,
-											confidence: lifecycle.confidence,
+										schema_version: MEMORY_FOUNDATION_SCHEMA_VERSION,
+										text,
+										agent: coreAgent,
+										namespace: targetNamespace,
+										memory_scope: resolveMemoryScopeFromNamespace(targetNamespace),
+										source_agent: coreAgent,
+										source_type: "auto_capture",
+										memory_type: lifecycle.memoryType,
+										promotion_state: lifecycle.promotionState,
+										confidence: lifecycle.confidence,
 											userId: userId,
 											...embeddingMeta,
 											metadata: {

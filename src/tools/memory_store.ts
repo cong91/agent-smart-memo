@@ -16,6 +16,7 @@ import type {
 	StoreParams,
 	ToolResult,
 } from "../types.js";
+import { MEMORY_FOUNDATION_SCHEMA_VERSION } from "../core/migrations/memory-foundation-migration.js";
 
 function resolveAgentFromRuntimeParams(params: {
 	agentId?: string;
@@ -206,6 +207,7 @@ export function createMemoryStoreTool(
 							namespace,
 							agent: sourceAgent,
 							source_agent: sourceAgent,
+							schema_version: MEMORY_FOUNDATION_SCHEMA_VERSION,
 							source_type: "tool_call" as const,
 							memory_scope: memoryScope,
 							memory_type: memoryType,
@@ -246,6 +248,7 @@ export function createMemoryStoreTool(
 						namespace,
 						agent: sourceAgent,
 						source_agent: sourceAgent,
+						schema_version: MEMORY_FOUNDATION_SCHEMA_VERSION,
 						source_type: "tool_call" as const,
 						memory_scope: memoryScope,
 						memory_type: memoryType,

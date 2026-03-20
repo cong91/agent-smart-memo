@@ -18,6 +18,7 @@ import {
 	scoreSemanticCandidate,
 	shouldApplyStrictSessionFilter,
 } from "../retrieval-policy.js";
+import { MEMORY_FOUNDATION_SCHEMA_VERSION } from "../migrations/memory-foundation-migration.js";
 
 export interface MemoryCapturePayload {
 	text: string;
@@ -107,6 +108,7 @@ export class SemanticMemoryUseCase {
 					namespace,
 					agent: sourceAgent,
 					source_agent: sourceAgent,
+					schema_version: MEMORY_FOUNDATION_SCHEMA_VERSION,
 					source_type: "manual",
 					memory_scope: memoryScope,
 					memory_type: memoryType,
