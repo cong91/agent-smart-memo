@@ -19,7 +19,7 @@ export interface AddProjectCommandDependencies {
 }
 
 const DEFAULT_AGENT_ID = "main";
-const TELEGRAM_PROJECT_COMMAND = "/project";
+const TELEGRAM_PROJECT_COMMAND = "/asm_project_index";
 
 function parseBooleanLike(raw: string): boolean | undefined {
   const text = String(raw || "").trim().toLowerCase();
@@ -151,12 +151,12 @@ export function composeAddProjectScopeUserId(ctx: AddProjectCommandContext): str
 export function formatAddProjectUsage(): string {
   return [
     "Usage:",
-    "/project <repo_url> [alias=<project_alias>] [jira=<SPACE>] [epic=<SPACE-123>] [index=true|false]",
-    "/project confirm <repo_url> alias=<project_alias> jira=<SPACE> [epic=<SPACE-123>] [index=true|false]",
+    "/asm_project_index <repo_url> [alias=<project_alias>] [jira=<SPACE>] [epic=<SPACE-123>] [index=true|false]",
+    "/asm_project_index confirm <repo_url> alias=<project_alias> jira=<SPACE> [epic=<SPACE-123>] [index=true|false]",
     "",
     "Examples:",
-    "/project git@github.com:org/repo.git alias=my-repo jira=ASM epic=ASM-82",
-    "/project confirm git@github.com:org/repo.git alias=my-repo jira=ASM index=true",
+    "/asm_project_index git@github.com:org/repo.git alias=my-repo jira=ASM epic=ASM-82",
+    "/asm_project_index confirm git@github.com:org/repo.git alias=my-repo jira=ASM index=true",
   ].join("\n");
 }
 
@@ -164,7 +164,7 @@ export function formatAddProjectResult(result: any): string {
   const status = String(result?.status || "unknown");
   if (status === "committed") {
     return [
-      "✅ /project committed",
+      "✅ /asm_project_index committed",
       `- project_id: ${result?.project_id || "n/a"}`,
       `- project_alias: ${result?.project_alias || "n/a"}`,
       `- tracker: ${result?.tracker_mapping?.tracker_type || "none"}`,
@@ -177,7 +177,7 @@ export function formatAddProjectResult(result: any): string {
   const fields = result?.summary_card?.fields || {};
 
   const lines = [
-    status === "preview_ready" ? "🧭 /project preview" : "⚠️ /project validation",
+    status === "preview_ready" ? "🧭 /asm_project_index preview" : "⚠️ /asm_project_index validation",
     `- mode: ${status}`,
     `- command: ${fields.command || TELEGRAM_PROJECT_COMMAND}`,
     `- repo_url: ${fields.repo_url || "(missing)"}`,
@@ -197,7 +197,7 @@ export function formatAddProjectResult(result: any): string {
   }
 
   if (status !== "committed") {
-    lines.push("- next: run /project confirm ... after fields are valid");
+    lines.push("- next: run /asm_project_index confirm ... after fields are valid");
   }
 
   return lines.join("\n");
@@ -208,7 +208,7 @@ export function registerTelegramAddProjectCommand(api: OpenClawPluginApi, deps?:
   const now = deps?.now || (() => Date.now());
 
   api.registerCommand({
-    name: "project",
+    name: "asm_project_index",
     description: "Project onboarding (preview/confirm) routed to project.telegram_onboarding",
     acceptsArgs: true,
     requireAuth: true,
@@ -239,8 +239,8 @@ export function registerTelegramAddProjectCommand(api: OpenClawPluginApi, deps?:
         },
         meta: {
           source: "openclaw",
-          toolName: "command.project",
-          requestId: `project:${now()}`,
+          toolName: "command.asm_project_index",
+          requestId: `asm_project_index:${now()}`,
         },
       });
 

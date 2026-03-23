@@ -230,7 +230,7 @@ ASM supports operator-friendly project onboarding.
 
 ### Telegram/OpenClaw command
 ```text
-/project <repo_url>
+/asm_project_index <repo_url>
 ```
 
 ### Current behavior
@@ -241,7 +241,7 @@ ASM supports operator-friendly project onboarding.
 - can trigger background index flow
 
 Typical path:
-1. operator runs `/project <repo_url>`
+1. operator runs `/asm_project_index <repo_url>`
 2. preview shows resolved repo + onboarding choices
 3. operator confirms
 4. ASM bridges into register / tracker-link / index flow

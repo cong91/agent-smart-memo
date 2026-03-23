@@ -64,14 +64,14 @@ test("composeAddProjectScopeUserId includes channel/account/sender/thread for ac
     senderId: "5165741309",
     messageThreadId: 42,
     isAuthorizedSender: true,
-    commandBody: "/project",
+    commandBody: "/asm_project_index",
     config: {},
   } as any);
 
   assertEqual(id, "telegram:account:ops:sender:5165741309:thread:42", "scope userId should include account/thread");
 });
 
-test("registerTelegramAddProjectCommand registers /project behavior and routes to project.telegram_onboarding", async () => {
+test("registerTelegramAddProjectCommand registers /asm_project_index behavior and routes to project.telegram_onboarding", async () => {
   const { api, commands } = createApiStub();
 
   registerTelegramAddProjectCommand(api, {
@@ -80,8 +80,8 @@ test("registerTelegramAddProjectCommand registers /project behavior and routes t
   });
 
   assert(commands.length >= 1, "registerCommand should be called");
-  const project = commands.find((c) => c.name === "project");
-  assert(Boolean(project), "project command should be registered");
+  const project = commands.find((c) => c.name === "asm_project_index");
+  assert(Boolean(project), "asm_project_index command should be registered");
 
   const previewRes = await project.handler({
     channel: "telegram",
@@ -89,12 +89,12 @@ test("registerTelegramAddProjectCommand registers /project behavior and routes t
     senderId: "5165741309",
     isAuthorizedSender: true,
     args: "git@github.com:cong91/agent-smart-memo.git alias=asm-preview jira=ASM mode=preview",
-    commandBody: "/project git@github.com:cong91/agent-smart-memo.git alias=asm-preview jira=ASM mode=preview",
+    commandBody: "/asm_project_index git@github.com:cong91/agent-smart-memo.git alias=asm-preview jira=ASM mode=preview",
     config: {},
   });
 
   assert(typeof previewRes?.text === "string", "preview should return text payload");
-  assert(previewRes.text.includes("/project"), "preview text should mention /project");
+  assert(previewRes.text.includes("/asm_project_index"), "preview text should mention /asm_project_index");
   assert(previewRes.text.includes("preview") || previewRes.text.includes("validation"), "preview text should describe status");
 
   const confirmRes = await project.handler({
@@ -103,7 +103,7 @@ test("registerTelegramAddProjectCommand registers /project behavior and routes t
     senderId: "5165741309",
     isAuthorizedSender: true,
     args: "confirm git@github.com:cong91/agent-smart-memo.git alias=asm-confirm jira=ASM epic=ASM-82 index=true",
-    commandBody: "/project confirm git@github.com:cong91/agent-smart-memo.git alias=asm-confirm jira=ASM epic=ASM-82 index=true",
+    commandBody: "/asm_project_index confirm git@github.com:cong91/agent-smart-memo.git alias=asm-confirm jira=ASM epic=ASM-82 index=true",
     config: {},
   });
 

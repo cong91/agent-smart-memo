@@ -107,9 +107,12 @@ function normalizeTelegramCommandName(value) {
     .replace(/[^a-z0-9_]/g, "")
     .slice(0, 32);
 
-  // ASM-84 follow-up: migrate legacy /addproject command naming to /project.
+  // ASM-CMD-RENAME-PROJECT: migrate legacy addproject/project naming to /asm_project_index.
   if (normalized === "addproject" || normalized === "add_project") {
-    return "project";
+    return "asm_project_index";
+  }
+  if (normalized === "project") {
+    return "asm_project_index";
   }
 
   return normalized;
@@ -120,7 +123,7 @@ function isValidTelegramCommandName(value) {
 }
 
 function defaultTelegramCommandDescription(name) {
-  if (name === "project") return "Project onboarding";
+  if (name === "asm_project_index") return "Project onboarding";
   if (name === "linkjira") return "Link Jira mapping";
   if (name === "indexproject") return "Index registered project";
   return `Run /${name}`;
@@ -135,7 +138,7 @@ function mergeTelegramCustomCommands(existing, commandNames) {
     const command = normalizeTelegramCommandName(item?.command);
     const rawDescription = String(item?.description || "").trim();
     const description =
-      command === "project" && /^add\s+project\s+onboarding$/i.test(rawDescription)
+      command === "asm_project_index" && /^add\s+project\s+onboarding$/i.test(rawDescription)
         ? defaultTelegramCommandDescription(command)
         : rawDescription;
     if (!isValidTelegramCommandName(command) || seen.has(command)) continue;
@@ -418,9 +421,9 @@ export function buildSetupSummary(currentConfig, answers, nextConfig) {
   const nextEntryConfig = asObj(nextEntry.config);
 
   const summary = {
-    alreadyConfigured: [],
-    willAdd: [],
-    willUpdate: [],
+    alreadyConfigured: /** @type {string[]} */ ([]),
+    willAdd: /** @type {string[]} */ ([]),
+    willUpdate: /** @type {string[]} */ ([]),
   };
 
   const currentAllowHasPlugin = dedupeStringArray(currentPlugins.allow).includes(PLUGIN_ID);
@@ -647,7 +650,7 @@ export async function runInitOpenClaw({ env = process.env, interactive = true, a
     asmConfigPath,
     mapMemorySlot: asObj(asObj(current.plugins).slots).memory === PLUGIN_ID,
     telegramOnboardingCommands: dedupeStringArray([
-      "project",
+      "asm_project_index",
       ...collectTelegramCommandNames(current, { telegramOnboardingCommands: [] }),
     ]),
   };

@@ -801,7 +801,7 @@ export function registerProjectTools(
     parameters: {
       type: "object",
       properties: {
-        command: { type: "string", description: "Slash command trigger, e.g. /project" },
+        command: { type: "string", description: "Slash command trigger, e.g. /asm_project_index" },
         repo_url: { type: "string", description: "Repo URL/import source from Telegram step." },
         project_alias: { type: "string", description: "Operator-confirmed project alias." },
         jira_space_key: { type: "string", description: "Jira space key (uppercase format)." },

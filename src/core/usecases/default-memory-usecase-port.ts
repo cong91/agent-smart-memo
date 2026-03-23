@@ -2340,7 +2340,7 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
 
     const workspaceRoot = this.normalizeRepoRootInput(payload.project_workspace_root) || this.resolveWorkspaceRoot(req);
     const draft = {
-      command: String(payload.command || "").trim() || "/project",
+      command: String(payload.command || "").trim() || "/asm_project_index",
       repo_url: String(payload.repo_url || "").trim(),
       project_alias: String(payload.project_alias || "").trim(),
       jira_space_key: String(payload.jira_space_key || "").trim().toUpperCase(),
@@ -3274,14 +3274,14 @@ asm project-event --project-id "$PROJECT_ID" --repo-root "$REPO_ROOT" --event-ty
       title: "Project onboarding / registration / indexing",
       feature_key: "project_onboarding_registration_indexing",
       summary:
-        `Covers the cross-agent project setup flow from /project onboarding through registry persistence, optional tracker linking, and index/reindex execution for project '${primaryAlias}'.`,
+        `Covers the cross-agent project setup flow from /asm_project_index onboarding through registry persistence, optional tracker linking, and index/reindex execution for project '${primaryAlias}'.`,
       primary_files: primaryFiles,
       primary_symbols: primarySymbols,
       flow_steps: [
         {
           step: 1,
           title: "Operator enters onboarding",
-          details: "Telegram /project command and project onboarding helper collect repo, alias, Jira, and index-now intent.",
+          details: "Telegram /asm_project_index command and project onboarding helper collect repo, alias, Jira, and index-now intent.",
           related_files: ["src/commands/telegram-addproject-command.ts", "src/tools/project-tools.ts"],
           related_symbols: ["registerTelegramAddProjectCommand", "project.telegram_onboarding"],
         },
