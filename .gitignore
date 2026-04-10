@@ -4,3 +4,5 @@ dist-openclaw/
 dist-paperclip/
 dist-core/
 artifacts/npm/
+
+memory/
