@@ -1,4 +1,5 @@
 import type { SlotDB } from "../../db/slot-db.js";
+import { isStartupBoilerplateText } from "../../hooks/auto-capture.js";
 import {
 	evaluateNoiseV2,
 	getAutoCaptureNamespace,
@@ -46,6 +47,28 @@ export interface DistillApplyResult {
 	draftsStored: number;
 	briefingsStored: number;
 	hintsStored: number;
+}
+
+function isPoisonedStateSlot(key: string, value: unknown): boolean {
+	const normalizedKey = String(key || "").trim();
+	if (!normalizedKey) return false;
+	const protectedProjectStateKeys = new Set([
+		"project.current_focus",
+		"project.current",
+		"project.current_task",
+		"project.current_epic",
+		"project.phase",
+		"project.status",
+		"project_living_state",
+	]);
+	if (!protectedProjectStateKeys.has(normalizedKey)) return false;
+	if (typeof value === "string") return isStartupBoilerplateText(value);
+	if (value && typeof value === "object") {
+		return Object.values(value as Record<string, unknown>).some(
+			(entry) => typeof entry === "string" && isStartupBoilerplateText(entry),
+		);
+	}
+	return false;
 }
 
 function resolveDefaultApplyNamespace(
@@ -130,6 +153,12 @@ export class DistillApplyUseCase {
 		if (extracted.slot_updates && extracted.slot_updates.length > 0) {
 			for (const fact of extracted.slot_updates) {
 				if (fact.confidence < minConfidence) continue;
+				if (isPoisonedStateSlot(fact.key, fact.value)) {
+					console.warn(
+						`[DistillApply] Rejected poisoned slot update: ${fact.key}`,
+					);
+					continue;
+				}
 				try {
 					this.db.set(userId, agentId, {
 						key: fact.key,
@@ -159,6 +188,7 @@ export class DistillApplyUseCase {
 							? memory
 							: memory.text || JSON.stringify(memory);
 					if (!text || text.trim().length === 0) continue;
+					if (isStartupBoilerplateText(text)) continue;
 
 					const memoryNamespace = memory.namespace
 						? normalizeNamespace(memory.namespace, agentId)
@@ -203,6 +233,7 @@ export class DistillApplyUseCase {
 			for (const draft of extracted.draft_updates) {
 				const text = String(draft?.text || "").trim();
 				if (!text) continue;
+				if (isStartupBoilerplateText(text)) continue;
 				const namespace = normalizeNamespace(
 					String(draft?.namespace || defaultNamespace),
 					agentId,
@@ -249,6 +280,7 @@ export class DistillApplyUseCase {
 			for (const briefing of extracted.briefing_updates) {
 				const text = String(briefing?.text || "").trim();
 				if (!text) continue;
+				if (isStartupBoilerplateText(text)) continue;
 				const namespace = normalizeNamespace(
 					String(briefing?.namespace || "shared.project_context"),
 					agentId,
@@ -294,6 +326,7 @@ export class DistillApplyUseCase {
 			for (const hint of extracted.promotion_hints) {
 				const text = String(hint?.text || "").trim();
 				if (!text) continue;
+				if (isStartupBoilerplateText(text)) continue;
 				const namespace = normalizeNamespace(
 					String(hint?.namespace || defaultNamespace),
 					agentId,

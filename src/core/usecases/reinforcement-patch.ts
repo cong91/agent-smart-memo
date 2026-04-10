@@ -1,12 +1,18 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
-export const ASM_WIKI_FIRST_BLOCK_VERSION = "2026-04-09";
+export const ASM_WIKI_FIRST_BLOCK_VERSION = "2026-04-10";
 const BLOCK_START = "<!-- ASM-WIKI-FIRST-BOOTSTRAP:START";
 const BLOCK_END = "<!-- ASM-WIKI-FIRST-BOOTSTRAP:END -->";
 
 export interface ReinforcementPatchResult {
 	path: string;
-	status: "patched" | "updated" | "already-current" | "missing-target";
+	status:
+		| "created"
+		| "patched"
+		| "updated"
+		| "already-current"
+		| "missing-target";
 	changed: boolean;
 	blockVersion: string;
 }
@@ -16,10 +22,20 @@ function buildManagedBlock(): string {
 		`${BLOCK_START} version=${ASM_WIKI_FIRST_BLOCK_VERSION} -->`,
 		"## ASM wiki-first bootstrap (managed by ASM)",
 		"",
-		"- Treat wiki pages as the primary working surface for project-specific work.",
-		"- Use ASM runtime contract state for `projectWorkspaceRoot`, `slotDbDir`, and `wikiDir`.",
-		"- Prefer `wiki-first` mode for implementation/debug/planning/investigation runs.",
-		"- Treat this file as reinforcement only; installer/runtime config remains source-of-truth.",
+		"Read order:",
+		"1. Start from `memory/wiki/index.md`, `schema.md`, and `log.md`.",
+		"2. Treat wiki markdown as the working surface for repo-specific context.",
+		"3. Resolve runtime paths from ASM shared config / plugin runtime, not from this file.",
+		"",
+		"Storage boundary:",
+		"- SlotDB/runtime state = control/runtime truth.",
+		"- `memory/wiki/` markdown = agent-facing working surface.",
+		"- QMD/backend state remains canonical persistence.",
+		"",
+		"Rules:",
+		"- Keep this file reinforcement-only, not full project memory.",
+		"- Do not treat AGENTS.md snippets as source-of-truth over wiki/runtime state.",
+		"- Prefer wiki-first investigation over snippet-first cognition.",
 		BLOCK_END,
 	].join("\n");
 }
@@ -47,6 +63,7 @@ function replaceManagedBlock(content: string, block: string): string {
 
 export function patchReinforcementSurface(
 	path: string,
+	options: { createIfMissing?: boolean } = {},
 ): ReinforcementPatchResult {
 	const block = buildManagedBlock();
 	try {
@@ -71,6 +88,16 @@ export function patchReinforcementSurface(
 			blockVersion: ASM_WIKI_FIRST_BLOCK_VERSION,
 		};
 	} catch {
+		if (options.createIfMissing) {
+			mkdirSync(dirname(path), { recursive: true });
+			writeFileSync(path, `${block}\n`, "utf8");
+			return {
+				path,
+				status: "created",
+				changed: true,
+				blockVersion: ASM_WIKI_FIRST_BLOCK_VERSION,
+			};
+		}
 		return {
 			path,
 			status: "missing-target",

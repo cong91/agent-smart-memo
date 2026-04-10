@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -13,6 +19,7 @@ import {
 	runInitSetupFlow,
 	runInstallPlatformFlow,
 } from "../src/cli/platform-installers.ts";
+import { ASM_WIKI_FIRST_BLOCK_VERSION } from "../src/core/usecases/reinforcement-patch.ts";
 
 function assert(condition: boolean, message: string): void {
 	if (!condition) throw new Error(message);
@@ -161,28 +168,22 @@ test("detectPluginInstalled supports list --json shape", () => {
 	);
 });
 
-test("runSetupOpenClawFlow installs plugin when missing and runs init", async () => {
+test("runSetupOpenClawFlow bootstraps config, wiki files, and openclaw binding", async () => {
 	const logLines: string[] = [];
+	const fs = await import("node:fs");
+	const os = await import("node:os");
+	const path = await import("node:path");
+	const home = fs.mkdtempSync(path.join(os.tmpdir(), "asm-setup-openclaw-"));
+	const workspaceRoot = path.join(home, "Work", "projects");
+	const repoRoot = path.join(workspaceRoot, "demo-repo");
+	fs.mkdirSync(repoRoot, { recursive: true });
+
 	const calls: Array<string> = [];
 	const runner = (command: string, args: string[]) => {
 		calls.push(`${command} ${args.join(" ")}`);
 
 		if (args[0] === "--version") {
 			return { ok: true, code: 0, stdout: "1.0.0", stderr: "", error: "" };
-		}
-
-		if (args[0] === "plugins" && args[1] === "list" && args[2] === "--json") {
-			return {
-				ok: true,
-				code: 0,
-				stdout: JSON.stringify({ plugins: [] }),
-				stderr: "",
-				error: "",
-			};
-		}
-
-		if (args[0] === "plugins" && args[1] === "list") {
-			return { ok: true, code: 0, stdout: "", stderr: "", error: "" };
 		}
 
 		if (args[0] === "plugins" && args[1] === "install") {
@@ -192,95 +193,119 @@ test("runSetupOpenClawFlow installs plugin when missing and runs init", async ()
 		return { ok: false, code: 1, stdout: "", stderr: "unknown", error: "" };
 	};
 
-	let initCalled = 0;
-	let initParams: any = null;
-	const initOpenClaw = async (params?: any) => {
-		initCalled += 1;
-		initParams = params;
-		return { applied: true, configPath: "~/.openclaw/openclaw.json" };
-	};
+	const originalHome = process.env.HOME;
+	process.env.HOME = home;
+	try {
+		const result = await runSetupOpenClawFlow({
+			runner: runner as any,
+			initOpenClaw: async () => ({
+				applied: true,
+				configPath: "~/.openclaw/openclaw.json",
+			}),
+			log: (line: string) => logLines.push(line),
+			env: { ...process.env, HOME: home },
+			homeDir: home,
+			cwd: repoRoot,
+			argv: ["--yes"] as any,
+		} as any);
 
-	const result = await runSetupOpenClawFlow({
-		runner: runner as any,
-		initOpenClaw,
-		log: (line: string) => logLines.push(line),
-	});
+		assertEqual(result.ok, true, "flow should succeed");
+		assert(
+			calls.some((line) =>
+				line.includes("plugins install @mrc2204/agent-smart-memo"),
+			),
+			"should install plugin during setup",
+		);
+		assert(
+			logLines.some((line) => line.includes("setup-openclaw result: pass")),
+			"should report pass summary",
+		);
 
-	assertEqual(result.ok, true, "flow should succeed");
-	assertEqual(initCalled, 1, "init flow should be called once");
-	assertEqual(
-		initParams,
-		{ interactive: true, autoApply: false },
-		"default setup flow should remain interactive",
-	);
-	assert(
-		calls.some((line) =>
-			line.includes("plugins install @mrc2204/agent-smart-memo"),
-		),
-		"should install plugin when missing",
-	);
-	assert(
-		logLines.some((line) => line.includes("Setup summary (before execution)")),
-		"should print setup summary header",
-	);
-	assert(
-		logLines.some((line) => line.includes("already configured")),
-		"should print already configured section",
-	);
-	assert(
-		logLines.some((line) => line.includes("will add")),
-		"should print will add section",
-	);
-	assert(
-		logLines.some((line) => line.includes("will update")),
-		"should print will update section",
-	);
-	assert(
-		logLines.some((line) => line.includes("setup-openclaw completed")),
-		"should print completion line",
-	);
+		const asmConfigPath = path.join(home, ".config", "asm", "config.json");
+		const openclawConfigPath = path.join(home, ".openclaw", "openclaw.json");
+		const agentsPath = path.join(repoRoot, "AGENTS.md");
+		const asmConfig = JSON.parse(fs.readFileSync(asmConfigPath, "utf8"));
+		const wikiDir = path.resolve(
+			home,
+			String(asmConfig.core.wikiDir).replace(/^~\//, ""),
+		);
+		assert(existsSync(asmConfigPath), "shared config should be created");
+		assert(existsSync(openclawConfigPath), "openclaw config should be created");
+		assert(existsSync(agentsPath), "AGENTS.md should be created when missing");
+		assert(
+			existsSync(path.join(wikiDir, "index.md")),
+			"wiki index should be created",
+		);
+		assert(
+			existsSync(path.join(wikiDir, "schema.md")),
+			"wiki schema should be created",
+		);
+		assert(
+			existsSync(path.join(wikiDir, "log.md")),
+			"wiki log should be created",
+		);
+
+		const agentsContent = fs.readFileSync(agentsPath, "utf8");
+		assert(
+			agentsContent.includes("reinforcement-only, not full project memory"),
+			"AGENTS managed block should remain reinforcement-only",
+		);
+		assert(
+			agentsContent.includes(`version=${ASM_WIKI_FIRST_BLOCK_VERSION}`),
+			"AGENTS managed block should track current block version",
+		);
+	} finally {
+		process.env.HOME = originalHome;
+	}
 });
 
 test("runSetupOpenClawFlow supports non-interactive --yes mode", async () => {
+	const fs = await import("node:fs");
+	const os = await import("node:os");
+	const path = await import("node:path");
+	const home = fs.mkdtempSync(
+		path.join(os.tmpdir(), "asm-setup-openclaw-noninteractive-"),
+	);
+	const repoRoot = path.join(home, "Work", "projects", "demo-repo");
+	fs.mkdirSync(repoRoot, { recursive: true });
+	const originalHome = process.env.HOME;
+	process.env.HOME = home;
+
 	const runner = (_command: string, args: string[]) => {
 		if (args[0] === "--version") {
 			return { ok: true, code: 0, stdout: "1.0.0", stderr: "", error: "" };
 		}
 
-		if (args[0] === "plugins" && args[1] === "list" && args[2] === "--json") {
-			return {
-				ok: true,
-				code: 0,
-				stdout: JSON.stringify({ plugins: [{ id: "agent-smart-memo" }] }),
-				stderr: "",
-				error: "",
-			};
-		}
-
-		if (args[0] === "plugins" && args[1] === "list") {
-			return { ok: true, code: 0, stdout: "", stderr: "", error: "" };
+		if (args[0] === "plugins" && args[1] === "install") {
+			return { ok: true, code: 0, stdout: "installed", stderr: "", error: "" };
 		}
 
 		return { ok: false, code: 1, stdout: "", stderr: "unknown", error: "" };
 	};
 
-	let initParams: any = null;
-	const result = await runSetupOpenClawFlow({
-		runner: runner as any,
-		initOpenClaw: async (params?: any) => {
-			initParams = params;
-			return { applied: true, configPath: "~/.openclaw/openclaw.json" };
-		},
-		argv: ["--yes"] as any,
-		log: () => {},
-	});
+	try {
+		const result = (await runSetupOpenClawFlow({
+			runner: runner as any,
+			initOpenClaw: async () => ({
+				applied: true,
+				configPath: "~/.openclaw/openclaw.json",
+			}),
+			env: { ...process.env, HOME: home },
+			homeDir: home,
+			cwd: repoRoot,
+			argv: ["--yes"] as any,
+			log: () => {},
+		} as any)) as any;
 
-	assertEqual(result.ok, true, "flow should succeed in --yes mode");
-	assertEqual(
-		initParams,
-		{ interactive: false, autoApply: true },
-		"--yes should force non-interactive apply",
-	);
+		assertEqual(result.ok, true, "flow should succeed in --yes mode");
+		assertEqual(
+			JSON.stringify(result.details?.report?.status),
+			JSON.stringify("pass"),
+			"--yes should still perform setup and report pass",
+		);
+	} finally {
+		process.env.HOME = originalHome;
+	}
 });
 
 test("installer registry exposes openclaw/opencode descriptors", () => {
@@ -512,7 +537,7 @@ test("runInitSetupFlow creates shared ASM config with platform defaults", async 
 	);
 	assertEqual(
 		written.adapters.openclaw.installOrchestration.blockVersion,
-		"2026-04-09",
+		ASM_WIKI_FIRST_BLOCK_VERSION,
 		"init-setup should record install orchestration managed state",
 	);
 });
@@ -590,6 +615,24 @@ test("runInstallPlatformFlow openclaw patches reinforcement surfaces and remains
 		firstAgents.includes("ASM wiki-first bootstrap (managed by ASM)"),
 		"first install should patch AGENTS.md with managed reinforcement block",
 	);
+	assert(
+		firstAgents.includes("reinforcement-only, not full project memory"),
+		"managed AGENTS block should state reinforcement-only boundary",
+	);
+	assert(
+		fs.existsSync(
+			path.join(
+				home,
+				"Work",
+				"projects",
+				"agent-smart-memo",
+				"memory",
+				"wiki",
+				"index.md",
+			),
+		),
+		"install flow should ensure wiki bootstrap index",
+	);
 
 	const second = await runInstallPlatformFlow({
 		platform: "openclaw",
@@ -621,15 +664,27 @@ test("runInstallPlatformFlow openclaw patches reinforcement surfaces and remains
 	const shared = JSON.parse(
 		fs.readFileSync(path.join(home, ".config", "asm", "config.json"), "utf8"),
 	);
-	assertEqual(
-		shared.adapters.openclaw.installOrchestration.patchedSurfaces[0].path,
-		"~/Work/projects/demo-repo/AGENTS.md",
-		"managed state should record patched reinforcement target path",
+	assert(
+		shared.adapters.openclaw.installOrchestration.patchedSurfaces.some(
+			(item: { path: string }) =>
+				item.path === "~/Work/projects/demo-repo/AGENTS.md",
+		),
+		"managed state should include repo AGENTS.md as a patched reinforcement target",
 	);
 	assertEqual(
 		shared.adapters.openclaw.installOrchestration.blockVersion,
-		"2026-04-09",
+		ASM_WIKI_FIRST_BLOCK_VERSION,
 		"managed state should track reinforcement block version",
+	);
+	assertEqual(
+		((first.details as any)?.wikiFilesCreated || []).length,
+		3,
+		"first run should create wiki bootstrap entry files",
+	);
+	assertEqual(
+		(second.details as any)?.wikiFilesCreated,
+		[],
+		"rerun should not recreate wiki bootstrap entry files",
 	);
 	assertEqual(first.ok, true, "first install should succeed");
 });

@@ -9,7 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-
+import { DistillApplyUseCase } from "../src/core/usecases/distill-apply-usecase.js";
 import { SlotDB } from "../src/db/slot-db.js";
 import {
 	captureLongTermPattern,
@@ -17,6 +17,7 @@ import {
 	captureShortTermState,
 	classifyTraderTacticalContent,
 	injectMemoryContext,
+	isStartupBoilerplateText,
 	registerAutoCapture,
 	resolveAutoCaptureSuppressionMeta,
 } from "../src/hooks/auto-capture.js";
@@ -360,7 +361,97 @@ async function run() {
 		);
 	}
 
-	// 8) Bootstrap-safe raw-first capture: no LLM still writes wiki raw/live/briefing
+	// 8) Startup boilerplate suppression protects current_focus and long-term memory sinks
+	{
+		const hookDb = new SlotDB(TEST_DIR);
+		const api = new FakePluginApi() as any;
+		registerAutoCapture(api, hookDb as any, {
+			useLLM: false,
+			bootstrapSafeRawFirst: true,
+		});
+
+		const boilerplateText = [
+			"A new session was started via /new or /reset.",
+			"Run your Session Startup sequence.",
+			"read the required files before responding.",
+			"greet the user in your configured persona.",
+		].join("\n");
+
+		assert(
+			isStartupBoilerplateText(boilerplateText),
+			"Boilerplate classifier should detect startup/session contamination",
+		);
+
+		const suppression = resolveAutoCaptureSuppressionMeta(
+			boilerplateText,
+			"assistant",
+		);
+		assert(
+			suppression?.reason ===
+				"suppressed.startup_boilerplate_not_project_state",
+			"Suppression metadata should classify startup boilerplate deterministically",
+		);
+
+		const hashBefore = hookDb.get("default", "assistant", {
+			key: "_autocapture_hash",
+		});
+
+		await api.hookHandler!(
+			{
+				messages: [{ role: "user", content: boilerplateText }],
+				metadata: {},
+			},
+			{
+				sessionKey: "agent:assistant:test-cognitive-startup-boilerplate",
+				messageProvider: "chat",
+			},
+		);
+
+		const boilerplateHash = hookDb.get("default", "assistant", {
+			key: "_autocapture_hash",
+		});
+		assert(
+			JSON.stringify(boilerplateHash) === JSON.stringify(hashBefore),
+			"Startup boilerplate should not update the generic auto-capture hash",
+		);
+
+		const lessonsLivePath = join(
+			wikiRoot,
+			"live",
+			"concepts",
+			"assistant",
+			"telegram-dm-test-cognitive-shared.md",
+		);
+		const lessonsBefore = existsSync(lessonsLivePath)
+			? readFileSync(lessonsLivePath, "utf8")
+			: "";
+
+		const stored = await captureLongTermPattern({
+			text: `${boilerplateText}\ncritical`,
+			agentId: "assistant",
+			userId: USER,
+		});
+
+		const lessonsAfter = existsSync(lessonsLivePath)
+			? readFileSync(lessonsLivePath, "utf8")
+			: "";
+		assert(
+			!stored,
+			"Startup boilerplate must not be promoted into long-term pattern memory",
+		);
+		assert(
+			lessonsAfter === lessonsBefore,
+			"Startup boilerplate must not change lessons wiki memory",
+		);
+
+		hookDb.close();
+		passed++;
+		console.log(
+			"✅ Test 8: Startup boilerplate suppression blocks current_focus and long-term memory",
+		);
+	}
+
+	// 9) Bootstrap-safe raw-first capture: no LLM still writes wiki raw/live/briefing
 	{
 		const hookDb = new SlotDB(TEST_DIR);
 		const api = new FakePluginApi() as any;
@@ -425,11 +516,59 @@ async function run() {
 		hookDb.close();
 		passed++;
 		console.log(
-			"✅ Test 8: Bootstrap-safe raw-first capture without LLM distill",
+			"✅ Test 9: Bootstrap-safe raw-first capture without LLM distill",
 		);
 	}
 
-	// 9) Isolated continuation fallback happens at execution boundary (no pre-health gate)
+	// 10) DistillApply rejects poisoned startup boilerplate slot updates
+	{
+		const applyDb = new SlotDB(TEST_DIR);
+		const distillApply = new DistillApplyUseCase(applyDb);
+		const result = distillApply.execute(
+			{
+				slot_updates: [
+					{
+						key: "project.current_focus",
+						value:
+							"Run your Session Startup sequence and greet the user in your configured persona",
+						confidence: 0.95,
+						category: "project",
+					},
+				],
+				memories: [
+					"A new session was started via /new or /reset. read the required files before responding.",
+				],
+			},
+			{
+				userId: USER,
+				agentId: "assistant",
+				sessionKey: "agent:assistant:test-cognitive-apply-guard",
+				sourceText:
+					"A new session was started via /new or /reset. Run your Session Startup sequence.",
+				minConfidence: 0.7,
+			},
+		);
+
+		const currentFocus = applyDb.get(USER, "assistant", {
+			key: "project.current_focus",
+		});
+		assert(
+			!currentFocus || Array.isArray(currentFocus),
+			"Apply guard must reject poisoned project.current_focus updates",
+		);
+		assert(
+			result.slotsStored === 0 && result.memoriesStored === 0,
+			"Apply guard must reject poisoned slot and memory writes",
+		);
+
+		applyDb.close();
+		passed++;
+		console.log(
+			"✅ Test 10: DistillApply apply guard rejects startup boilerplate poisoning",
+		);
+	}
+
+	// 11) Isolated continuation fallback happens at execution boundary (no pre-health gate)
 	{
 		const hookDb = new SlotDB(TEST_DIR);
 		const api = new FakePluginApi() as any;
@@ -442,8 +581,10 @@ async function run() {
 
 		const capturedLogs: string[] = [];
 		const capturedWarns: string[] = [];
+		const capturedErrors: string[] = [];
 		const originalLog = console.log;
 		const originalWarn = console.warn;
+		const originalError = console.error;
 		console.log = (...args: unknown[]) => {
 			capturedLogs.push(args.map((arg) => String(arg)).join(" "));
 			originalLog(...args);
@@ -451,6 +592,10 @@ async function run() {
 		console.warn = (...args: unknown[]) => {
 			capturedWarns.push(args.map((arg) => String(arg)).join(" "));
 			originalWarn(...args);
+		};
+		console.error = (...args: unknown[]) => {
+			capturedErrors.push(args.map((arg) => String(arg)).join(" "));
+			originalError(...args);
 		};
 
 		try {
@@ -481,7 +626,11 @@ async function run() {
 				},
 			);
 
-			const allLogs = [...capturedLogs, ...capturedWarns].join("\n");
+			const allLogs = [
+				...capturedLogs,
+				...capturedWarns,
+				...capturedErrors,
+			].join("\n");
 			assert(
 				!allLogs.includes("LLM unavailable, using pattern fallback"),
 				"Legacy LLM health-gated fallback log must not appear",
@@ -497,19 +646,15 @@ async function run() {
 				"Continuation boundary should log native continuation execution path",
 			);
 			assert(
-				capturedLogs.concat(capturedWarns).some((line) => {
-					const normalized = String(line || "").toLowerCase();
-					return (
-						normalized.includes("missing continuation structured contract") ||
-						normalized.includes(
+				allLogs
+					.toLowerCase()
+					.includes("missing continuation structured contract") ||
+					allLogs
+						.toLowerCase()
+						.includes(
 							"empty continuation structured contract for actionable context",
-						) ||
-						normalized.includes(
-							"continuation structured contract produced by real continuation session owner",
-						)
-					);
-				}),
-				"Continuation boundary should rely on continuation-owned contract instead of translating through host-side fallback logic",
+						),
+				"Continuation boundary should fail closed when no continuation-owned contract is available",
 			);
 
 			assert(
@@ -520,11 +665,113 @@ async function run() {
 
 			passed++;
 			console.log(
-				"✅ Test 9: Isolated continuation boundary fallback without legacy health gate",
+				"✅ Test 11: Isolated continuation boundary fallback without legacy health gate",
 			);
 		} finally {
 			console.log = originalLog;
 			console.warn = originalWarn;
+			console.error = originalError;
+			hookDb.close();
+		}
+	}
+
+	// 12) Host must not synthesize project.current_focus from first user line or claim continuation-owned contract production
+	{
+		const hookDb = new SlotDB(TEST_DIR);
+		const api = new FakePluginApi() as any;
+		const capturedLogs: string[] = [];
+		const capturedWarns: string[] = [];
+		const capturedErrors: string[] = [];
+		const originalLog = console.log;
+		const originalWarn = console.warn;
+		const originalError = console.error;
+		console.log = (...args: unknown[]) => {
+			capturedLogs.push(args.map((arg) => String(arg)).join(" "));
+			originalLog(...args);
+		};
+		console.warn = (...args: unknown[]) => {
+			capturedWarns.push(args.map((arg) => String(arg)).join(" "));
+			originalWarn(...args);
+		};
+		console.error = (...args: unknown[]) => {
+			capturedErrors.push(args.map((arg) => String(arg)).join(" "));
+			originalError(...args);
+		};
+
+		try {
+			registerAutoCapture(api, hookDb as any, {
+				useLLM: true,
+				bootstrapSafeRawFirst: true,
+			});
+
+			assert(
+				typeof api.hookHandler === "function",
+				"agent_end hook must be registered for host synthesis regression test",
+			);
+			const autoCaptureTool = api.tools.find(
+				(tool) => tool?.name === "memory_auto_capture",
+			);
+			assert(
+				autoCaptureTool && typeof autoCaptureTool.execute === "function",
+				"memory_auto_capture tool must be registered for host synthesis regression test",
+			);
+
+			const autoCaptureResult = await autoCaptureTool.execute(
+				"host-synthesis-regression",
+				{
+					text: [
+						"A new session was started via /new or /reset.",
+						"Run your Session Startup sequence.",
+						"read the required files before responding.",
+						"user: Operator approved implementation packet for bead r5t.12.",
+						"Next-step handoff is required with blockers and ETA.",
+					].join("\n"),
+					use_llm: true,
+				},
+				{
+					sessionKey:
+						"agent:assistant:test-cognitive-host-synthesis-regression",
+				},
+			);
+
+			const currentFocus = hookDb.get(USER, "assistant", {
+				key: "project.current_focus",
+			});
+			assert(
+				!currentFocus || Array.isArray(currentFocus),
+				"Host path must not synthesize project.current_focus from naive first-user-line extraction",
+			);
+
+			const allLogs = [
+				...capturedLogs,
+				...capturedWarns,
+				...capturedErrors,
+			].join("\n");
+			const extractedLogs =
+				autoCaptureResult?.details?.extracted?.log_entries || [];
+			assert(
+				!allLogs.includes(
+					"continuation structured contract produced by real continuation session owner",
+				),
+				"Host must not claim continuation-owned structured contract production when continuation contract is absent",
+			);
+			assert(
+				extractedLogs.some((entry: any) =>
+					String(entry?.text || "").includes(
+						"missing continuation structured contract",
+					),
+				),
+				"Host should fail closed without manufacturing a continuation structured contract",
+			);
+
+			passed++;
+			console.log(
+				"✅ Test 12: Host does not synthesize current_focus from startup-contaminated first user line",
+			);
+		} finally {
+			console.log = originalLog;
+			console.warn = originalWarn;
+			console.error = originalError;
 			hookDb.close();
 		}
 	}
@@ -541,7 +788,7 @@ async function run() {
 		rmSync(wikiRoot, { recursive: true, force: true });
 	} catch {}
 
-	console.log(`\n🎉 Cognitive memory tests passed: ${passed}/9\n`);
+	console.log(`\n🎉 Cognitive memory tests passed: ${passed}/12\n`);
 }
 
 run().catch((err) => {

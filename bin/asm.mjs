@@ -277,76 +277,72 @@ export async function runSetupOpenClawFlow({
   runner = createShellRunner(),
   initOpenClaw = runInitOpenClaw,
   log = console.log,
+  env = process.env,
+  homeDir = process.env.HOME,
+  cwd = process.cwd(),
   argv = [],
 } = {}) {
-  log("[ASM-84] setup-openclaw: checking OpenClaw CLI ...");
-  const openclawVersion = runner("openclaw", ["--version"]);
-  if (!openclawVersion.ok) {
-    log("[ASM-84] ❌ openclaw binary not found or not executable.");
-    if (openclawVersion.stderr) log(`[ASM-84] details: ${openclawVersion.stderr}`);
-    if (openclawVersion.error) log(`[ASM-84] error: ${openclawVersion.error}`);
-    log("[ASM-84] Please install OpenClaw first, then re-run: asm setup-openclaw");
-    return { ok: false, step: "check-openclaw" };
-  }
-
-  const pluginState = detectPluginInstalled(runner);
-  const setupSummary = pluginState.installed
-    ? {
-        alreadyConfigured: [`plugin installed: ${ASM_PLUGIN_PACKAGE}`],
-        willAdd: [],
-        willUpdate: ["openclaw.json bootstrap via init-openclaw wizard"],
-      }
-    : {
-        alreadyConfigured: [],
-        willAdd: [`plugin install: ${ASM_PLUGIN_PACKAGE}`],
-        willUpdate: ["openclaw.json bootstrap via init-openclaw wizard"],
-      };
-
-  log("[ASM-84] Setup summary (before execution):");
-  log(`- already configured (${setupSummary.alreadyConfigured.length})`);
-  if (!setupSummary.alreadyConfigured.length) log("  • (none)");
-  for (const item of setupSummary.alreadyConfigured) log(`  • ${item}`);
-  log(`- will add (${setupSummary.willAdd.length})`);
-  if (!setupSummary.willAdd.length) log("  • (none)");
-  for (const item of setupSummary.willAdd) log(`  • ${item}`);
-  log(`- will update (${setupSummary.willUpdate.length})`);
-  if (!setupSummary.willUpdate.length) log("  • (none)");
-  for (const item of setupSummary.willUpdate) log(`  • ${item}`);
-
-  if (pluginState.installed) {
-    log(`[ASM-84] plugin already installed (${pluginState.source}).`);
-  } else {
-    log(`[ASM-84] plugin not detected. Installing: ${ASM_PLUGIN_PACKAGE}`);
-    const install = runner("openclaw", ["plugins", "install", ASM_PLUGIN_PACKAGE]);
-    if (!install.ok) {
-      log("[ASM-84] ❌ failed to install plugin via OpenClaw CLI.");
-      if (install.stdout) log(install.stdout);
-      if (install.stderr) log(install.stderr);
-      return { ok: false, step: "install-plugin" };
-    }
-    log("[ASM-84] plugin install command completed.");
-  }
-
   const mode = parseNonInteractiveFlags(argv);
   if (mode.nonInteractive) {
-    log("[ASM-84] non-interactive mode enabled; applying defaults/merged config without prompt.");
+    log("[ASM-84] non-interactive mode enabled; applying setup-openclaw defaults automatically.");
   }
 
-  log("[ASM-84] launching init-openclaw bootstrap flow ...");
-  const result = await initOpenClaw({ interactive: !mode.nonInteractive, autoApply: mode.autoApply });
-
-  if (!result?.applied) {
-    log("[ASM-84] setup-openclaw ended without changes (aborted or no write).");
-    return { ok: true, step: "init-openclaw", applied: false };
+  log("[ASM-84] setup-openclaw: bootstrapping shared ASM config first ...");
+  const initSetup = await runInitSetupFlow({
+    log,
+    env,
+    homeDir,
+    cwd,
+    argv: mode.nonInteractive ? ["--yes"] : argv,
+  });
+  if (!initSetup?.ok) {
+    return { ok: false, step: "init-setup" };
   }
 
-  log("[ASM-84] ✅ setup-openclaw completed.");
+  log("[ASM-84] setup-openclaw: binding OpenClaw runtime to ASM wiki-first config ...");
+  const result = await runInstallPlatformFlow({
+    platform: "openclaw",
+    runner,
+    initOpenClaw,
+    log,
+    argv,
+    env,
+    homeDir,
+    cwd,
+  });
+  const report = result?.details?.report || { status: result.ok ? "pass" : "fail", createdFiles: [], changedFiles: [], skippedFiles: [] };
+
+  log(`[ASM-104] setup-openclaw result: ${report.status}`);
+  log(`[ASM-104] created files (${report.createdFiles.length})`);
+  if (!report.createdFiles.length) log("  • (none)");
+  for (const item of report.createdFiles) log(`  • ${item}`);
+  log(`[ASM-104] changed files (${report.changedFiles.length})`);
+  if (!report.changedFiles.length) log("  • (none)");
+  for (const item of report.changedFiles) log(`  • ${item}`);
+  log(`[ASM-104] skipped files (${report.skippedFiles.length})`);
+  if (!report.skippedFiles.length) log("  • (none)");
+  for (const item of report.skippedFiles) log(`  • ${item}`);
+
+  if (!result.ok) {
+    return { ok: false, step: result.step, details: result.details };
+  }
+
+  log("[ASM-84] setup-openclaw completed.");
+  log("[ASM-84] Environment is now wiki-first ready for OpenClaw.");
   log("[ASM-84] Next steps:");
   log("  1) Restart OpenClaw runtime");
-  log("  2) Verify plugin loaded and memory tools available");
-  log("  3) Run a quick smoke: memory_slot_set + memory_slot_get");
+  log("  2) Open memory/wiki/index.md as the working entrypoint");
+  log("  3) Verify plugin tools can read/write against SlotDB + wiki working surface");
 
-  return { ok: true, step: "done", applied: true };
+  return {
+    ok: true,
+    step: result.step,
+    details: {
+      ...result.details,
+      initSetupPath: initSetup.path,
+      initSetupExisted: initSetup.existed,
+    },
+  };
 }
 
 export async function main(argv = process.argv.slice(2)) {

@@ -32,6 +32,7 @@ export interface AsmInstallContext {
 	argv: string[];
 	env: NodeJS.ProcessEnv;
 	homeDir?: string;
+	cwd?: string;
 	initOpenClaw: typeof runInitOpenClaw;
 }
 
@@ -49,6 +50,46 @@ export interface AsmInstallerResult {
 	step: string;
 	platform: string;
 	details?: Record<string, unknown>;
+}
+
+function buildSetupOpenClawReport(details: Record<string, unknown>): {
+	status: "pass" | "skip" | "fail";
+	createdFiles: string[];
+	changedFiles: string[];
+	skippedFiles: string[];
+} {
+	const createdFiles = [
+		...((details.surfacesCreated as string[] | undefined) || []).filter(
+			Boolean,
+		),
+		...((details.wikiFilesCreated as string[] | undefined) || []).filter(
+			Boolean,
+		),
+		...(details.openclawConfigPath && details.openclawConfigExisted === false
+			? [String(details.openclawConfigPath)]
+			: []),
+	];
+	const changedFiles = [
+		...(details.asmConfigChanged
+			? [String(details.asmConfigPath || "")].filter(Boolean)
+			: []),
+		...((details.surfacesPatched as string[] | undefined) || []).filter(
+			Boolean,
+		),
+		...(details.openclawConfigPath && details.openclawConfigExisted !== false
+			? [String(details.openclawConfigPath)]
+			: []),
+	];
+	const skippedFiles = [
+		...((details.surfacesAlreadyCurrent as string[] | undefined) || []).filter(
+			Boolean,
+		),
+		...((details.wikiFilesAlreadyPresent as string[] | undefined) || []).filter(
+			Boolean,
+		),
+	];
+	const status = createdFiles.length || changedFiles.length ? "pass" : "skip";
+	return { status, createdFiles, changedFiles, skippedFiles };
 }
 
 export interface AsmPlatformInstaller {
@@ -344,11 +385,13 @@ export async function runInitSetupFlow({
 	log = console.log,
 	env = process.env,
 	homeDir = process.env.HOME,
+	cwd = process.cwd(),
 	argv = [],
 }: {
 	log?: (line: string) => void;
 	env?: NodeJS.ProcessEnv;
 	homeDir?: string;
+	cwd?: string;
 	argv?: string[];
 } = {}) {
 	const mode = parseNonInteractive(argv);
@@ -456,7 +499,7 @@ export async function runInitSetupFlow({
 		config: nextConfig,
 		configPath: path,
 		homeDir,
-		cwd: process.cwd(),
+		cwd,
 		log,
 	});
 
@@ -561,8 +604,9 @@ async function runSetupOpenClawInstall(
 		config: loaded.config,
 		configPath: asmConfigPath,
 		homeDir,
-		cwd: process.cwd(),
+		cwd: ctx.cwd || process.cwd(),
 		log,
+		ensureAgentSurfaceTargets: true,
 	});
 
 	const runtimeCore = resolveAsmRuntimeConfig({
@@ -664,14 +708,31 @@ async function runSetupOpenClawInstall(
 		platform: "openclaw",
 		details: {
 			asmConfigPath,
+			asmConfigChanged: orchestrated.configChanged,
 			projectWorkspaceRoot: runtimeCore.projectWorkspaceRoot,
 			slotDbDir: runtimeCore.slotDbDir,
 			wikiDir: runtimeCore.wikiDir,
 			openclawConfigPath,
+			openclawConfigExisted,
 			runtimeDefaultsApplied: orchestrated.runtimeDefaultsApplied,
+			surfacesCreated: orchestrated.surfacesCreated,
 			surfacesScanned: orchestrated.surfacesScanned,
 			surfacesPatched: orchestrated.surfacesPatched,
 			surfacesAlreadyCurrent: orchestrated.surfacesAlreadyCurrent,
+			wikiFilesCreated: orchestrated.wikiFilesCreated,
+			wikiFilesAlreadyPresent: orchestrated.wikiFilesAlreadyPresent,
+			wikiDirsEnsured: orchestrated.wikiDirsEnsured,
+			report: buildSetupOpenClawReport({
+				asmConfigPath,
+				asmConfigChanged: orchestrated.configChanged,
+				openclawConfigPath,
+				openclawConfigExisted,
+				surfacesCreated: orchestrated.surfacesCreated,
+				surfacesPatched: orchestrated.surfacesPatched,
+				surfacesAlreadyCurrent: orchestrated.surfacesAlreadyCurrent,
+				wikiFilesCreated: orchestrated.wikiFilesCreated,
+				wikiFilesAlreadyPresent: orchestrated.wikiFilesAlreadyPresent,
+			}),
 		},
 	};
 }
@@ -845,6 +906,7 @@ export async function runInstallPlatformFlow({
 	argv,
 	env = process.env,
 	homeDir = process.env.HOME,
+	cwd = process.cwd(),
 }: {
 	platform?: string;
 	runner: AsmShellRunner;
@@ -853,6 +915,7 @@ export async function runInstallPlatformFlow({
 	argv: string[];
 	env?: NodeJS.ProcessEnv;
 	homeDir?: string;
+	cwd?: string;
 }): Promise<AsmInstallerResult> {
 	const installer = getAsmPlatformInstaller(String(platform || ""));
 	if (!installer) {
@@ -881,5 +944,6 @@ export async function runInstallPlatformFlow({
 		argv,
 		env,
 		homeDir,
+		cwd,
 	});
 }

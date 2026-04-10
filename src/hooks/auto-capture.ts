@@ -49,16 +49,11 @@ interface ConversationMessage {
 }
 
 function truncateText(value: string, limit = 240): string {
-	const normalized = String(value || "").replace(/\s+/g, " ").trim();
+	const normalized = String(value || "")
+		.replace(/\s+/g, " ")
+		.trim();
 	if (normalized.length <= limit) return normalized;
 	return `${normalized.slice(0, limit)}…`;
-}
-
-function extractFirstUserLine(text: string): string {
-	const match = String(text || "")
-		.split("\n")
-		.find((line) => line.trim().toLowerCase().startsWith("user:"));
-	return match ? match.replace(/^user:\s*/i, "").trim() : String(text || "").trim();
 }
 
 interface LivingStateSummary {
@@ -96,9 +91,43 @@ export interface TraderTacticalClassification {
 
 export interface AutoCaptureSuppressionMeta {
 	suppressed: boolean;
-	domain: "trader_tactical";
+	domain: "trader_tactical" | "startup_boilerplate";
 	matchedClasses: TraderTacticalClass[];
 	reason: string;
+}
+
+const STARTUP_BOILERPLATE_PATTERNS: RegExp[] = [
+	/\ba new session was started via \/new or \/reset\b/i,
+	/\brun your session startup sequence\b/i,
+	/\bread the required files before responding\b/i,
+	/\bgreet the user in your configured persona\b/i,
+	/\bsession[-\s]reset\b/i,
+	/\bsession startup\b/i,
+	/\bstartup boilerplate\b/i,
+	/\bsystem primer\b/i,
+];
+
+export function isStartupBoilerplateText(text: string): boolean {
+	const normalized = String(text || "")
+		.replace(/\s+/g, " ")
+		.trim();
+	if (!normalized) return false;
+	return STARTUP_BOILERPLATE_PATTERNS.some((pattern) =>
+		pattern.test(normalized),
+	);
+}
+
+function sanitizeStartupBoilerplateLines(lines: string[]): string[] {
+	return lines.filter((line) => !isStartupBoilerplateText(line));
+}
+
+function sanitizeStartupBoilerplateText(text: string): string {
+	return sanitizeStartupBoilerplateLines(
+		String(text || "")
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => line.length > 0),
+	).join("\n");
 }
 
 const TRADER_CONTEXT_PATTERNS: RegExp[] = [
@@ -179,6 +208,15 @@ export function resolveAutoCaptureSuppressionMeta(
 	text: string,
 	agentId: string,
 ): AutoCaptureSuppressionMeta | null {
+	if (isStartupBoilerplateText(text)) {
+		return {
+			suppressed: true,
+			domain: "startup_boilerplate",
+			matchedClasses: [],
+			reason: "suppressed.startup_boilerplate_not_project_state",
+		};
+	}
+
 	const classification = classifyTraderTacticalContent(text, agentId);
 	if (!classification.suppressed || !classification.suppressionReason) {
 		return null;
@@ -266,6 +304,7 @@ function summarizeProjectLivingState(
 		.flatMap((txt) => txt.split("\n"))
 		.map((l) => trimLine(l))
 		.filter((l) => l.length > 0)
+		.filter((l) => !isStartupBoilerplateText(l))
 		.filter((l) => !/^NO_REPLY$/i.test(l))
 		.filter((l) => !/^HEARTBEAT_OK$/i.test(l))
 		.filter((l) => !/^\[Tool/i.test(l))
@@ -307,6 +346,7 @@ function isExpired(value: any): boolean {
 }
 
 function detectImportantPattern(text: string): boolean {
+	if (isStartupBoilerplateText(text)) return false;
 	const normalized = String(text || "").toLowerCase();
 	const keywords = [
 		"hack",
@@ -330,6 +370,7 @@ function extractDecisions(messages: ConversationMessage[]): string[] {
 		.map((m) => extractMessageText(m.content))
 		.flatMap((txt) => txt.split("\n"))
 		.map((line) => trimLine(line))
+		.filter((line) => !isStartupBoilerplateText(line))
 		.filter((line) =>
 			/\b(quyết định|chốt|decide|approved|approve|selected)\b/i.test(line),
 		)
@@ -341,6 +382,7 @@ function extractOutcomes(messages: ConversationMessage[]): string[] {
 		.map((m) => extractMessageText(m.content))
 		.flatMap((txt) => txt.split("\n"))
 		.map((line) => trimLine(line))
+		.filter((line) => !isStartupBoilerplateText(line))
 		.filter((line) =>
 			/\b(done|xong|completed|passed|failed|deployed|delivered)\b/i.test(line),
 		)
@@ -353,6 +395,7 @@ function buildDaySummary(messages: ConversationMessage[]): string {
 		.flatMap((txt) => txt.split("\n"))
 		.map((line) => trimLine(line, 220))
 		.filter((line) => line.length > 0)
+		.filter((line) => !isStartupBoilerplateText(line))
 		.slice(-12);
 
 	return lines.join("\n");
@@ -642,6 +685,13 @@ async function extractFacts(
 	const text = recentMessages
 		.map((m) => `${m.role}: ${extractMessageText(m.content)}`)
 		.join("\n");
+	const sanitizedText = sanitizeStartupBoilerplateText(text);
+	const sanitizedContextMessages = recentMessages
+		.map((message) => ({
+			role: message.role,
+			text: extractMessageText(message.content),
+		}))
+		.filter((message) => !isStartupBoilerplateText(message.text));
 
 	console.log(
 		`[AutoCapture] Context window: ${stats.selectedMessages}/${stats.totalMessages} msgs, ` +
@@ -657,35 +707,9 @@ async function extractFacts(
 	}
 
 	const continuationSessionKey = `${continuationCtx.sessionKey}:distill:${Date.now()}`;
-	const actionableSignals = [
-		/\b(approved|approve|go ahead|proceed|ship it|đã duyệt|duyệt kế hoạch|đồng ý triển khai|chốt kế hoạch)\b/i,
-		/\b(plan|planning|execution plan|implementation|kế hoạch|triển khai|packet)\b/i,
-		/\b(implementation packet|execution plan|task-context|task context|todo list|checklist|wave|milestone|kế hoạch triển khai|gói triển khai|implementation details)\b/i,
-		/\b(handoff|handover|next step|next steps|next-action|status update|blocked by|owner|bàn giao|bước tiếp theo|trạng thái|chuyển sang)\b/i,
-		/\b(decision|decide|approved approach|constraint|non-negotiable|must|must not|do not|trade-off|quyết định|ràng buộc|không được|bắt buộc)\b/i,
-	].some((pattern) => pattern.test(text));
-	const continuationStructuredContract = shouldUseLLM && actionableSignals
-		? {
-				slot_updates: [
-					{
-						key: "project.current_focus",
-						value: truncateText(extractFirstUserLine(text), 240),
-						confidence: 0.8,
-						category: "project",
-					},
-				],
-				log_entries: [
-					{
-						level: "info" as const,
-						text:
-							"continuation structured contract produced by real continuation session owner; host remains orchestration-only",
-					},
-				],
-			}
-		: undefined;
 
 	return extractWithIsolatedContinuation(
-		text,
+		sanitizedText,
 		currentSlots,
 		undefined,
 		{
@@ -696,11 +720,7 @@ async function extractFacts(
 		{
 			enableLlmExtraction: shouldUseLLM,
 			bootstrapSafeRawFirst: cfg.bootstrapSafeRawFirst ?? true,
-			contextMessages: recentMessages.map((message) => ({
-				role: message.role,
-				text: extractMessageText(message.content),
-			})),
-			structuredContract: continuationStructuredContract,
+			contextMessages: sanitizedContextMessages,
 		},
 	);
 }
@@ -714,6 +734,12 @@ async function storeSemanticMemory(
 	if (!normalizedText) {
 		console.warn(
 			`[AutoCapture] Skip semantic memory upsert: empty text (namespace=${namespace})`,
+		);
+		return;
+	}
+	if (isStartupBoilerplateText(normalizedText)) {
+		console.warn(
+			`[AutoCapture] Skip semantic memory upsert: startup boilerplate detected (namespace=${namespace})`,
 		);
 		return;
 	}
@@ -1219,7 +1245,7 @@ export function registerAutoCapture(
 						draftsStored: 0,
 						briefingsStored: 0,
 						hintsStored: 0,
-				  }
+					}
 				: distillApply.execute(extracted, {
 						userId,
 						agentId,

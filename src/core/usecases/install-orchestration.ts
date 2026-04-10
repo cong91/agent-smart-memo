@@ -14,6 +14,7 @@ export interface InstallOrchestrationInput {
 	cwd?: string;
 	now?: Date;
 	log?: (line: string) => void;
+	ensureAgentSurfaceTargets?: boolean;
 }
 
 export interface InstallOrchestrationResult {
@@ -21,8 +22,12 @@ export interface InstallOrchestrationResult {
 	configChanged: boolean;
 	runtimeDefaultsApplied: string[];
 	surfacesScanned: string[];
+	surfacesCreated: string[];
 	surfacesPatched: string[];
 	surfacesAlreadyCurrent: string[];
+	wikiFilesCreated: string[];
+	wikiFilesAlreadyPresent: string[];
+	wikiDirsEnsured: string[];
 	blockVersion: string;
 }
 
@@ -58,6 +63,73 @@ function cloneConfig(config: AsmSharedConfig): AsmSharedConfig {
 function buildDefaultWikiDir(projectWorkspaceRoot: string): string {
 	const normalizedRoot = projectWorkspaceRoot.replace(/\/$/u, "");
 	return `${normalizedRoot}/agent-smart-memo/memory/wiki`;
+}
+
+function ensureFileIfMissing(
+	path: string,
+	content: string,
+): "created" | "already-present" {
+	if (existsSync(path)) return "already-present";
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, content, "utf8");
+	return "created";
+}
+
+function ensureWikiBootstrapSurface(wikiDir: string): {
+	createdFiles: string[];
+	alreadyPresentFiles: string[];
+	ensuredDirs: string[];
+} {
+	const root = resolve(expandHome(wikiDir));
+	const ensuredDirs = [
+		resolve(root),
+		resolve(root, "live"),
+		resolve(root, "briefings"),
+		resolve(root, "drafts"),
+		resolve(root, "raw"),
+	];
+	for (const dir of ensuredDirs) {
+		mkdirSync(dir, { recursive: true });
+	}
+
+	const fileSpecs = [
+		{
+			path: resolve(root, "index.md"),
+			content: [
+				"# ASM Wiki Memory Index",
+				"",
+				"Use this wiki as the working surface for repo-specific context.",
+				"",
+				"## Pages",
+				"",
+			].join("\n"),
+		},
+		{
+			path: resolve(root, "schema.md"),
+			content: [
+				"# ASM Wiki Memory Schema",
+				"",
+				"- `live/`: working pages for current project knowledge.",
+				"- `briefings/`: concise derived summaries.",
+				"- `drafts/`: intermediary notes before promotion.",
+				"- `raw/`: captured artifacts and append-only imports.",
+				"- `log.md`: append-only wiki activity log.",
+			].join("\n"),
+		},
+		{
+			path: resolve(root, "log.md"),
+			content: "# ASM Wiki Memory Log\n\n",
+		},
+	];
+
+	const createdFiles: string[] = [];
+	const alreadyPresentFiles: string[] = [];
+	for (const spec of fileSpecs) {
+		const status = ensureFileIfMissing(spec.path, spec.content);
+		(status === "created" ? createdFiles : alreadyPresentFiles).push(spec.path);
+	}
+
+	return { createdFiles, alreadyPresentFiles, ensuredDirs };
 }
 
 export function ensureRuntimeConfigDefaults(
@@ -141,17 +213,27 @@ export function runInstallOrchestration(
 	const core = (next.core || {}) as Record<string, unknown>;
 	const projectWorkspaceRoot = text(core.projectWorkspaceRoot);
 	const cwd = text(input.cwd) || process.cwd();
+	const wikiDir = text(core.wikiDir);
 	const scan = scanAgentSurfaces({ projectWorkspaceRoot, cwd });
-	const existingSurfaces = scan.surfaces.filter((surface) => surface.exists);
-	const patches = existingSurfaces.map((surface) =>
-		patchReinforcementSurface(surface.path),
+	const targetSurfaces = input.ensureAgentSurfaceTargets
+		? scan.surfaces.filter((surface) => surface.kind === "agents_md")
+		: scan.surfaces.filter((surface) => surface.exists);
+	const patches = targetSurfaces.map((surface) =>
+		patchReinforcementSurface(surface.path, {
+			createIfMissing:
+				input.ensureAgentSurfaceTargets && surface.kind === "agents_md",
+		}),
 	);
+	const surfacesCreated = patches
+		.filter((item) => item.status === "created")
+		.map((item) => item.path);
 	const surfacesPatched = patches
 		.filter((item) => item.status === "patched" || item.status === "updated")
 		.map((item) => item.path);
 	const surfacesAlreadyCurrent = patches
 		.filter((item) => item.status === "already-current")
 		.map((item) => item.path);
+	const wikiBootstrap = ensureWikiBootstrapSurface(wikiDir);
 
 	const openclaw = {
 		...(((next.adapters || {}).openclaw as
@@ -170,10 +252,13 @@ export function runInstallOrchestration(
 	const nextState = {
 		blockVersion: ASM_WIKI_FIRST_BLOCK_VERSION,
 		lastAppliedAt:
-			surfacesPatched.length > 0 || !hasPreviousState
+			surfacesCreated.length > 0 ||
+			surfacesPatched.length > 0 ||
+			wikiBootstrap.createdFiles.length > 0 ||
+			!hasPreviousState
 				? (input.now || new Date()).toISOString()
 				: appliedTimestamp,
-		patchedSurfaces: existingSurfaces.map((surface) => ({
+		patchedSurfaces: targetSurfaces.map((surface) => ({
 			path: toPortablePath(surface.path, input.homeDir),
 			kind: surface.kind,
 			scope: surface.scope,
@@ -183,6 +268,18 @@ export function runInstallOrchestration(
 		})),
 		workspaceRoot: toPortablePath(projectWorkspaceRoot, input.homeDir),
 		configPath: toPortablePath(input.configPath, input.homeDir),
+		wikiDir: toPortablePath(wikiDir, input.homeDir),
+		wikiBootstrap: {
+			createdFiles: wikiBootstrap.createdFiles.map((path) =>
+				toPortablePath(path, input.homeDir),
+			),
+			alreadyPresentFiles: wikiBootstrap.alreadyPresentFiles.map((path) =>
+				toPortablePath(path, input.homeDir),
+			),
+			ensuredDirs: wikiBootstrap.ensuredDirs.map((path) =>
+				toPortablePath(path, input.homeDir),
+			),
+		},
 	};
 	openclaw.installOrchestration = nextState;
 	next.adapters = {
@@ -199,11 +296,20 @@ export function runInstallOrchestration(
 		for (const field of ensured.applied) {
 			input.log(`[ASM-104] install orchestration defaulted ${field}`);
 		}
+		for (const path of surfacesCreated) {
+			input.log(`[ASM-104] created reinforcement surface: ${path}`);
+		}
 		for (const path of surfacesPatched) {
 			input.log(`[ASM-104] patched reinforcement surface: ${path}`);
 		}
 		for (const path of surfacesAlreadyCurrent) {
 			input.log(`[ASM-104] reinforcement surface already current: ${path}`);
+		}
+		for (const path of wikiBootstrap.createdFiles) {
+			input.log(`[ASM-104] created wiki bootstrap file: ${path}`);
+		}
+		for (const path of wikiBootstrap.alreadyPresentFiles) {
+			input.log(`[ASM-104] wiki bootstrap file already present: ${path}`);
 		}
 	}
 
@@ -212,8 +318,12 @@ export function runInstallOrchestration(
 		configChanged,
 		runtimeDefaultsApplied: ensured.applied,
 		surfacesScanned: scan.surfaces.map((surface) => surface.path),
+		surfacesCreated,
 		surfacesPatched,
 		surfacesAlreadyCurrent,
+		wikiFilesCreated: wikiBootstrap.createdFiles,
+		wikiFilesAlreadyPresent: wikiBootstrap.alreadyPresentFiles,
+		wikiDirsEnsured: wikiBootstrap.ensuredDirs,
 		blockVersion: ASM_WIKI_FIRST_BLOCK_VERSION,
 	};
 }
