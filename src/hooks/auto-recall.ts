@@ -8,12 +8,23 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { buildRecallInjectionParts } from "../core/precedence/recall-precedence.js";
 import {
+	applyDomainGraphRerank,
 	normalizeSessionToken,
+	resolveRecallDomainRoute,
+	resolveTraderRecallGate,
 	scoreSemanticCandidate,
 } from "../core/retrieval-policy.js";
+
+import {
+	type RunModeMessageLike,
+	resolveAsmRunMode,
+} from "../core/usecases/run-mode-resolver.js";
+import {
+	buildWikiWorkingSet,
+	searchWikiMemory,
+} from "../core/usecases/semantic-memory-usecase.js";
+import { buildStatePack } from "../core/usecases/state-pack-builder.js";
 import type { SlotDB } from "../db/slot-db.js";
-import type { EmbeddingClient } from "../services/embedding.js";
-import type { QdrantClient } from "../services/qdrant.js";
 import {
 	getAgentNamespaces,
 	type MemoryNamespace,
@@ -28,16 +39,31 @@ const TOKEN_BUDGETS = {
 	semanticMemories: 600,
 };
 
+interface WikiWorkingSetSection {
+	label: string;
+	pages: Array<{
+		path: string;
+		title: string;
+		kind: string;
+		layer: string;
+		reason: string;
+		updatedAt?: number;
+		namespace?: string;
+	}>;
+}
+
 interface RecallContext {
 	sessionKey: string;
 	stateDir: string;
 	userId: string;
 	agentId: string;
+	messages?: RunModeMessageLike[];
 }
 
 interface RecallHintSet {
 	sessionKeys: Set<string>;
 	topicTags: Set<string>;
+	graphTags: Set<string>;
 }
 
 interface SemanticMemoryCandidate {
@@ -152,8 +178,13 @@ function formatProjectLivingState(value: unknown): string {
 function formatGraphContext(
 	entities: Array<{ name: string; type: string }>,
 	relationships: Array<{ source: string; target: string; type: string }>,
+	workingSetHints?: Array<{ path: string; reason: string }>,
 ): string {
-	if (entities.length === 0) return "";
+	if (
+		entities.length === 0 &&
+		(!workingSetHints || workingSetHints.length === 0)
+	)
+		return "";
 
 	let xml = "<knowledge-graph>\n";
 
@@ -175,6 +206,14 @@ function formatGraphContext(
 		xml += "  </relationships>\n";
 	}
 
+	if (workingSetHints && workingSetHints.length > 0) {
+		xml += "  <working-set-hints>\n";
+		workingSetHints.slice(0, 4).forEach((hint, index) => {
+			xml += `    <hint index="${index + 1}" path="${escapeXml(hint.path)}">${escapeXml(hint.reason)}</hint>\n`;
+		});
+		xml += "  </working-set-hints>\n";
+	}
+
 	xml += "</knowledge-graph>";
 	return xml;
 }
@@ -193,6 +232,119 @@ function formatSemanticMemories(
 		xml += `  <memory index="${i + 1}" relevance="${(m.score * 100).toFixed(0)}%"${nsAttr}>${m.text}</memory>\n`;
 	});
 	xml += "</semantic-memories>";
+	return xml;
+}
+
+function escapeXml(value: string): string {
+	return String(value)
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&apos;");
+}
+
+function formatWikiWorkingSet(input: {
+	wikiRoot: string;
+	entrypoint: string;
+	sections: WikiWorkingSetSection[];
+}): string {
+	const sections = input.sections.filter((section) => section.pages.length > 0);
+	if (!input.wikiRoot || !input.entrypoint || sections.length === 0) return "";
+
+	let xml = `<wiki-working-set>\n  <wiki-root>${escapeXml(input.wikiRoot)}</wiki-root>\n  <entrypoint>${escapeXml(input.entrypoint)}</entrypoint>`;
+	for (const section of sections) {
+		xml += `\n  <section name="${escapeXml(section.label)}">`;
+		for (const [index, page] of section.pages.entries()) {
+			const attrs = [
+				`index="${index + 1}"`,
+				`kind="${escapeXml(page.kind)}"`,
+				`layer="${escapeXml(page.layer)}"`,
+				`path="${escapeXml(page.path)}"`,
+			];
+			if (page.namespace)
+				attrs.push(`namespace="${escapeXml(page.namespace)}"`);
+			if (page.updatedAt) attrs.push(`updated_at="${String(page.updatedAt)}"`);
+			xml += `\n    <page ${attrs.join(" ")}>`;
+			xml += `\n      <title>${escapeXml(page.title)}</title>`;
+			xml += `\n      <reason>${escapeXml(page.reason)}</reason>`;
+			xml += "\n    </page>";
+		}
+		xml += "\n  </section>";
+	}
+	xml += "\n</wiki-working-set>";
+	return xml;
+}
+
+function formatRecentUpdates(
+	updates: Array<{
+		key: string;
+		updatedAt: string;
+		scope: string;
+		category: string;
+	}>,
+): string {
+	if (updates.length === 0) return "";
+	return `<recent-updates>\n${updates
+		.map(
+			(update) =>
+				`  <update key="${update.key}" category="${update.category}" scope="${update.scope}" at="${update.updatedAt}"/>`,
+		)
+		.join("\n")}\n</recent-updates>`;
+}
+
+function formatAsmRuntime(input: {
+	runMode: "light" | "wiki-first" | "write-back";
+	reasons: string[];
+	activeTaskHints: string[];
+}): string {
+	const modeGuidance =
+		input.runMode === "wiki-first"
+			? [
+					"treat wiki pages as the primary working surface for this run",
+					"inspect wiki root, entrypoint, and canonical pages before leaning on supporting recall",
+					"use supporting recall and graph context only as routing/evidence, not as the primary cognition layer",
+				]
+			: input.runMode === "write-back"
+				? [
+						"preserve write-back lane behavior and ownership boundaries",
+						"do not rewrite read-path guidance into snippet-first recall",
+					]
+				: [
+						"keep context light unless project-specific signals require wiki-first inspection",
+					];
+	const reasons = input.reasons
+		.slice(0, 5)
+		.map((reason, index) => `  <reason index="${index + 1}">${reason}</reason>`)
+		.join("\n");
+	const hints = input.activeTaskHints
+		.slice(0, 5)
+		.map((hint, index) => `  <hint index="${index + 1}">${hint}</hint>`)
+		.join("\n");
+
+	let xml = `<asm-runtime>\n  <run-mode>${input.runMode}</run-mode>`;
+	xml += "\n  <contract>";
+	xml +=
+		input.runMode === "wiki-first"
+			? "working-surface"
+			: input.runMode === "write-back"
+				? "write-back"
+				: "light";
+	xml += "</contract>";
+	if (reasons) {
+		xml += `\n  <reasons>\n${reasons}\n  </reasons>`;
+	}
+	if (hints) {
+		xml += `\n  <active-task-hints>\n${hints}\n  </active-task-hints>`;
+	}
+	if (modeGuidance.length > 0) {
+		xml += "\n  <guidance>\n";
+		modeGuidance.forEach((guidance, index) => {
+			xml += `    <instruction index="${index + 1}">${escapeXml(guidance)}</instruction>\n`;
+		});
+		xml += "  </guidance>";
+	}
+	xml += "\n</asm-runtime>";
 	return xml;
 }
 
@@ -217,6 +369,7 @@ function collectRecallHints(
 	const hints: RecallHintSet = {
 		sessionKeys: new Set<string>(),
 		topicTags: new Set<string>(),
+		graphTags: new Set<string>(),
 	};
 
 	const normalizedSession = normalizeToken(sessionKey);
@@ -346,6 +499,47 @@ function intersects(a: Set<string>, b: Set<string>): boolean {
 	return false;
 }
 
+function countIntersection(a: Set<string>, b: Set<string>): number {
+	if (a.size === 0 || b.size === 0) return 0;
+	let count = 0;
+	for (const x of a) {
+		if (b.has(x)) count += 1;
+	}
+	return count;
+}
+
+function collectGraphTags(
+	entities: Array<{ name: string; type: string }>,
+	relationships: Array<{ source: string; target: string; type: string }>,
+): Set<string> {
+	const tags = new Set<string>();
+	for (const e of entities) {
+		const name = normalizeToken(e.name);
+		if (name) {
+			tags.add(name);
+			splitToTags(name).forEach((x) => tags.add(x));
+		}
+		const type = normalizeToken(e.type);
+		if (type) tags.add(type);
+	}
+	for (const r of relationships) {
+		for (const raw of [r.source, r.target, r.type]) {
+			const token = normalizeToken(raw);
+			if (!token) continue;
+			tags.add(token);
+			splitToTags(token).forEach((x) => tags.add(x));
+		}
+	}
+	return tags;
+}
+
+function uniqueGraphSignals(
+	entities: Array<{ name: string; type: string }>,
+	relationships: Array<{ source: string; target: string; type: string }>,
+): string[] {
+	return [...collectGraphTags(entities, relationships)].slice(0, 16);
+}
+
 function applyRecencyBoost(
 	baseScore: number,
 	payload: Record<string, any>,
@@ -370,11 +564,26 @@ export function selectSemanticMemories(
 	ctx: RecallContext,
 	hints: RecallHintSet,
 ): SemanticSelectionResult {
+	const route = resolveRecallDomainRoute({
+		currentAgentId: ctx.agentId,
+		sessionKey: ctx.sessionKey,
+	});
+
 	const weighted: SemanticMemoryCandidate[] = results
 		.filter((r: any) => (r.payload?.namespace || "") !== "noise.filtered")
 		.map((r: any) => {
 			const payload = (r.payload || {}) as Record<string, any>;
 			const ns = String(payload.namespace || "");
+			const gate = resolveTraderRecallGate({
+				currentAgentId: ctx.agentId,
+				sessionKey: ctx.sessionKey,
+				namespace: ns,
+				payloadDomain: payload.domain,
+				suppressionReason:
+					payload.suppressionReason || payload.suppression_reason,
+				matchedClasses: payload.matchedClasses || payload.matched_classes,
+				sourceAgent: payload.source_agent || payload.agent,
+			});
 
 			const sessionToken = getSessionTokenFromPayload(payload);
 			const sameSession = sessionToken
@@ -393,17 +602,28 @@ export function selectSemanticMemories(
 				payloadSessionId: sessionToken,
 				sameSession,
 				promotionState: payload.promotion_state,
+				suppressionPenalty: gate.suppressionPenalty,
 			});
 
 			const memoryTags = collectPayloadTopicTags(payload);
 			const sameProject = intersects(hints.topicTags, memoryTags);
 			const crossProject =
 				hints.topicTags.size > 0 && memoryTags.size > 0 && !sameProject;
+			const graphSignalHits = countIntersection(hints.graphTags, memoryTags);
 
 			let adjusted = scored.finalScore;
 			if (sameSession) adjusted += 0.08;
 			if (sameProject) adjusted += 0.1;
 			if (crossProject) adjusted -= 0.18;
+			const rerank = applyDomainGraphRerank({
+				route,
+				namespace: ns,
+				payloadDomain: payload.domain,
+				graphSignalHits,
+				sameProject,
+				crossProject,
+			});
+			adjusted += rerank.totalDelta;
 			adjusted = applyRecencyBoost(adjusted, payload, sameSession);
 
 			return {
@@ -417,7 +637,21 @@ export function selectSemanticMemories(
 				crossProject,
 			};
 		})
-		.filter((m) => m.text.length > 0)
+		.filter((m) => {
+			if (m.text.length === 0) return false;
+			const gate = resolveTraderRecallGate({
+				currentAgentId: ctx.agentId,
+				sessionKey: ctx.sessionKey,
+				namespace: m.namespace,
+				payloadDomain: m.payload?.domain,
+				suppressionReason:
+					m.payload?.suppressionReason || m.payload?.suppression_reason,
+				matchedClasses: m.payload?.matchedClasses || m.payload?.matched_classes,
+				sourceAgent: m.payload?.source_agent || m.payload?.agent,
+			});
+			if (!gate.allowInRecall) return false;
+			return true;
+		})
 		.sort((a, b) => (b.adjustedScore || 0) - (a.adjustedScore || 0));
 
 	const kept = weighted
@@ -479,44 +713,17 @@ export function selectSemanticMemories(
 }
 
 /**
- * Build multi-namespace filter for Qdrant search
- */
-function buildNamespaceFilter(namespaces: MemoryNamespace[]): any {
-	if (namespaces.length === 0) {
-		return {
-			must: [{ key: "namespace", match: { value: "shared.project_context" } }],
-		};
-	}
-
-	if (namespaces.length === 1) {
-		return { must: [{ key: "namespace", match: { value: namespaces[0] } }] };
-	}
-
-	// Multiple namespaces - use OR (should)
-	return {
-		must: [
-			{
-				should: namespaces.map((ns) => ({
-					key: "namespace",
-					match: { value: ns },
-				})),
-			},
-		],
-	};
-}
-
-/**
  * Gather auto-recall context from all memory sources
  */
 export async function gatherRecallContext(
 	db: SlotDB,
-	qdrant: QdrantClient,
-	embedding: EmbeddingClient,
 	ctx: RecallContext,
 	userQuery?: string,
 ): Promise<{
+	asmRuntime: string;
 	currentState: string;
 	projectLivingState: string;
+	wikiWorkingSet: string;
 	graphContext: string;
 	recentUpdates: string;
 	semanticMemories: string;
@@ -526,67 +733,37 @@ export async function gatherRecallContext(
 		suppression_reason?: string;
 	};
 }> {
-	// 1. Get Current State from slots (all scopes)
-	const scopes = [
-		{ userId: ctx.userId, agentId: ctx.agentId, label: "private" },
-		{ userId: ctx.userId, agentId: "__team__", label: "team" },
-		{ userId: "__public__", agentId: "__public__", label: "public" },
-	];
+	const statePack = buildStatePack(db, {
+		userId: ctx.userId,
+		agentId: ctx.agentId,
+	});
 
-	const mergedState: Record<string, Record<string, unknown>> = {};
-	const mergedTimestamps: Record<string, Record<string, string>> = {};
-
-	for (const scope of scopes) {
-		const state = db.getCurrentState(scope.userId, scope.agentId);
-		const slots = db.list(scope.userId, scope.agentId);
-		// Build timestamp map
-		const tsMap: Record<string, string> = {};
-		for (const s of slots) {
-			tsMap[s.key] = s.updated_at;
-		}
-
-		for (const [category, catSlots] of Object.entries(state)) {
-			if (!mergedState[category]) {
-				mergedState[category] = {};
-				mergedTimestamps[category] = {};
-			}
-			for (const [key, value] of Object.entries(catSlots)) {
-				// Skip internal keys (e.g. _autocapture_hash)
-				if (key.startsWith("_")) continue;
-				const existingTs = mergedTimestamps[category]?.[key];
-				const newTs = tsMap[key] || "";
-				// Keep the NEWEST version (freshness wins)
-				if (!existingTs || newTs > existingTs) {
-					mergedState[category][key] = value;
-					mergedTimestamps[category][key] = newTs;
-				}
-			}
-		}
-	}
-
-	const currentStateXml = formatCurrentState(mergedState);
-
-	// 1.5 Get project_living_state slot (private > team > public)
-	const projectLivingCandidates = [
-		db.get(ctx.userId, ctx.agentId, { key: "project_living_state" }),
-		db.get(ctx.userId, "__team__", { key: "project_living_state" }),
-		db.get("__public__", "__public__", { key: "project_living_state" }),
-	];
-	let projectLivingStateXml = "";
-	let projectLivingStateValue: unknown = null;
-	for (const c of projectLivingCandidates) {
-		if (c && !Array.isArray(c)) {
-			projectLivingStateValue = c.value;
-			projectLivingStateXml = formatProjectLivingState(c.value);
-			if (projectLivingStateXml) break;
-		}
-	}
+	const currentStateXml = formatCurrentState(statePack.currentState);
+	const projectLivingStateXml = formatProjectLivingState(
+		statePack.projectLivingState,
+	);
 
 	const recallHints = collectRecallHints(
 		ctx.sessionKey,
-		projectLivingStateValue,
-		mergedState,
+		statePack.projectLivingState,
+		statePack.currentState,
 	);
+
+	const runMode = resolveAsmRunMode({
+		sessionKey: ctx.sessionKey,
+		userQuery,
+		messages: ctx.messages,
+		stateSummary: {
+			activeTaskHints: statePack.activeTaskHints,
+			projectLivingState: statePack.projectLivingState,
+			currentState: statePack.currentState,
+		},
+	});
+	const asmRuntime = formatAsmRuntime({
+		runMode: runMode.runMode,
+		reasons: runMode.reasons,
+		activeTaskHints: statePack.activeTaskHints,
+	});
 
 	// 2. Get Graph Context (from private scope only for privacy)
 	const allEntities = db.graph.listEntities(ctx.userId, ctx.agentId);
@@ -618,31 +795,52 @@ export async function gatherRecallContext(
 			}
 		}
 	}
+	const graphSignals = uniqueGraphSignals(entityList, relationships);
+	const wikiWorkingSet = buildWikiWorkingSet({
+		namespaces: getAgentNamespaces(ctx.agentId),
+		sourceAgent: ctx.agentId,
+		query: userQuery,
+		userId: ctx.userId,
+		preferredSessionId: ctx.sessionKey,
+		currentProject: statePack.runContext.currentProject,
+		currentTask: statePack.runContext.currentTask,
+		phase: statePack.runContext.phase,
+		focus: statePack.runContext.focus,
+		activeTaskHints: statePack.activeTaskHints,
+		graphSignals,
+		includeDrafts: false,
+		includeRaw: false,
+	});
+	const graphExpandedPages = wikiWorkingSet?.graphAssist.expandedPages || [];
+	const wikiWorkingSetXml = wikiWorkingSet
+		? formatWikiWorkingSet({
+				wikiRoot: wikiWorkingSet.wikiRoot,
+				entrypoint: wikiWorkingSet.entrypoint,
+				sections: [
+					{ label: "canonical-pages", pages: wikiWorkingSet.canonicalPages },
+					{ label: "task-pages", pages: wikiWorkingSet.taskPages },
+					{ label: "rule-pages", pages: wikiWorkingSet.rulePages },
+					{ label: "runbook-pages", pages: wikiWorkingSet.runbookPages },
+					{ label: "supporting-pages", pages: wikiWorkingSet.supportingPages },
+					{ label: "graph-expanded-pages", pages: graphExpandedPages },
+				],
+			})
+		: "";
 
-	const graphContextXml = formatGraphContext(entityList, relationships);
+	const graphContextXml = formatGraphContext(
+		entityList,
+		relationships,
+		graphExpandedPages.map((page) => ({
+			path: page.path,
+			reason: page.reason,
+		})),
+	);
+	recallHints.graphTags = collectGraphTags(entityList, relationships);
+	graphSignals.forEach((signal: string) => recallHints.graphTags.add(signal));
 
-	// 3. Recent Updates (last 5 modified slots)
-	const allSlots: Array<{ key: string; updated_at: string }> = [];
-	for (const scope of scopes) {
-		const slots = db.list(scope.userId, scope.agentId);
-		slots.forEach((s) =>
-			allSlots.push({ key: s.key, updated_at: s.updated_at }),
-		);
-	}
+	const recentUpdates = formatRecentUpdates(statePack.recentUpdates);
 
-	const recentSlots = allSlots
-		.sort(
-			(a, b) =>
-				new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
-		)
-		.slice(0, 5);
-
-	const recentUpdates =
-		recentSlots.length > 0
-			? `<recent-updates>\n${recentSlots.map((s) => `  <update key="${s.key}" at="${s.updated_at}"/>`).join("\n")}\n</recent-updates>`
-			: "";
-
-	// 4. Semantic Memories from Qdrant (NEW)
+	// 4. Semantic Memories: wiki-only primary path after phase-1 cutover.
 	let semanticMemoriesXml = "";
 	let recallMeta: {
 		recall_confidence: "high" | "medium" | "low";
@@ -653,21 +851,44 @@ export async function gatherRecallContext(
 		recall_suppressed: false,
 	};
 
-	if (userQuery && userQuery.trim().length > 0) {
+	if (wikiWorkingSet && userQuery && userQuery.trim().length > 0) {
 		try {
 			// Get agent's namespaces
 			const namespaces = getAgentNamespaces(ctx.agentId);
 
-			// Generate embedding for the query
-			const vector = await embedding.embed(userQuery);
+			const wikiResults = searchWikiMemory({
+				query: userQuery,
+				limit: 8,
+				minScore: 0.7,
+				namespaces,
+				sourceAgent: ctx.agentId,
+				sessionMode: "soft",
+				preferredSessionId: ctx.sessionKey,
+				userId: ctx.userId,
+				includeDrafts: false,
+				includeRaw: false,
+			});
 
-			// Build multi-namespace filter
-			const namespaceFilter = buildNamespaceFilter(namespaces);
-
-			// Search for relevant memories
-			const results = await qdrant.search(vector, 8, namespaceFilter);
-
-			const selection = selectSemanticMemories(results, ctx, recallHints);
+			const selection = selectSemanticMemories(
+				wikiResults.map((r) => ({
+					score: r.rawScore,
+					payload: {
+						id: r.id,
+						text: r.text,
+						namespace: r.namespace,
+						timestamp: r.timestamp,
+						metadata: r.metadata,
+						source_type: "wiki",
+						sessionId: (r.metadata?.sessionId as string | undefined) || null,
+						userId: (r.metadata?.userId as string | undefined) || null,
+						source_agent:
+							(r.metadata?.source_agent as string | undefined) || ctx.agentId,
+						promotion_state: "distilled",
+					},
+				})),
+				ctx,
+				recallHints,
+			);
 			recallMeta = {
 				recall_confidence: selection.recallConfidence,
 				recall_suppressed: selection.suppressed,
@@ -677,11 +898,11 @@ export async function gatherRecallContext(
 
 			if (selection.memories.length > 0) {
 				console.log(
-					`[AutoRecall] Found ${selection.memories.length} relevant semantic memories for query (confidence=${selection.recallConfidence}, namespaces: ${namespaces.join(", ")})`,
+					`[AutoRecall] Found ${selection.memories.length} supporting wiki memories for query (confidence=${selection.recallConfidence}, namespaces: ${namespaces.join(", ")})`,
 				);
 			} else if (selection.suppressed) {
 				console.warn(
-					`[AutoRecall] Semantic recall suppressed due to low confidence: ${selection.suppressionReason || "unknown"}`,
+					`[AutoRecall] Wiki recall suppressed due to low confidence: ${selection.suppressionReason || "unknown"}`,
 				);
 			}
 		} catch (error: any) {
@@ -696,11 +917,19 @@ export async function gatherRecallContext(
 				suppression_reason: "semantic_search_error",
 			};
 		}
+	} else if (!wikiWorkingSet && userQuery && userQuery.trim().length > 0) {
+		recallMeta = {
+			recall_confidence: "low",
+			recall_suppressed: true,
+			suppression_reason: "wiki_working_set_unavailable",
+		};
 	}
 
 	return {
+		asmRuntime,
 		currentState: currentStateXml,
 		projectLivingState: projectLivingStateXml,
+		wikiWorkingSet: wikiWorkingSetXml,
 		graphContext: graphContextXml,
 		recentUpdates,
 		semanticMemories: semanticMemoriesXml,
@@ -714,8 +943,10 @@ export async function gatherRecallContext(
 export function injectRecallContext(
 	systemPrompt: string,
 	context: {
+		asmRuntime?: string;
 		currentState: string;
 		projectLivingState: string;
+		wikiWorkingSet?: string;
 		graphContext: string;
 		recentUpdates: string;
 		semanticMemories: string;
@@ -747,12 +978,7 @@ export function injectRecallContext(
 /**
  * Register auto-recall hook
  */
-export function registerAutoRecall(
-	api: OpenClawPluginApi,
-	db: SlotDB,
-	qdrant: QdrantClient,
-	embedding: EmbeddingClient,
-): void {
+export function registerAutoRecall(api: OpenClawPluginApi, db: SlotDB): void {
 	// Hook into agent lifecycle using the on() method
 	api.on("before_agent_start", async (event: unknown, ctx: unknown) => {
 		const typedEvent = event as {
@@ -790,16 +1016,11 @@ export function registerAutoRecall(
 				process.env.OPENCLAW_STATE_DIR || `${process.env.HOME}/.openclaw`,
 			userId,
 			agentId,
+			messages: typedEvent?.messages,
 		};
 
 		try {
-			const context = await gatherRecallContext(
-				db,
-				qdrant,
-				embedding,
-				recallCtx,
-				userQuery,
-			);
+			const context = await gatherRecallContext(db, recallCtx, userQuery);
 
 			// Get original system prompt from event if available
 			const originalPrompt = typedEvent?.systemPrompt || "";
@@ -819,8 +1040,6 @@ export function registerAutoRecall(
  */
 export async function getRecallContextText(
 	db: SlotDB,
-	qdrant: QdrantClient,
-	embedding: EmbeddingClient,
 	sessionKey: string,
 	userQuery?: string,
 ): Promise<string> {
@@ -837,20 +1056,7 @@ export async function getRecallContextText(
 		agentId,
 	};
 
-	const context = await gatherRecallContext(
-		db,
-		qdrant,
-		embedding,
-		ctx,
-		userQuery,
-	);
+	const context = await gatherRecallContext(db, ctx, userQuery);
 
-	const parts2: string[] = [];
-	if (context.currentState) parts2.push(context.currentState);
-	if (context.projectLivingState) parts2.push(context.projectLivingState);
-	if (context.graphContext) parts2.push(context.graphContext);
-	if (context.recentUpdates) parts2.push(context.recentUpdates);
-	if (context.semanticMemories) parts2.push(context.semanticMemories);
-
-	return parts2.join("\n\n");
+	return buildRecallInjectionParts(context).join("\n\n");
 }

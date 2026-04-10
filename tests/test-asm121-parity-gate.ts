@@ -1,4 +1,10 @@
-import { SemanticMemoryUseCase } from "../src/core/usecases/semantic-memory-usecase.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+	buildWikiWorkingSet,
+	SemanticMemoryUseCase,
+} from "../src/core/usecases/semantic-memory-usecase.js";
 import {
 	injectRecallContext,
 	selectSemanticMemories,
@@ -55,274 +61,321 @@ class MockEmbedding {
 	}
 }
 
-class MockQdrant {
-	public points: any[] = [];
-
-	async upsert(points: any[]): Promise<void> {
-		for (const p of points) {
-			const idx = this.points.findIndex((x) => x.id === p.id);
-			if (idx >= 0) this.points[idx] = p;
-			else this.points.push(p);
-		}
-	}
-
-	async search(_vector: number[], limit = 5, filter?: any): Promise<any[]> {
-		const filtered = this.points.filter((p) => {
-			const must = filter?.must || [];
-			return must.every((m: any) => {
-				if (Array.isArray(m.should)) {
-					return m.should.some((s: any) => this.matchLeaf(p.payload, s));
-				}
-				return this.matchLeaf(p.payload, m);
-			});
-		});
-
-		return filtered.slice(0, limit).map((p) => ({
-			id: p.id,
-			score:
-				typeof p.payload?.mockScore === "number" ? p.payload.mockScore : 0.9,
-			payload: p.payload,
-		}));
-	}
-
-	private matchLeaf(payload: any, cond: any): boolean {
-		const key = cond?.key;
-		const val = cond?.match?.value;
-		if (!key) return true;
-		return payload?.[key] === val;
-	}
-}
+class MockQdrant {}
 
 async function main() {
+	const previousWikiRoot = process.env.ASM_WIKI_ROOT;
+	const wikiRoot = mkdtempSync(join(tmpdir(), "asm121-parity-"));
+	process.env.ASM_WIKI_ROOT = wikiRoot;
+
 	const qdrant = new MockQdrant();
 	const embedding = new MockEmbedding();
 	const dedupe = new DeduplicationService(0.95, console);
-	const memorySearch = createMemorySearchTool(
-		qdrant as any,
-		embedding as any,
-		"shared.project_context",
-	);
+	const memorySearch = createMemorySearchTool("shared.project_context");
 	const usecase = new SemanticMemoryUseCase(
 		qdrant as any,
 		embedding as any,
 		dedupe,
 	);
 
-	await qdrant.upsert([
-		{
-			id: "p-same-session",
-			vector: [0.1, 0.2, 0.3, 0.4],
-			payload: {
+	try {
+		await usecase.capture(
+			{
 				text: "Parity same session memory",
-				namespace: "agent.assistant.working_memory",
+				namespace: "assistant",
 				sessionId: "strict-session",
-				source_agent: "assistant",
 				userId: "u1",
-				mockScore: 0.84,
-				timestamp: Date.now(),
 			},
-		},
-		{
-			id: "p-cross-session",
-			vector: [0.2, 0.2, 0.3, 0.5],
-			payload: {
+			{ userId: "u1", agentId: "assistant", sessionId: "strict-session" },
+		);
+		await usecase.capture(
+			{
 				text: "Parity cross session memory",
-				namespace: "agent.assistant.working_memory",
+				namespace: "assistant",
 				sessionId: "other-session",
-				source_agent: "assistant",
 				userId: "u1",
-				mockScore: 0.86,
-				timestamp: Date.now(),
 			},
-		},
-	]);
-
-	await test("strict mode parity: tool + usecase both hard-filter session", async () => {
-		const toolRes = await memorySearch.execute("p1", {
-			query: "parity strict",
-			namespace: "assistant" as any,
-			agentId: "assistant",
-			userId: "u1",
-			sessionMode: "strict",
-			sessionId: "strict-session",
-			minScore: 0.1,
-		});
-		assert(toolRes.isError !== true, "tool strict search must succeed");
-		const toolIds = ((toolRes as any).details?.results || []).map((r: any) =>
-			String(r.id),
+			{ userId: "u1", agentId: "assistant", sessionId: "other-session" },
 		);
 
-		const usecaseRes = await usecase.search(
-			{
-				query: "parity strict",
-				namespace: "assistant",
+		await test("strict mode parity: tool + usecase both hard-filter session", async () => {
+			const toolRes = await memorySearch.execute("p1", {
+				query: "Parity same session memory",
+				namespace: "assistant" as any,
+				agentId: "assistant",
 				userId: "u1",
 				sessionMode: "strict",
 				sessionId: "strict-session",
+				includeDrafts: true,
 				minScore: 0.1,
-			},
-			{ userId: "u1", agentId: "assistant", sessionId: "strict-session" },
-		);
-		const usecaseIds = usecaseRes.results.map((r) => String(r.id));
+			});
+			assert(toolRes.isError !== true, "tool strict search must succeed");
+			const toolIds = ((toolRes as any).details?.results || []).map((r: any) =>
+				String(r.id),
+			);
 
-		assertEqual(
-			toolIds,
-			["p-same-session"],
-			"tool strict must return only same session",
-		);
-		assertEqual(
-			usecaseIds,
-			["p-same-session"],
-			"usecase strict must return only same session",
-		);
-	});
+			const usecaseRes = await usecase.search(
+				{
+					query: "Parity same session memory",
+					namespace: "assistant",
+					userId: "u1",
+					sessionMode: "strict",
+					sessionId: "strict-session",
+					includeDrafts: true,
+					minScore: 0.1,
+				},
+				{ userId: "u1", agentId: "assistant", sessionId: "strict-session" },
+			);
+			const usecaseIds = usecaseRes.results.map((r) => String(r.id));
 
-	await test("soft mode parity: tool + usecase return identical ordering/signature", async () => {
-		const toolRes = await memorySearch.execute("p2", {
-			query: "parity soft",
-			namespace: "assistant" as any,
-			agentId: "assistant",
-			userId: "u1",
-			sessionMode: "soft",
-			sessionId: "strict-session",
-			minScore: 0.1,
+			assert(
+				toolIds.length >= 1,
+				"tool strict should return at least one wiki hit",
+			);
+			assertEqual(
+				toolIds,
+				usecaseIds,
+				"tool strict and usecase strict must stay in parity",
+			);
+			assert(
+				usecaseRes.results.every(
+					(r) => (r.metadata?.sessionId || null) === "strict-session",
+				),
+				"strict mode must keep only the requested session",
+			);
 		});
-		assert(toolRes.isError !== true, "tool soft search must succeed");
-		const toolResults = (toolRes as any).details?.results || [];
 
-		const usecaseRes = await usecase.search(
-			{
-				query: "parity soft",
-				namespace: "assistant",
+		await test("soft mode parity: tool + usecase return identical ordering/signature", async () => {
+			const toolRes = await memorySearch.execute("p2", {
+				query: "Parity memory",
+				namespace: "assistant" as any,
+				agentId: "assistant",
 				userId: "u1",
 				sessionMode: "soft",
 				sessionId: "strict-session",
+				includeDrafts: true,
 				minScore: 0.1,
-			},
-			{ userId: "u1", agentId: "assistant", sessionId: "strict-session" },
-		);
+			});
+			assert(toolRes.isError !== true, "tool soft search must succeed");
+			const toolResults = (toolRes as any).details?.results || [];
 
-		const toolIds = toolResults.map((r: any) => String(r.id));
-		const usecaseIds = usecaseRes.results.map((r) => String(r.id));
-		assertEqual(
-			toolIds,
-			usecaseIds,
-			"tool/usecase ordering must stay parity in soft mode",
-		);
-
-		const toolScores = toolResults.map((r: any) => Number(r.score.toFixed(6)));
-		const usecaseScores = usecaseRes.results.map((r) =>
-			Number(r.score.toFixed(6)),
-		);
-		assertEqual(
-			toolScores,
-			usecaseScores,
-			"tool/usecase scoring must stay parity in soft mode",
-		);
-	});
-
-	await test("drift detection: auto-recall keeps same-session anchor preference", () => {
-		const selection = selectSemanticMemories(
-			[
+			const usecaseRes = await usecase.search(
 				{
-					score: 0.84,
-					payload: qdrant.points.find((p) => p.id === "p-same-session")
-						?.payload,
+					query: "Parity memory",
+					namespace: "assistant",
+					userId: "u1",
+					sessionMode: "soft",
+					sessionId: "strict-session",
+					includeDrafts: true,
+					minScore: 0.1,
 				},
-				{
-					score: 0.86,
-					payload: qdrant.points.find((p) => p.id === "p-cross-session")
-						?.payload,
-				},
-			],
-			{
-				sessionKey: "agent:assistant:strict-session",
-				stateDir: "/tmp",
-				userId: "u1",
-				agentId: "assistant",
-			},
-			{
-				sessionKeys: new Set([
-					"agent:assistant:strict-session",
-					"strict-session",
-				]),
-				topicTags: new Set(["parity", "assistant"]),
-			},
-		);
+				{ userId: "u1", agentId: "assistant", sessionId: "strict-session" },
+			);
 
-		assert(
-			selection.memories.length > 0,
-			"auto-recall should keep at least one memory",
-		);
-		assert(
-			String(selection.memories[0]?.text || "").includes("same session"),
-			"auto-recall top memory should preserve same-session anchor preference",
-		);
-	});
+			const toolIds = toolResults.map((r: any) => String(r.id));
+			const usecaseIds = usecaseRes.results.map((r) => String(r.id));
+			assertEqual(
+				toolIds,
+				usecaseIds,
+				"tool/usecase ordering must stay parity in soft mode",
+			);
 
-	await test("precedence check (foundation): injected current-state appears before semantic memories", () => {
-		const injected = injectRecallContext("<system>base</system>", {
-			currentState:
-				"<current-state><project><task>slot-truth</task></project></current-state>",
-			projectLivingState: "",
-			graphContext: "",
-			recentUpdates: "",
-			semanticMemories:
-				'<semantic-memories><memory index="1">supporting-evidence</memory></semantic-memories>',
-			recallMeta: {
-				recall_confidence: "high",
-				recall_suppressed: false,
-			},
+			const toolScores = toolResults.map((r: any) =>
+				Number(r.score.toFixed(6)),
+			);
+			const usecaseScores = usecaseRes.results.map((r) =>
+				Number(r.score.toFixed(6)),
+			);
+			assertEqual(
+				toolScores,
+				usecaseScores,
+				"tool/usecase scoring must stay parity in soft mode",
+			);
 		});
 
-		const slotPos = injected.indexOf("<current-state>");
-		const semanticPos = injected.indexOf("<semantic-memories>");
-		assert(
-			slotPos >= 0 && semanticPos >= 0,
-			"injected prompt must include both slot and semantic blocks",
-		);
-		assert(
-			slotPos < semanticPos,
-			"slot/current-state block should appear before semantic memories block",
-		);
-		assert(
-			injected.includes('<slotdb-truth precedence="highest">') &&
-				injected.includes('<semantic-evidence precedence="medium">'),
-			"injected prompt should expose explicit precedence wrappers for slot truth and semantic evidence",
-		);
-	});
+		await test("drift detection: auto-recall keeps same-session anchor preference", () => {
+			const selection = selectSemanticMemories(
+				[
+					{
+						score: 0.84,
+						payload: {
+							text: "Parity same session memory",
+							namespace: "agent.assistant.working_memory",
+							sessionId: "strict-session",
+							source_agent: "assistant",
+							userId: "u1",
+						},
+					},
+					{
+						score: 0.86,
+						payload: {
+							text: "Parity cross session memory",
+							namespace: "agent.assistant.working_memory",
+							sessionId: "other-session",
+							source_agent: "assistant",
+							userId: "u1",
+						},
+					},
+				],
+				{
+					sessionKey: "agent:assistant:strict-session",
+					stateDir: "/tmp",
+					userId: "u1",
+					agentId: "assistant",
+				},
+				{
+					sessionKeys: new Set([
+						"agent:assistant:strict-session",
+						"strict-session",
+					]),
+					topicTags: new Set(["parity", "assistant"]),
+					graphTags: new Set(),
+				},
+			);
 
-	await test("precedence check (asm-117): semantic evidence appears before graph routing support", () => {
-		const injected = injectRecallContext("<system>base</system>", {
-			currentState:
-				"<current-state><project><task>slot-truth</task></project></current-state>",
-			projectLivingState: "",
-			graphContext:
-				'<knowledge-graph><entities><entity name="router" type="service"/></entities></knowledge-graph>',
-			recentUpdates: "",
-			semanticMemories:
-				'<semantic-memories><memory index="1">history-evidence</memory></semantic-memories>',
-			recallMeta: {
-				recall_confidence: "high",
-				recall_suppressed: false,
-			},
+			assert(
+				selection.memories.length > 0,
+				"auto-recall should keep at least one memory",
+			);
+			assert(
+				String(selection.memories[0]?.text || "").includes("same session"),
+				"auto-recall top memory should preserve same-session anchor preference",
+			);
 		});
 
-		const semanticPos = injected.indexOf(
-			'<semantic-evidence precedence="medium">',
-		);
-		const graphPos = injected.indexOf(
-			'<graph-routing-support precedence="support">',
-		);
-		assert(
-			semanticPos >= 0 && graphPos >= 0,
-			"injected prompt must include semantic and graph precedence wrappers",
-		);
-		assert(
-			semanticPos < graphPos,
-			"semantic evidence must be injected before graph routing support",
-		);
-	});
+		await test("precedence check (foundation): injected current-state appears before semantic memories", () => {
+			const injected = injectRecallContext("<system>base</system>", {
+				currentState:
+					"<current-state><project><task>slot-truth</task></project></current-state>",
+				projectLivingState: "",
+				wikiWorkingSet:
+					"<wiki-working-set><wiki-root>/tmp/wiki</wiki-root><entrypoint>index.md</entrypoint></wiki-working-set>",
+				graphContext: "",
+				recentUpdates: "",
+				semanticMemories:
+					'<semantic-memories><memory index="1">supporting-evidence</memory></semantic-memories>',
+				recallMeta: {
+					recall_confidence: "high",
+					recall_suppressed: false,
+				},
+			});
+
+			const slotPos = injected.indexOf("<current-state>");
+			const wikiPos = injected.indexOf(
+				'<wiki-working-surface precedence="primary">',
+			);
+			const semanticPos = injected.indexOf(
+				'<supporting-recall precedence="support">',
+			);
+			assert(
+				slotPos >= 0 && wikiPos >= 0 && semanticPos >= 0,
+				"injected prompt must include slot, wiki, and supporting recall blocks",
+			);
+			assert(
+				slotPos < wikiPos && wikiPos < semanticPos,
+				"slot/current-state block should appear before wiki working surface, which should appear before supporting recall",
+			);
+			assert(
+				injected.includes('<slotdb-truth precedence="highest">') &&
+					injected.includes('<wiki-working-surface precedence="primary">') &&
+					injected.includes('<supporting-recall precedence="support">'),
+				"injected prompt should expose explicit precedence wrappers for slot truth, wiki working surface, and supporting recall",
+			);
+		});
+
+		await test("precedence check (asm-117): semantic evidence appears before graph routing support", () => {
+			const injected = injectRecallContext("<system>base</system>", {
+				currentState:
+					"<current-state><project><task>slot-truth</task></project></current-state>",
+				projectLivingState: "",
+				wikiWorkingSet:
+					"<wiki-working-set><wiki-root>/tmp/wiki</wiki-root><entrypoint>index.md</entrypoint></wiki-working-set>",
+				graphContext:
+					'<knowledge-graph><entities><entity name="router" type="service"/></entities></knowledge-graph>',
+				recentUpdates: "",
+				semanticMemories:
+					'<semantic-memories><memory index="1">history-evidence</memory></semantic-memories>',
+				recallMeta: {
+					recall_confidence: "high",
+					recall_suppressed: false,
+				},
+			});
+
+			const semanticPos = injected.indexOf(
+				'<supporting-recall precedence="support">',
+			);
+			const graphPos = injected.indexOf(
+				'<graph-routing-support precedence="support">',
+			);
+			assert(
+				semanticPos >= 0 && graphPos >= 0,
+				"injected prompt must include semantic and graph precedence wrappers",
+			);
+			assert(
+				semanticPos < graphPos,
+				"supporting recall must be injected before graph routing support",
+			);
+		});
+
+		await test("wiki-first working set selects deterministic page-level surfaces", () => {
+			const workingSet = buildWikiWorkingSet({
+				namespaces: ["shared.project_context" as any],
+				sourceAgent: "assistant",
+				query: "Parity same session memory",
+				currentProject: "strict-session",
+				currentTask: "Parity same session memory",
+				activeTaskHints: ["Parity same session memory", "strict-session"],
+				graphSignals: ["parity", "strict-session", "memory"],
+				includeDrafts: false,
+				includeRaw: false,
+			});
+
+			assert(
+				workingSet !== null,
+				"working set should resolve when wiki exists",
+			);
+			assertEqual(
+				workingSet?.entrypoint,
+				"index.md",
+				"entrypoint should be index.md",
+			);
+			assert(
+				(workingSet?.canonicalPages || []).length > 0,
+				"working set should include canonical pages",
+			);
+			assert(
+				(workingSet?.canonicalPages || []).some(
+					(page) => page.path === "index.md",
+				),
+				"working set should include wiki entrypoint as an inspectable page",
+			);
+			assert(
+				(workingSet?.supportingPages || []).every((page, index, pages) => {
+					if (index === 0) return true;
+					const prev = pages[index - 1];
+					return (
+						Number(prev.updatedAt || 0) >= Number(page.updatedAt || 0) ||
+						prev.path.localeCompare(page.path) <= 0
+					);
+				}),
+				"supporting pages should be deterministically ordered",
+			);
+			assert(
+				(workingSet?.graphAssist.expandedPages || []).length <= 2,
+				"graph assist should contribute bounded expansion hints only",
+			);
+			assert(
+				(workingSet?.graphAssist.expandedPages || []).every(
+					(page) => page.reason === "graph-assisted expansion hint",
+				),
+				"graph-expanded pages should remain marked as assistive hints",
+			);
+		});
+	} finally {
+		if (previousWikiRoot) process.env.ASM_WIKI_ROOT = previousWikiRoot;
+		else delete process.env.ASM_WIKI_ROOT;
+		rmSync(wikiRoot, { recursive: true, force: true });
+	}
 
 	if (!process.exitCode) {
 		console.log("\n🎉 ASM-121 parity gate tests passed");

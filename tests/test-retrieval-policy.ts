@@ -1,8 +1,14 @@
 import {
+	applyDomainGraphRerank,
+	isTraderOwnerPath,
+	isTraderTacticalCandidate,
 	normalizeSessionToken,
+	resolveRecallDomainRoute,
 	resolveSessionMode,
+	resolveTraderRecallGate,
 	scoreSemanticCandidate,
 	shouldApplyStrictSessionFilter,
+	TRADER_TACTICAL_SUPPRESSION_PENALTY,
 } from "../src/core/retrieval-policy.js";
 
 function assert(condition: unknown, message: string): void {
@@ -48,6 +54,25 @@ test("resolveSessionMode defaults to soft", () => {
 		resolveSessionMode("strict"),
 		"strict",
 		"strict mode should be preserved",
+	);
+});
+
+test("recall domain router is deterministic by owner path", () => {
+	assertEqual(
+		resolveRecallDomainRoute({
+			currentAgentId: "assistant",
+			sessionKey: "agent:assistant:thread-1",
+		}),
+		"generic_shared",
+		"generic assistant path should map to generic_shared route",
+	);
+	assertEqual(
+		resolveRecallDomainRoute({
+			currentAgentId: "assistant",
+			sessionKey: "agent:trader:thread-1",
+		}),
+		"trader_owner",
+		"trader session owner path should map to trader_owner route",
 	);
 });
 
@@ -124,6 +149,181 @@ test("promoted memories should rank above raw when base score is equal", () => {
 	assert(
 		promoted.finalScore > distilled.finalScore,
 		"promoted should outrank distilled",
+	);
+});
+
+test("trader owner path detection uses agent and session tokens", () => {
+	assert(
+		isTraderOwnerPath("trader", "agent:assistant:foo"),
+		"trader agent should be recognized as owner path",
+	);
+	assert(
+		isTraderOwnerPath("assistant", "agent:trader:thread-1"),
+		"trader session path should be recognized as owner path",
+	);
+	assert(
+		!isTraderOwnerPath("assistant", "agent:assistant:thread-1"),
+		"generic assistant path must not be treated as trader owner path",
+	);
+});
+
+test("trader tactical candidate detection is deterministic", () => {
+	assert(
+		isTraderTacticalCandidate({
+			namespace: "agent.trader.decisions",
+		}) === true,
+		"trader namespace should be classified as tactical candidate",
+	);
+	assert(
+		isTraderTacticalCandidate({
+			payloadDomain: "trader_tactical",
+		}) === true,
+		"trader_tactical domain should be classified as tactical candidate",
+	);
+	assert(
+		isTraderTacticalCandidate({
+			namespace: "shared.project_context",
+			payloadDomain: "generic",
+		}) === false,
+		"shared generic memory must not be classified as trader tactical",
+	);
+});
+
+test("generic path suppresses trader tactical gate", () => {
+	const gate = resolveTraderRecallGate({
+		currentAgentId: "assistant",
+		sessionKey: "agent:assistant:taa-thread-1",
+		namespace: "agent.trader.decisions",
+		payloadDomain: "trader_tactical",
+	});
+
+	assertEqual(
+		gate.allowInRecall,
+		false,
+		"generic path should suppress tactical recall",
+	);
+	assertEqual(
+		gate.suppressionPenalty,
+		TRADER_TACTICAL_SUPPRESSION_PENALTY,
+		"gate should apply configured suppression penalty",
+	);
+	assertEqual(
+		gate.reason,
+		"generic_owner_path_suppressed",
+		"suppression reason mismatch",
+	);
+});
+
+test("trader path allows tactical gate without suppression", () => {
+	const gate = resolveTraderRecallGate({
+		currentAgentId: "trader",
+		sessionKey: "agent:trader:thread-1",
+		namespace: "agent.trader.decisions",
+		payloadDomain: "trader_tactical",
+	});
+
+	assertEqual(
+		gate.allowInRecall,
+		true,
+		"trader path should allow tactical recall",
+	);
+	assertEqual(
+		gate.suppressionPenalty,
+		0,
+		"trader path should not be penalized",
+	);
+	assertEqual(gate.reason, "trader_owner_path", "owner-path reason mismatch");
+});
+
+test("scoreSemanticCandidate applies suppression penalty deterministically", () => {
+	const base = scoreSemanticCandidate({
+		rawScore: 0.85,
+		agentId: "assistant",
+		namespace: "shared.project_context",
+		sessionMode: "soft",
+		preferredSessionId: "s1",
+		payloadSessionId: "s1",
+		suppressionPenalty: 0,
+	});
+
+	const suppressed = scoreSemanticCandidate({
+		rawScore: 0.85,
+		agentId: "assistant",
+		namespace: "shared.project_context",
+		sessionMode: "soft",
+		preferredSessionId: "s1",
+		payloadSessionId: "s1",
+		suppressionPenalty: 0.4,
+	});
+
+	assert(
+		suppressed.finalScore < base.finalScore,
+		"suppression penalty must reduce final score",
+	);
+});
+
+test("domain+graph rerank boosts shared memories and penalizes cross-project", () => {
+	const boosted = applyDomainGraphRerank({
+		route: "generic_shared",
+		namespace: "shared.project_context",
+		graphSignalHits: 2,
+		sameProject: true,
+		crossProject: false,
+	});
+	assert(
+		boosted.totalDelta > 0,
+		"shared same-project with graph hits should receive positive rerank delta",
+	);
+
+	const penalized = applyDomainGraphRerank({
+		route: "generic_shared",
+		namespace: "shared.project_context",
+		graphSignalHits: 0,
+		sameProject: false,
+		crossProject: true,
+	});
+	assert(penalized.totalDelta < 0, "cross-project memory should be penalized");
+});
+
+test("graph rerank stays supporting-only beneath wiki working set", () => {
+	const graphOnly = applyDomainGraphRerank({
+		route: "generic_shared",
+		namespace: "shared.project_context",
+		graphSignalHits: 6,
+		sameProject: false,
+		crossProject: false,
+	});
+	assert(
+		graphOnly.totalDelta > 0,
+		"graph hints should contribute positive support",
+	);
+	assert(
+		graphOnly.totalDelta <= 0.24,
+		"graph rerank should stay capped so it remains supporting-only",
+	);
+});
+
+test("domain+graph rerank suppresses trader tactical only on generic route", () => {
+	const generic = applyDomainGraphRerank({
+		route: "generic_shared",
+		namespace: "agent.trader.decisions",
+		payloadDomain: "trader_tactical",
+		graphSignalHits: 3,
+	});
+	assert(
+		generic.totalDelta < 0,
+		"generic route should down-rank trader tactical candidates",
+	);
+
+	const traderOwner = applyDomainGraphRerank({
+		route: "trader_owner",
+		namespace: "agent.trader.decisions",
+		payloadDomain: "trader_tactical",
+		graphSignalHits: 3,
+	});
+	assert(
+		traderOwner.totalDelta > generic.totalDelta,
+		"trader owner route must not apply generic tactical down-rank",
 	);
 });
 

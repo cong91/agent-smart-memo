@@ -5,10 +5,12 @@ import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import type { runInitOpenClaw } from "../../scripts/init-openclaw.mjs";
+import { runInstallOrchestration } from "../core/usecases/install-orchestration.js";
 import {
 	doctorAsmSharedConfig,
 	getAsmSharedConfig,
 	resolveAsmConfigPath,
+	resolveAsmRuntimeConfig,
 } from "../shared/asm-config.js";
 
 export interface AsmShellResult {
@@ -161,9 +163,6 @@ async function buildWizardCoreConfig(
 		qdrantPort: number;
 		qdrantCollection: string;
 		qdrantVectorSize: number;
-		llmBaseUrl: string;
-		llmApiKey: string;
-		llmModel: string;
 		embedBaseUrl: string;
 		embedBackend: string;
 		embedModel: string;
@@ -173,6 +172,7 @@ async function buildWizardCoreConfig(
 		contextWindowMaxTokens: number;
 		summarizeEveryActions: number;
 		slotDbDir: string;
+		wikiDir: string;
 	},
 	mode: { nonInteractive: boolean },
 ): Promise<Record<string, unknown>> {
@@ -190,9 +190,6 @@ async function buildWizardCoreConfig(
 				current.qdrantVectorSize,
 				defaults.qdrantVectorSize,
 			),
-			llmBaseUrl: text(current.llmBaseUrl) || defaults.llmBaseUrl,
-			llmApiKey: text(current.llmApiKey) || defaults.llmApiKey,
-			llmModel: text(current.llmModel) || defaults.llmModel,
 			embedBaseUrl: text(current.embedBaseUrl) || defaults.embedBaseUrl,
 			embedBackend: text(current.embedBackend) || defaults.embedBackend,
 			embedModel: text(current.embedModel) || defaults.embedModel,
@@ -213,6 +210,13 @@ async function buildWizardCoreConfig(
 				current.summarizeEveryActions,
 				defaults.summarizeEveryActions,
 			),
+			slotDbDir:
+				text(current.slotDbDir) ||
+				text(
+					(current.storage as Record<string, unknown> | undefined)?.slotDbDir,
+				) ||
+				defaults.slotDbDir,
+			wikiDir: text(current.wikiDir) || defaults.wikiDir,
 			storage: {
 				slotDbDir:
 					text(
@@ -247,18 +251,6 @@ async function buildWizardCoreConfig(
 			String(toInt(current.qdrantVectorSize, defaults.qdrantVectorSize)),
 		),
 		defaults.qdrantVectorSize,
-	);
-	const llmBaseUrl = await promptText(
-		"LLM base URL",
-		text(current.llmBaseUrl) || defaults.llmBaseUrl,
-	);
-	const llmApiKey = await promptText(
-		"LLM API key",
-		text(current.llmApiKey) || defaults.llmApiKey,
-	);
-	const llmModel = await promptText(
-		"LLM model",
-		text(current.llmModel) || defaults.llmModel,
 	);
 	const embedBaseUrl = await promptText(
 		"Embedding base URL",
@@ -321,6 +313,10 @@ async function buildWizardCoreConfig(
 		text((current.storage as Record<string, unknown> | undefined)?.slotDbDir) ||
 			defaults.slotDbDir,
 	);
+	const wikiDir = await promptText(
+		"wikiDir",
+		text(current.wikiDir) || defaults.wikiDir,
+	);
 
 	return {
 		projectWorkspaceRoot,
@@ -328,9 +324,6 @@ async function buildWizardCoreConfig(
 		qdrantPort,
 		qdrantCollection,
 		qdrantVectorSize,
-		llmBaseUrl,
-		llmApiKey,
-		llmModel,
 		embedBaseUrl,
 		embedBackend,
 		embedModel,
@@ -339,6 +332,8 @@ async function buildWizardCoreConfig(
 		autoCaptureMinConfidence,
 		contextWindowMaxTokens,
 		summarizeEveryActions,
+		wikiDir,
+		slotDbDir,
 		storage: {
 			slotDbDir,
 		},
@@ -369,9 +364,6 @@ export async function runInitSetupFlow({
 		qdrantPort: 6333,
 		qdrantCollection: "mrc_bot",
 		qdrantVectorSize: 1024,
-		llmBaseUrl: "http://localhost:8317/v1",
-		llmApiKey: "proxypal-local",
-		llmModel: "gpt-5.4",
 		embedBaseUrl: "http://localhost:11434",
 		embedBackend: "ollama",
 		embedModel: "qwen3-embedding:0.6b",
@@ -381,6 +373,7 @@ export async function runInitSetupFlow({
 		contextWindowMaxTokens: 32000,
 		summarizeEveryActions: 6,
 		slotDbDir: "~/.local/share/asm/slotdb",
+		wikiDir: "~/Work/projects/agent-smart-memo/memory/wiki",
 	} as const;
 
 	const baseConfig = loaded.config || {
@@ -394,10 +387,6 @@ export async function runInitSetupFlow({
 		openclaw: {
 			enabled: true,
 			...((baseConfig.adapters || {}).openclaw || {}),
-		},
-		paperclip: {
-			enabled: true,
-			...((baseConfig.adapters || {}).paperclip || {}),
 		},
 		opencode: {
 			enabled: true,
@@ -463,9 +452,20 @@ export async function runInitSetupFlow({
 		core: wizardCore,
 		adapters,
 	};
+	const orchestrated = runInstallOrchestration({
+		config: nextConfig,
+		configPath: path,
+		homeDir,
+		cwd: process.cwd(),
+		log,
+	});
 
 	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(path, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
+	writeFileSync(
+		path,
+		`${JSON.stringify(orchestrated.config, null, 2)}\n`,
+		"utf8",
+	);
 	log(
 		`[ASM-104] init-setup ${doctor.exists ? "updated" : "created"} shared config at: ${path}`,
 	);
@@ -479,6 +479,12 @@ export async function runInitSetupFlow({
 		path,
 		existed: doctor.exists,
 		nonInteractive: mode.nonInteractive,
+		details: {
+			runtimeDefaultsApplied: orchestrated.runtimeDefaultsApplied,
+			surfacesScanned: orchestrated.surfacesScanned,
+			surfacesPatched: orchestrated.surfacesPatched,
+			surfacesAlreadyCurrent: orchestrated.surfacesAlreadyCurrent,
+		},
 	};
 }
 
@@ -535,6 +541,36 @@ async function runSetupOpenClawInstall(
 			details: { asmConfigPath },
 		};
 	}
+	const loaded = getAsmSharedConfig({ env, homeDir, reload: true });
+	if (!loaded.config) {
+		log(
+			`[ASM-104] ❌ Shared ASM config could not be loaded at: ${asmConfigPath}`,
+		);
+		return {
+			ok: false,
+			step: "invalid-shared-config",
+			platform: "openclaw",
+			details: {
+				asmConfigPath,
+				status: loaded.lifecycle.status,
+				warnings: loaded.lifecycle.warnings,
+			},
+		};
+	}
+	const orchestrated = runInstallOrchestration({
+		config: loaded.config,
+		configPath: asmConfigPath,
+		homeDir,
+		cwd: process.cwd(),
+		log,
+	});
+
+	const runtimeCore = resolveAsmRuntimeConfig({
+		configPath: asmConfigPath,
+		env,
+		homeDir,
+		reload: true,
+	});
 
 	const openclawConfigPath =
 		text(env.OPENCLAW_CONFIG_PATH) ||
@@ -580,12 +616,6 @@ async function runSetupOpenClawInstall(
 		!Array.isArray(entries[ASM_PLUGIN_ID])
 			? (entries[ASM_PLUGIN_ID] as Record<string, unknown>)
 			: {};
-	const prevEntryConfig =
-		prevEntry.config &&
-		typeof prevEntry.config === "object" &&
-		!Array.isArray(prevEntry.config)
-			? (prevEntry.config as Record<string, unknown>)
-			: {};
 	const allow = Array.isArray(plugins.allow)
 		? (plugins.allow as unknown[]).map((item) => text(item)).filter(Boolean)
 		: [];
@@ -602,8 +632,9 @@ async function runSetupOpenClawInstall(
 					...prevEntry,
 					enabled: true,
 					config: {
-						...prevEntryConfig,
-						asmConfigPath,
+						projectWorkspaceRoot: runtimeCore.projectWorkspaceRoot,
+						slotDbDir: runtimeCore.slotDbDir,
+						wikiDir: runtimeCore.wikiDir,
 					},
 				},
 			},
@@ -617,8 +648,13 @@ async function runSetupOpenClawInstall(
 		"utf8",
 	);
 	log(
-		`[ASM-104] install openclaw bound plugins.entries.${ASM_PLUGIN_ID}.config.asmConfigPath -> ${asmConfigPath}`,
+		`[ASM-104] install openclaw bound runtime config fields for ${ASM_PLUGIN_ID}:`,
 	);
+	log(
+		`[ASM-104]   projectWorkspaceRoot -> ${runtimeCore.projectWorkspaceRoot}`,
+	);
+	log(`[ASM-104]   slotDbDir -> ${runtimeCore.slotDbDir}`);
+	log(`[ASM-104]   wikiDir -> ${runtimeCore.wikiDir}`);
 	log(
 		`[ASM-104] install openclaw ${openclawConfigExisted ? "updated" : "created"} config at: ${openclawConfigPath}`,
 	);
@@ -628,7 +664,14 @@ async function runSetupOpenClawInstall(
 		platform: "openclaw",
 		details: {
 			asmConfigPath,
+			projectWorkspaceRoot: runtimeCore.projectWorkspaceRoot,
+			slotDbDir: runtimeCore.slotDbDir,
+			wikiDir: runtimeCore.wikiDir,
 			openclawConfigPath,
+			runtimeDefaultsApplied: orchestrated.runtimeDefaultsApplied,
+			surfacesScanned: orchestrated.surfacesScanned,
+			surfacesPatched: orchestrated.surfacesPatched,
+			surfacesAlreadyCurrent: orchestrated.surfacesAlreadyCurrent,
 		},
 	};
 }
@@ -701,38 +744,6 @@ function ensureOpencodeConfig(
 	return { existed, config: next };
 }
 
-function createPlannedInstaller(
-	id: "paperclip" | "opencode",
-	summary: string,
-	requiredSharedConfigKeys: string[],
-	platformLocalConfigPaths: string[],
-	detailLines: string[],
-): AsmPlatformInstaller {
-	return {
-		id,
-		describe() {
-			return {
-				id,
-				displayName: id,
-				status: "planned",
-				summary,
-				requiredSharedConfigKeys,
-				platformLocalConfigPaths,
-			};
-		},
-		async install(ctx) {
-			ctx.log(`[ASM-104] install ${id} is not implemented yet.`);
-			for (const line of detailLines) ctx.log(line);
-			return {
-				ok: false,
-				step: `install-${id}-not-implemented`,
-				platform: id,
-				details: { requiredSharedConfigKeys, platformLocalConfigPaths },
-			};
-		},
-	};
-}
-
 const openclawInstaller: AsmPlatformInstaller = {
 	id: "openclaw",
 	describe() {
@@ -741,12 +752,12 @@ const openclawInstaller: AsmPlatformInstaller = {
 			displayName: "OpenClaw",
 			status: "implemented",
 			summary:
-				"Installs ASM into OpenClaw and bootstraps a minimal openclaw.json entry that points back to ASM shared config.",
+				"Installs ASM into OpenClaw and bootstraps required runtime fields in openclaw.json from ASM shared config.",
 			requiredSharedConfigKeys: [
 				"core.projectWorkspaceRoot",
-				"core.storage.slotDbDir",
+				"core.slotDbDir",
+				"core.wikiDir",
 				"core.qdrantHost",
-				"core.llmBaseUrl",
 				"core.embedModel",
 				"adapters.openclaw.enabled",
 			],
@@ -758,104 +769,6 @@ const openclawInstaller: AsmPlatformInstaller = {
 	},
 	async install(ctx) {
 		return runSetupOpenClawInstall(ctx);
-	},
-};
-
-function packageArtifactExists(
-	repoRoot: string,
-	relativePath: string,
-): string | null {
-	const full = join(repoRoot, relativePath);
-	return existsSync(full) ? full : null;
-}
-
-const paperclipInstaller: AsmPlatformInstaller = {
-	id: "paperclip",
-	describe() {
-		return {
-			id: "paperclip",
-			displayName: "Paperclip",
-			status: "implemented",
-			summary:
-				"Prepare Paperclip runtime/plugin-local artifacts and print host install guidance using shared ASM config.",
-			requiredSharedConfigKeys: [
-				"core.projectWorkspaceRoot",
-				"core.storage.slotDbDir",
-				"adapters.paperclip.enabled",
-			],
-			platformLocalConfigPaths: [
-				"artifacts/paperclip-plugin-local",
-				"paperclip host/plugin config",
-			],
-		};
-	},
-	async install(ctx) {
-		const initSetup = await runInitSetupFlow({
-			log: ctx.log,
-			env: ctx.env,
-			homeDir: ctx.homeDir,
-			argv: ["--yes"],
-		});
-		const asmConfigPath = String(initSetup.path);
-
-		const packageRuntime = ctx.runner("npm", ["run", "package:paperclip"]);
-		if (!packageRuntime.ok) {
-			return {
-				ok: false,
-				step: "package-paperclip-runtime-failed",
-				platform: "paperclip",
-				details: {
-					stderr: packageRuntime.stderr,
-					stdout: packageRuntime.stdout,
-				},
-			};
-		}
-
-		const packageLocal = ctx.runner("npm", [
-			"run",
-			"package:paperclip:plugin-local",
-		]);
-		if (!packageLocal.ok) {
-			return {
-				ok: false,
-				step: "package-paperclip-plugin-local-failed",
-				platform: "paperclip",
-				details: { stderr: packageLocal.stderr, stdout: packageLocal.stdout },
-			};
-		}
-
-		const artifactDir =
-			packageArtifactExists(
-				process.cwd(),
-				"artifacts/paperclip-plugin-local",
-			) || join(process.cwd(), "artifacts", "paperclip-plugin-local");
-		const runtimeDir =
-			packageArtifactExists(process.cwd(), "artifacts/npm/paperclip") ||
-			join(process.cwd(), "artifacts", "npm", "paperclip");
-
-		const installCommand = `paperclipai plugin install ${artifactDir}`;
-		ctx.log(
-			`[ASM-104] install paperclip prepared local plugin artifact at: ${artifactDir}`,
-		);
-		ctx.log(
-			`[ASM-104] install paperclip prepared runtime package at: ${runtimeDir}`,
-		);
-		ctx.log(`[ASM-104] Next step on Paperclip host: ${installCommand}`);
-		ctx.log(
-			`[ASM-104] ASM shared config remains source-of-truth at: ${asmConfigPath}`,
-		);
-
-		return {
-			ok: true,
-			step: "install-paperclip",
-			platform: "paperclip",
-			details: {
-				asmConfigPath,
-				artifactDir,
-				runtimeDir,
-				installCommand,
-			},
-		};
 	},
 };
 
@@ -908,7 +821,6 @@ const opencodeInstaller: AsmPlatformInstaller = {
 
 const REGISTRY = new Map<string, AsmPlatformInstaller>([
 	[openclawInstaller.id, openclawInstaller],
-	[paperclipInstaller.id, paperclipInstaller],
 	[opencodeInstaller.id, opencodeInstaller],
 ]);
 

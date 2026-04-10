@@ -1,6 +1,8 @@
 export interface RecallInjectionContext {
+	asmRuntime?: string;
 	currentState: string;
 	projectLivingState: string;
+	wikiWorkingSet?: string;
 	graphContext: string;
 	recentUpdates: string;
 	semanticMemories: string;
@@ -13,13 +15,15 @@ export interface RecallInjectionContext {
 
 export interface RecallPrecedencePolicy {
 	slotdbTruth: "highest";
-	semanticEvidence: "medium";
+	wikiWorkingSet: "primary";
+	semanticEvidence: "support";
 	graphRoutingSupport: "support";
 }
 
 export const DEFAULT_RECALL_PRECEDENCE_POLICY: RecallPrecedencePolicy = {
 	slotdbTruth: "highest",
-	semanticEvidence: "medium",
+	wikiWorkingSet: "primary",
+	semanticEvidence: "support",
 	graphRoutingSupport: "support",
 };
 
@@ -35,6 +39,10 @@ export function buildRecallInjectionParts(
 ): string[] {
 	const parts: string[] = [];
 
+	if (context.asmRuntime) {
+		parts.push(context.asmRuntime);
+	}
+
 	// Precedence 1: SlotDB current truth.
 	const slotTruthBlocks = [
 		context.currentState,
@@ -48,14 +56,21 @@ export function buildRecallInjectionParts(
 		);
 	}
 
-	// Precedence 2: semantic memories are evidence/history/lessons.
-	if (context.semanticMemories) {
+	// Precedence 2: wiki working set is the primary read surface.
+	if (context.wikiWorkingSet) {
 		parts.push(
-			`<semantic-evidence precedence="medium">\n${context.semanticMemories}\n</semantic-evidence>`,
+			`<wiki-working-surface precedence="primary">\n${context.wikiWorkingSet}\n</wiki-working-surface>`,
 		);
 	}
 
-	// Precedence 3: graph context is routing/ranking support only.
+	// Precedence 3: semantic memories are supporting evidence only.
+	if (context.semanticMemories) {
+		parts.push(
+			`<supporting-recall precedence="support">\n${context.semanticMemories}\n</supporting-recall>`,
+		);
+	}
+
+	// Precedence 4: graph context is routing/ranking support only.
 	if (context.graphContext) {
 		parts.push(
 			`<graph-routing-support precedence="support">\n${context.graphContext}\n</graph-routing-support>`,

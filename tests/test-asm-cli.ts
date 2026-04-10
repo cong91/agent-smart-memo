@@ -70,11 +70,6 @@ test("parseAsmCliArgs supports help, setup-openclaw, install <platform>, and ini
 		"install openclaw should parse",
 	);
 	assertEqual(
-		parseAsmCliArgs(["install", "paperclip"]),
-		{ command: "install-platform", platform: "paperclip", argv: [] },
-		"install paperclip should parse",
-	);
-	assertEqual(
 		parseAsmCliArgs(["init-setup", "--yes"]),
 		{ command: "init-setup", argv: ["--yes"] },
 		"init-setup should parse",
@@ -100,8 +95,16 @@ test("parseAsmCliArgs supports help, setup-openclaw, install <platform>, and ini
 		"project-event should parse",
 	);
 	assertEqual(
-		parseAsmCliArgs(["migrate-memory-foundation", "plan", "--preflight-limit", "10"]),
-		{ command: "migrate-memory-foundation", argv: ["plan", "--preflight-limit", "10"] },
+		parseAsmCliArgs([
+			"migrate-memory-foundation",
+			"plan",
+			"--preflight-limit",
+			"10",
+		]),
+		{
+			command: "migrate-memory-foundation",
+			argv: ["plan", "--preflight-limit", "10"],
+		},
 		"migrate-memory-foundation command should parse",
 	);
 	assertEqual(
@@ -280,17 +283,13 @@ test("runSetupOpenClawFlow supports non-interactive --yes mode", async () => {
 	);
 });
 
-test("installer registry exposes openclaw/paperclip/opencode descriptors", () => {
+test("installer registry exposes openclaw/opencode descriptors", () => {
 	const installers = listAsmPlatformInstallers();
 	assert(
 		installers.some(
 			(item) => item.id === "openclaw" && item.status === "implemented",
 		),
 		"openclaw installer descriptor should exist",
-	);
-	assert(
-		installers.some((item) => item.id === "paperclip"),
-		"paperclip installer descriptor should exist",
 	);
 	assert(
 		installers.some((item) => item.id === "opencode"),
@@ -317,13 +316,12 @@ test("runInstallPlatformFlow routes openclaw to setup-openclaw flow", async () =
 				schemaVersion: 1,
 				core: {
 					projectWorkspaceRoot: "~/Work/projects",
+					slotDbDir: "~/.local/share/asm/slotdb",
+					wikiDir: "~/Work/projects/agent-smart-memo/memory/wiki",
 					qdrantHost: "localhost",
 					qdrantPort: 6333,
 					qdrantCollection: "mrc_bot",
 					qdrantVectorSize: 1024,
-					llmBaseUrl: "http://localhost:8317/v1",
-					llmApiKey: "proxypal-local",
-					llmModel: "gpt-5.4",
 					embedBaseUrl: "http://localhost:11434",
 					embedBackend: "ollama",
 					embedModel: "qwen3-embedding:0.6b",
@@ -332,7 +330,6 @@ test("runInstallPlatformFlow routes openclaw to setup-openclaw flow", async () =
 					autoCaptureMinConfidence: 0.7,
 					contextWindowMaxTokens: 32000,
 					summarizeEveryActions: 6,
-					storage: { slotDbDir: "~/.local/share/asm/slotdb" },
 				},
 			},
 			null,
@@ -383,16 +380,39 @@ test("runInstallPlatformFlow routes openclaw to setup-openclaw flow", async () =
 	assertEqual(
 		result.step,
 		"bind-openclaw-config",
-		"install openclaw should only bind asmConfigPath",
+		"install openclaw should bind required runtime fields",
 	);
 	assertEqual(called, 0, "install openclaw must not run init-openclaw wizard");
 
 	const openclawPath = path.join(home, ".openclaw", "openclaw.json");
 	const written = JSON.parse(fs.readFileSync(openclawPath, "utf8"));
+	const writtenConfig = written.plugins.entries["agent-smart-memo"].config;
 	assertEqual(
-		written.plugins.entries["agent-smart-memo"].config.asmConfigPath,
-		asmConfigPath,
-		"openclaw config should bind asmConfigPath to shared config",
+		Object.keys(writtenConfig).sort(),
+		["projectWorkspaceRoot", "slotDbDir", "wikiDir"],
+		"openclaw config should expose required 3-field runtime contract",
+	);
+	assertEqual(
+		writtenConfig.projectWorkspaceRoot,
+		path.resolve(home, "Work", "projects"),
+		"openclaw config should bind projectWorkspaceRoot from shared config",
+	);
+	assertEqual(
+		writtenConfig.slotDbDir,
+		path.resolve(home, ".local", "share", "asm", "slotdb"),
+		"openclaw config should bind slotDbDir from shared config",
+	);
+	assertEqual(
+		writtenConfig.wikiDir,
+		path.resolve(
+			home,
+			"Work",
+			"projects",
+			"agent-smart-memo",
+			"memory",
+			"wiki",
+		),
+		"openclaw config should bind wikiDir from shared config",
 	);
 });
 
@@ -471,71 +491,159 @@ test("runInitSetupFlow creates shared ASM config with platform defaults", async 
 		"init-setup should write qdrantHost into shared core config",
 	);
 	assertEqual(
-		written.core.llmBaseUrl,
-		"http://localhost:8317/v1",
-		"init-setup should write llmBaseUrl into shared core config",
-	);
-	assertEqual(
 		written.core.embedModel,
 		"qwen3-embedding:0.6b",
 		"init-setup should write embedModel into shared core config",
+	);
+	assertEqual(
+		written.core.slotDbDir,
+		"~/.local/share/asm/slotdb",
+		"init-setup should write core.slotDbDir into shared core config",
+	);
+	assertEqual(
+		written.core.wikiDir,
+		"~/Work/projects/agent-smart-memo/memory/wiki",
+		"init-setup should write wikiDir into shared core config",
 	);
 	assertEqual(
 		written.adapters.opencode.mode,
 		"read-only",
 		"init-setup should enforce read-only default for opencode adapter",
 	);
+	assertEqual(
+		written.adapters.openclaw.installOrchestration.blockVersion,
+		"2026-04-09",
+		"init-setup should record install orchestration managed state",
+	);
 });
 
-test("runInstallPlatformFlow implements paperclip artifact preparation and opencode installer", async () => {
+test("runInstallPlatformFlow openclaw patches reinforcement surfaces and remains idempotent", async () => {
+	const fs = await import("node:fs");
+	const os = await import("node:os");
+	const path = await import("node:path");
+	const home = fs.mkdtempSync(
+		path.join(os.tmpdir(), "asm-openclaw-reinforce-"),
+	);
+	const workspaceRoot = path.join(home, "Work", "projects");
+	const repoRoot = path.join(workspaceRoot, "demo-repo");
+	fs.mkdirSync(repoRoot, { recursive: true });
+	const agentsPath = path.join(repoRoot, "AGENTS.md");
+	fs.writeFileSync(
+		agentsPath,
+		"# Repo Instructions\n\nExisting guidance.\n",
+		"utf8",
+	);
+	fs.mkdirSync(path.join(home, ".config", "asm"), { recursive: true });
+	fs.writeFileSync(
+		path.join(home, ".config", "asm", "config.json"),
+		JSON.stringify(
+			{
+				schemaVersion: 1,
+				core: {
+					projectWorkspaceRoot: workspaceRoot,
+					slotDbDir: path.join(home, ".local", "share", "asm", "slotdb"),
+					wikiDir: path.join(
+						home,
+						"Work",
+						"projects",
+						"agent-smart-memo",
+						"memory",
+						"wiki",
+					),
+				},
+				adapters: {
+					openclaw: { enabled: true },
+				},
+			},
+			null,
+			2,
+		) + "\n",
+		"utf8",
+	);
+
+	const runner = ((command: string, args: string[] = []) => {
+		if (command === "openclaw" && args[0] === "--version") {
+			return { ok: true, code: 0, stdout: "1.0.0", stderr: "", error: "" };
+		}
+		if (
+			command === "openclaw" &&
+			args[0] === "plugins" &&
+			args[1] === "install"
+		) {
+			return { ok: true, code: 0, stdout: "installed", stderr: "", error: "" };
+		}
+		return { ok: false, code: 1, stdout: "", stderr: "unknown", error: "" };
+	}) as any;
+
+	const first = await runInstallPlatformFlow({
+		platform: "openclaw",
+		runner,
+		initOpenClaw: async () =>
+			({ applied: true, configPath: "~/.openclaw/openclaw.json" }) as any,
+		log: () => {},
+		argv: ["--yes"],
+		env: { ...process.env, HOME: home },
+		homeDir: home,
+	});
+	const firstAgents = fs.readFileSync(agentsPath, "utf8");
+	assert(
+		firstAgents.includes("ASM wiki-first bootstrap (managed by ASM)"),
+		"first install should patch AGENTS.md with managed reinforcement block",
+	);
+
+	const second = await runInstallPlatformFlow({
+		platform: "openclaw",
+		runner,
+		initOpenClaw: async () =>
+			({ applied: true, configPath: "~/.openclaw/openclaw.json" }) as any,
+		log: () => {},
+		argv: ["--yes"],
+		env: { ...process.env, HOME: home },
+		homeDir: home,
+	});
+	const secondAgents = fs.readFileSync(agentsPath, "utf8");
+	assertEqual(second.ok, true, "second install rerun should succeed");
+	assertEqual(
+		secondAgents,
+		firstAgents,
+		"rerun should keep AGENTS.md unchanged once patched",
+	);
+	assertEqual(
+		first.details?.surfacesPatched,
+		[agentsPath],
+		"first run should report patched reinforcement target",
+	);
+	assertEqual(
+		second.details?.surfacesPatched,
+		[],
+		"second run should report no new reinforcement patches",
+	);
+	const shared = JSON.parse(
+		fs.readFileSync(path.join(home, ".config", "asm", "config.json"), "utf8"),
+	);
+	assertEqual(
+		shared.adapters.openclaw.installOrchestration.patchedSurfaces[0].path,
+		"~/Work/projects/demo-repo/AGENTS.md",
+		"managed state should record patched reinforcement target path",
+	);
+	assertEqual(
+		shared.adapters.openclaw.installOrchestration.blockVersion,
+		"2026-04-09",
+		"managed state should track reinforcement block version",
+	);
+	assertEqual(first.ok, true, "first install should succeed");
+});
+
+test("runInstallPlatformFlow implements opencode installer and rejects paperclip target", async () => {
 	const fs = await import("node:fs");
 	const os = await import("node:os");
 	const path = await import("node:path");
 
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "asm-opencode-install-"));
-	const runner = ((command: string, args: string[] = []) => {
-		if (command === "npm" && args.join(" ") === "run package:paperclip") {
-			return {
-				ok: true,
-				code: 0,
-				stdout: "packaged paperclip runtime",
-				stderr: "",
-				error: "",
-			};
-		}
-		if (
-			command === "npm" &&
-			args.join(" ") === "run package:paperclip:plugin-local"
-		) {
-			const artifactDir = path.join(
-				process.cwd(),
-				"artifacts",
-				"paperclip-plugin-local",
-			);
-			const runtimeDir = path.join(
-				process.cwd(),
-				"artifacts",
-				"npm",
-				"paperclip",
-			);
-			fs.mkdirSync(artifactDir, { recursive: true });
-			fs.mkdirSync(runtimeDir, { recursive: true });
-			fs.writeFileSync(path.join(artifactDir, "package.json"), "{}\n");
-			fs.writeFileSync(path.join(runtimeDir, "package.json"), "{}\n");
-			return {
-				ok: true,
-				code: 0,
-				stdout: "packaged paperclip plugin local",
-				stderr: "",
-				error: "",
-			};
-		}
-		return createShellRunner()(command, args);
-	}) as any;
 
 	const paperclip = await runInstallPlatformFlow({
 		platform: "paperclip",
-		runner,
+		runner: createShellRunner(),
 		initOpenClaw: async () =>
 			({ applied: true, configPath: "~/.openclaw/openclaw.json" }) as any,
 		log: () => {},
@@ -554,21 +662,11 @@ test("runInstallPlatformFlow implements paperclip artifact preparation and openc
 		homeDir: home,
 	});
 
-	assertEqual(
-		paperclip.ok,
-		true,
-		"paperclip install should now prepare artifacts successfully",
-	);
+	assertEqual(paperclip.ok, false, "paperclip target should be rejected");
 	assertEqual(
 		paperclip.step,
-		"install-paperclip",
-		"paperclip should return implemented install step",
-	);
-	const paperclipDetails = (paperclip.details || {}) as Record<string, unknown>;
-	assert(
-		typeof paperclipDetails.installCommand === "string" &&
-			paperclipDetails.installCommand.includes("paperclipai plugin install"),
-		"paperclip should return host install command",
+		"unknown-install-target",
+		"paperclip target should resolve as unknown-install-target",
 	);
 	assertEqual(opencode.ok, true, "opencode install should now be implemented");
 	assertEqual(

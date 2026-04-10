@@ -8,25 +8,24 @@
 import crypto from "crypto";
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { resolvePromotionMetadata } from "../core/promotion/promotion-lifecycle.js";
 import { MEMORY_FOUNDATION_SCHEMA_VERSION } from "../core/migrations/memory-foundation-migration.js";
+import { resolvePromotionMetadata } from "../core/promotion/promotion-lifecycle.js";
+import { writeWikiMemoryCapture } from "../core/usecases/semantic-memory-usecase.js";
+import { DistillApplyUseCase } from "../core/usecases/distill-apply-usecase.js";
 import type { SlotDB } from "../db/slot-db.js";
-import type { DeduplicationService } from "../services/dedupe.js";
-import type { EmbeddingClient } from "../services/embedding.js";
 import {
 	checkLLMHealth,
 	type DistillMode,
-	extractWithLLM,
+	extractWithIsolatedContinuation,
 } from "../services/llm-extractor.js";
-import type { QdrantClient } from "../services/qdrant.js";
 import {
 	evaluateNoiseV2,
 	getAutoCaptureNamespace,
 	isLearningContent,
-	resolveMemoryScopeFromNamespace,
 	type MemoryNamespace,
 	normalizeNamespace,
 	normalizeUserId,
+	resolveMemoryScopeFromNamespace,
 	toCoreAgent,
 } from "../shared/memory-config.js";
 
@@ -37,6 +36,8 @@ interface AutoCaptureConfig {
 	enabled: boolean;
 	minConfidence: number;
 	useLLM: boolean;
+	bootstrapSafeRawFirst?: boolean;
+	distillIsolatedContinuation?: boolean;
 	llmBaseUrl: string;
 	llmApiKey: string;
 	llmModel: string;
@@ -48,6 +49,8 @@ const DEFAULT_CONFIG: AutoCaptureConfig = {
 	enabled: true,
 	minConfidence: 0.7,
 	useLLM: true,
+	bootstrapSafeRawFirst: true,
+	distillIsolatedContinuation: true,
 	llmBaseUrl: "",
 	llmApiKey: "",
 	llmModel: "",
@@ -74,6 +77,120 @@ interface SessionSummaryValue {
 	outcomes: string[];
 	ttl: number;
 	timestamp: number;
+}
+
+export type TraderTacticalClass =
+	| "wake_payload"
+	| "decision_packet"
+	| "hold_skip_rationale"
+	| "risk_execution_post_close"
+	| "lesson_rule_invalidated_assumption";
+
+export interface TraderTacticalClassification {
+	isTraderTactical: boolean;
+	matchedClasses: TraderTacticalClass[];
+	reason: string;
+	domain: "trader_tactical" | "generic";
+	suppressed: boolean;
+	suppressionReason?: string;
+}
+
+export interface AutoCaptureSuppressionMeta {
+	suppressed: boolean;
+	domain: "trader_tactical";
+	matchedClasses: TraderTacticalClass[];
+	reason: string;
+}
+
+const TRADER_CONTEXT_PATTERNS: RegExp[] = [
+	/\b(trader|trade|trading|setup|entry|exit|stop\s*loss|take\s*profit|position|order\s*flow|drawdown|pnl|market|candle)\b/i,
+];
+
+const TRADER_TACTICAL_CLASS_PATTERNS: Array<{
+	clazz: TraderTacticalClass;
+	patterns: RegExp[];
+}> = [
+	{
+		clazz: "wake_payload",
+		patterns: [
+			/\b(wake\s*payload|wake-up\s*payload|wake context|wake_context)\b/i,
+		],
+	},
+	{
+		clazz: "decision_packet",
+		patterns: [/\b(decision\s*packet|decision\s*pack|trade\s*decision)\b/i],
+	},
+	{
+		clazz: "hold_skip_rationale",
+		patterns: [
+			/\b(HOLD|SKIP)\b[^\n]{0,80}\b(rationale|reason|because|vì|do)\b/i,
+			/\b(hold|skip)\s*(rationale|reason)\b/i,
+		],
+	},
+	{
+		clazz: "risk_execution_post_close",
+		patterns: [
+			/\b(risk\s*(case|plan|review|management)|execution\s*(case|plan|review)|post[-\s]*close|after[-\s]*action|trade\s*debrief)\b/i,
+		],
+	},
+	{
+		clazz: "lesson_rule_invalidated_assumption",
+		patterns: [
+			/\b(lesson|rule|invalidated\s*assumption|assumption\s*invalidated|bài\s*học|nguyên\s*tắc|giả\s*định\s*(sai|vô\s*hiệu))\b/i,
+		],
+	},
+];
+
+export function classifyTraderTacticalContent(
+	text: string,
+	agentId: string,
+): TraderTacticalClassification {
+	const normalizedText = String(text || "");
+	const normalizedAgent = toCoreAgent(agentId);
+	const hasTraderContext =
+		normalizedAgent === "trader" ||
+		TRADER_CONTEXT_PATTERNS.some((p) => p.test(normalizedText));
+
+	const matchedClasses = TRADER_TACTICAL_CLASS_PATTERNS.filter((entry) =>
+		entry.patterns.some((p) => p.test(normalizedText)),
+	).map((entry) => entry.clazz);
+
+	if (!hasTraderContext || matchedClasses.length === 0) {
+		return {
+			isTraderTactical: false,
+			matchedClasses: [],
+			reason: "no_trader_tactical_signal",
+			domain: "generic",
+			suppressed: false,
+		};
+	}
+
+	return {
+		isTraderTactical: true,
+		matchedClasses,
+		reason: "trader_tactical_signal_detected",
+		domain: "trader_tactical",
+		suppressed: true,
+		suppressionReason:
+			"suppressed.trader_tactical_owned_by_trader_brain_plugin",
+	};
+}
+
+export function resolveAutoCaptureSuppressionMeta(
+	text: string,
+	agentId: string,
+): AutoCaptureSuppressionMeta | null {
+	const classification = classifyTraderTacticalContent(text, agentId);
+	if (!classification.suppressed || !classification.suppressionReason) {
+		return null;
+	}
+
+	return {
+		suppressed: true,
+		domain: "trader_tactical",
+		matchedClasses: classification.matchedClasses,
+		reason: classification.suppressionReason,
+	};
 }
 
 function trimLine(s: string, max = 180): string {
@@ -242,11 +359,7 @@ function buildDaySummary(messages: ConversationMessage[]): string {
 	return lines.join("\n");
 }
 
-function formatMemoryContext(
-	livingState: any,
-	recentSummary: any,
-	vectorResults: Array<{ text: string }> = [],
-): string {
+function formatMemoryContext(livingState: any, recentSummary: any): string {
 	const blocks: string[] = [];
 
 	if (livingState) {
@@ -257,33 +370,28 @@ function formatMemoryContext(
 		blocks.push(`MID_TERM: ${JSON.stringify(recentSummary)}`);
 	}
 
-	if (vectorResults.length > 0) {
-		blocks.push(`LONG_TERM: ${vectorResults.map((v) => v.text).join(" | ")}`);
-	}
-
 	return blocks.join("\n");
 }
 
 /**
- * Auto-recall helper: short-term -> mid-term -> long-term fallback
+ * Auto-recall helper: short-term -> mid-term only.
+ * Phase-1 wiki migration removes legacy semantic long-term fallback
+ * (embed + qdrant search) from auto-capture context injection.
  */
 export async function injectMemoryContext(
 	agentId: string,
 	deps: {
 		db: SlotDB;
-		qdrant: QdrantClient;
-		embedding: EmbeddingClient;
 		userId: string;
 		query?: string;
 	},
 ): Promise<string> {
-	const { db, qdrant, embedding, userId, query } = deps;
+	const { db, userId } = deps;
 
 	const living = db.get(userId, agentId, { key: "project_living_state" });
 	const livingState = living && !Array.isArray(living) ? living.value : null;
 
 	let recentSummary: any = null;
-	const vectorResults: Array<{ text: string }> = [];
 
 	if (!livingState || isExpired(livingState)) {
 		const yesterday = getYesterdayDateKey();
@@ -291,28 +399,9 @@ export async function injectMemoryContext(
 			key: `session.${yesterday}.summary`,
 		});
 		recentSummary = mid && !Array.isArray(mid) ? mid.value : null;
-
-		if (!recentSummary && query && query.trim().length > 0) {
-			try {
-				const vector = await embedding.embed(query);
-				const results = await qdrant.search(vector, 5, {
-					must: [{ key: "namespace", match: { value: "session_summaries" } }],
-				});
-				for (const r of results) {
-					if (r.payload?.text) {
-						vectorResults.push({ text: String(r.payload.text) });
-					}
-				}
-			} catch (error: any) {
-				console.error(
-					"[AutoCapture] injectMemoryContext semantic fallback error:",
-					error.message,
-				);
-			}
-		}
 	}
 
-	return formatMemoryContext(livingState, recentSummary, vectorResults);
+	return formatMemoryContext(livingState, recentSummary);
 }
 
 /**
@@ -485,6 +574,33 @@ function estimateTokens(text: string, divisor: number = 4): number {
 	return Math.ceil(text.length / divisor);
 }
 
+function buildBootstrapRawFirstMemories(
+	messages: ConversationMessage[],
+): string[] {
+	const noisePatterns = [
+		/^NO_REPLY$/i,
+		/^HEARTBEAT_OK$/i,
+		/^\[Tool:/,
+		/^\{"type":"toolCall"/,
+		/^\[Tool Result\]$/,
+		/^\[Image\]$/,
+	];
+
+	const unique = new Set<string>();
+	for (const message of messages) {
+		if (message.role !== "user" && message.role !== "assistant") continue;
+		const extracted = extractMessageText(message.content)
+			.replace(/\s+/g, " ")
+			.trim();
+		if (!extracted) continue;
+		if (noisePatterns.some((pattern) => pattern.test(extracted))) continue;
+		const candidate = `${message.role}: ${extracted}`.slice(0, 360);
+		if (candidate) unique.add(candidate);
+	}
+
+	return Array.from(unique).slice(-3);
+}
+
 /**
  * Select messages within token budget using reverse accumulation strategy
  * Iterates from newest to oldest, accumulating messages until budget is reached
@@ -544,9 +660,21 @@ async function extractFacts(
 	messages: ConversationMessage[],
 	currentSlots: Record<string, Record<string, any>>,
 	cfg: AutoCaptureConfig,
+	continuationCtx: {
+		agentId: string;
+		sessionKey: string;
+	},
 	forceUseLLM?: boolean,
 	distillMode: DistillMode = "general",
-): Promise<{ slot_updates: any[]; slot_removals: any[]; memories: any[] }> {
+): Promise<{
+	slot_updates: any[];
+	slot_removals: any[];
+	memories: any[];
+	draft_updates: any[];
+	briefing_updates: any[];
+	log_entries: any[];
+	promotion_hints: any[];
+}> {
 	// Build context window config from optional cfg setting
 	const contextWindowConfig: ContextWindowConfig = {
 		maxConversationTokens:
@@ -579,22 +707,51 @@ async function extractFacts(
 		const isHealthy = await checkLLMHealth(cfg.llmBaseUrl, cfg.llmApiKey);
 		if (isHealthy) {
 			console.log(
-				"[AutoCapture] Using LLM for extraction, model:",
+				"[AutoCapture] Using isolated continuation distill extraction, model:",
 				cfg.llmModel,
 			);
-			// Pass LLM config fields to extractWithLLM
 			const llmConfig = {
 				baseUrl: cfg.llmBaseUrl,
 				apiKey: cfg.llmApiKey,
 				model: cfg.llmModel,
 			};
-			return extractWithLLM(text, currentSlots, llmConfig, distillMode);
+			if (cfg.distillIsolatedContinuation === false) {
+				console.warn(
+					"[AutoCapture] distillIsolatedContinuation=false is deprecated; forcing isolated continuation mode to avoid same-session loop risk",
+				);
+			}
+			return extractWithIsolatedContinuation(
+				text,
+				currentSlots,
+				llmConfig,
+				distillMode,
+				{
+					agentId: continuationCtx.agentId,
+					sourceSessionKey: continuationCtx.sessionKey,
+					continuationSessionKey: `${continuationCtx.sessionKey}:distill:${Date.now()}`,
+				},
+			);
 		}
 		console.log("[AutoCapture] LLM unavailable, using pattern fallback");
 	}
 
 	// Fallback to pattern matching
-	return extractWithPatterns(text);
+	const fallback = extractWithPatterns(text);
+	if ((cfg.bootstrapSafeRawFirst ?? true) && fallback.memories.length === 0) {
+		fallback.memories = buildBootstrapRawFirstMemories(recentMessages);
+		if (fallback.memories.length > 0) {
+			console.log(
+				`[AutoCapture] Bootstrap raw-first fallback seeded ${fallback.memories.length} memory items`,
+			);
+		}
+	}
+	return {
+		...fallback,
+		draft_updates: [],
+		briefing_updates: [],
+		log_entries: [],
+		promotion_hints: [],
+	};
 }
 
 /**
@@ -663,31 +820,7 @@ function extractWithPatterns(text: string): {
 	return result;
 }
 
-async function embedWithMetadataCompat(
-	embedding: any,
-	text: string,
-): Promise<{ vector: number[]; metadata: Record<string, any> }> {
-	if (embedding && typeof embedding.embedDetailed === "function") {
-		return embedding.embedDetailed(text);
-	}
-
-	const vector = await embedding.embed(text);
-	return {
-		vector,
-		metadata: {
-			embedding_chunked: false,
-			embedding_chunks_count: 1,
-			embedding_chunking_strategy: "array_batch_weighted_avg",
-			embedding_model: "unknown",
-			embedding_max_tokens: 0,
-			embedding_safe_chunk_tokens: 0,
-		},
-	};
-}
-
 async function storeSemanticMemory(
-	qdrant: QdrantClient,
-	embedding: EmbeddingClient,
 	text: string,
 	namespace: MemoryNamespace,
 	payloadExtras: Record<string, unknown> = {},
@@ -699,12 +832,6 @@ async function storeSemanticMemory(
 		);
 		return;
 	}
-
-	const embeddingResult = await embedWithMetadataCompat(
-		embedding as any,
-		normalizedText,
-	);
-	const vector = embeddingResult.vector;
 	const sourceAgent = String(
 		(payloadExtras as any)?.source_agent || "assistant",
 	);
@@ -721,29 +848,23 @@ async function storeSemanticMemory(
 				? (payloadExtras as any).confidence
 				: undefined,
 	});
-	await qdrant.upsert([
-		{
-			id: crypto.randomUUID(),
-			vector,
-			payload: {
-				schema_version: MEMORY_FOUNDATION_SCHEMA_VERSION,
-				text: normalizedText,
-				agent: toCoreAgent(sourceAgent),
-				namespace,
-				memory_scope: resolveMemoryScopeFromNamespace(namespace),
-				...embeddingResult.metadata,
-				metadata: {
-					...((payloadExtras as any)?.metadata || {}),
-					...embeddingResult.metadata,
-				},
-				memory_type: lifecycle.memoryType,
-				promotion_state: lifecycle.promotionState,
-				confidence: lifecycle.confidence,
-				timestamp: Date.now(),
-				...payloadExtras,
-			},
+	writeWikiMemoryCapture({
+		text: normalizedText,
+		namespace,
+		sourceAgent: toCoreAgent(sourceAgent),
+		sourceType,
+		memoryScope: resolveMemoryScopeFromNamespace(namespace),
+		memoryType: lifecycle.memoryType,
+		promotionState: lifecycle.promotionState,
+		confidence: lifecycle.confidence,
+		sessionId: (payloadExtras as any)?.session_id,
+		userId: (payloadExtras as any)?.userId,
+		metadata: {
+			schema_version: MEMORY_FOUNDATION_SCHEMA_VERSION,
+			promotion_state: lifecycle.promotionState,
+			...((payloadExtras as any)?.metadata || {}),
 		},
-	]);
+	});
 }
 
 export function captureShortTermState(
@@ -780,8 +901,6 @@ export function captureShortTermState(
 
 export async function captureMidTermSummary(
 	db: SlotDB,
-	qdrant: QdrantClient,
-	embedding: EmbeddingClient,
 	input: {
 		userId: string;
 		agentId: string;
@@ -823,8 +942,6 @@ export async function captureMidTermSummary(
 	});
 
 	await storeSemanticMemory(
-		qdrant,
-		embedding,
 		daySummary,
 		normalizeNamespace("shared.runbooks", input.agentId),
 		{
@@ -843,18 +960,16 @@ export async function captureMidTermSummary(
 	return { stored: true, capturedAt: now };
 }
 
-export async function captureLongTermPattern(
-	qdrant: QdrantClient,
-	embedding: EmbeddingClient,
-	input: { text: string; agentId: string; userId: string },
-): Promise<boolean> {
+export async function captureLongTermPattern(input: {
+	text: string;
+	agentId: string;
+	userId: string;
+}): Promise<boolean> {
 	if (!detectImportantPattern(input.text)) {
 		return false;
 	}
 
 	await storeSemanticMemory(
-		qdrant,
-		embedding,
 		input.text,
 		normalizeNamespace(
 			`agent.${toCoreAgent(input.agentId)}.lessons`,
@@ -876,9 +991,6 @@ export async function captureLongTermPattern(
 export function registerAutoCapture(
 	api: OpenClawPluginApi,
 	db: SlotDB,
-	qdrant: QdrantClient,
-	embedding: EmbeddingClient,
-	dedupe: DeduplicationService,
 	config?: Partial<AutoCaptureConfig>,
 ): void {
 	const cfg: AutoCaptureConfig = { ...DEFAULT_CONFIG, ...config };
@@ -894,7 +1006,8 @@ export function registerAutoCapture(
 	let isCapturing = false;
 
 	// Auto-summarize counters (per process lifecycle)
-	let actionCounter = 0;
+		const distillApply = new DistillApplyUseCase(db);
+let actionCounter = 0;
 	let actionsSinceLastCapture = 0;
 	let lastMidTermCaptureAt = Date.now();
 	const summarizeEvery = Math.max(1, cfg.summarizeEveryActions ?? 6);
@@ -936,51 +1049,29 @@ export function registerAutoCapture(
 					messages,
 					currentState,
 					cfg,
+					{
+						agentId,
+						sessionKey,
+					},
 					params.use_llm,
 					distillMode,
 				);
 
-				// Process slot removals first (manual tool parity with hook behavior)
-				let slotsRemoved = 0;
-				if (extracted.slot_removals && extracted.slot_removals.length > 0) {
-					for (const removal of extracted.slot_removals) {
-						try {
-							const deleted = db.delete(userId, agentId, removal.key);
-							if (deleted) slotsRemoved++;
-						} catch (e) {
-							console.error("[AutoCapture] Failed to remove slot:", e);
-						}
-					}
-				}
-
-				// Store slots
-				let slotsStored = 0;
-
-				for (const fact of extracted.slot_updates) {
-					if (fact.confidence < cfg.minConfidence!) continue;
-
-					try {
-						db.set(userId, agentId, {
-							key: fact.key,
-							value: fact.value,
-							category: fact.category,
-							source: "auto_capture",
-							confidence: fact.confidence,
-						});
-						slotsStored++;
-					} catch (e) {
-						console.error("[AutoCapture] Failed to store:", e);
-					}
-				}
+								const applyResult = distillApply.execute(extracted, {
+					userId,
+					agentId,
+					sessionKey,
+					minConfidence: cfg.minConfidence!,
+				});
 
 				return {
 					content: [
 						{
 							type: "text",
-							text: `✅ Extraction complete!\nMethod: ${params.use_llm !== false ? "LLM" : "Pattern"}\nSlots stored: ${slotsStored}\nSlots removed: ${slotsRemoved}\n\nExtracted:\n${JSON.stringify(extracted, null, 2)}`,
+							text: `✅ Extraction complete!\nMethod: ${params.use_llm !== false ? "LLM" : "Pattern"}\nSlots stored: ${applyResult.slotsStored}\nSlots removed: ${applyResult.slotsRemoved}\n\nExtracted:\n${JSON.stringify(extracted, null, 2)}`,
 						},
 					],
-					details: { extracted, slotsStored, slotsRemoved },
+					details: { extracted, slotsStored: applyResult.slotsStored, slotsRemoved: applyResult.slotsRemoved },
 				};
 			} catch (error: any) {
 				return {
@@ -1014,9 +1105,14 @@ export function registerAutoCapture(
 				sessionKey?: string;
 				channel?: string;
 				messageChannel?: string;
+				sessionId?: string;
 			};
 
-			const sessionKey = typedCtx?.sessionKey ?? "agent:main:default";
+			const sessionKey =
+				typedCtx?.sessionKey ||
+				(typedCtx?.sessionId
+					? `agent:main:legacy:${typedCtx.sessionId}`
+					: "agent:main:default");
 			const agentId = sessionKey.split(":")[1] || "main";
 			const userId = normalizeUserId(
 				sessionKey.split(":").slice(2).join(":") || "default",
@@ -1029,6 +1125,12 @@ export function registerAutoCapture(
 				console.log(
 					`[AutoCapture] Skipping: heartbeat channel (no new user content to capture)`,
 				);
+				return;
+			}
+
+			const eventMeta = (typedEvent?.metadata as Record<string, unknown>) || {};
+			if (eventMeta.autoCaptureSkip === true || eventMeta.internalLifecycle === "distill_apply") {
+				console.log("[AutoCapture] Skipping: event explicitly marked with non-capturable loop guard (autoCaptureSkip / distill_apply)");
 				return;
 			}
 
@@ -1121,6 +1223,23 @@ export function registerAutoCapture(
 				.map((m: any) => extractMessageText(m.content))
 				.join(" ");
 
+			const suppressionMeta = resolveAutoCaptureSuppressionMeta(
+				fullText,
+				agentId,
+			);
+			if (suppressionMeta) {
+				const eventMeta =
+					typedEvent.metadata && typeof typedEvent.metadata === "object"
+						? typedEvent.metadata
+						: ((typedEvent.metadata = {}) as Record<string, unknown>);
+				(eventMeta as Record<string, unknown>).autoCaptureSuppression =
+					suppressionMeta;
+				console.log(
+					`[AutoCapture] Suppressed generic capture: ${JSON.stringify(suppressionMeta)}`,
+				);
+				return;
+			}
+
 			// Namespace router v2 (ASM-5)
 			const coreAgent = toCoreAgent(agentId);
 			let targetNamespace: MemoryNamespace = getAutoCaptureNamespace(
@@ -1150,30 +1269,39 @@ export function registerAutoCapture(
 				captureWindowMessages,
 				currentState,
 				cfg,
+				{
+					agentId,
+					sessionKey,
+				},
 				undefined,
 				distillMode,
 			);
 
-			// Process slot REMOVALS first (invalidation)
-			let slotsRemoved = 0;
-			if (extracted.slot_removals && extracted.slot_removals.length > 0) {
-				for (const removal of extracted.slot_removals) {
-					try {
-						const deleted = db.delete(userId, agentId, removal.key);
-						if (deleted) {
-							slotsRemoved++;
-							console.log(
-								`[AutoCapture] Removed stale slot: ${removal.key} (reason: ${removal.reason})`,
-							);
-						}
-					} catch (e) {
-						console.error("[AutoCapture] Failed to remove slot:", e);
-					}
+			for (const logEntry of extracted.log_entries || []) {
+				const level = String(logEntry?.level || "info").toLowerCase();
+				const text = String(logEntry?.text || "").trim();
+				if (!text) continue;
+				if (level === "error") {
+					console.error(`[AutoCapture][distill-log] ${text}`);
+				} else if (level === "warn") {
+					console.warn(`[AutoCapture][distill-log] ${text}`);
+				} else {
+					console.log(`[AutoCapture][distill-log] ${text}`);
 				}
 			}
 
-			// Store slots
-			let slotsStored = 0;
+			// Apply deterministic extraction results safely
+			const applyResult = distillApply.execute(extracted, {
+				userId,
+				agentId,
+				sessionKey,
+				targetNamespace,
+				minConfidence: cfg.minConfidence!,
+			});
+
+			const slotsRemoved = applyResult.slotsRemoved;
+			const slotsStored = applyResult.slotsStored;
+			const memoriesStored = applyResult.memoriesStored;
 
 			// Save hash to SlotDB for next comparison
 			db.set(userId, agentId, {
@@ -1183,205 +1311,6 @@ export function registerAutoCapture(
 				source: "auto_capture",
 				confidence: 1.0,
 			});
-			for (const fact of extracted.slot_updates) {
-				if (fact.confidence < cfg.minConfidence!) continue;
-				try {
-					db.set(userId, agentId, {
-						key: fact.key,
-						value: fact.value,
-						category: fact.category,
-						source: "auto_capture",
-						confidence: fact.confidence,
-					});
-					slotsStored++;
-					console.log(
-						`[AutoCapture] Stored: ${fact.key} = ${JSON.stringify(fact.value)}`,
-					);
-				} catch (e) {
-					console.error("[AutoCapture] Failed to store slot:", e);
-				}
-			}
-
-			// Store memories to Qdrant
-			let memoriesStored = 0;
-			console.log(
-				`[AutoCapture] Extracted ${extracted.memories.length} memories, ${extracted.slot_updates.length} slot updates`,
-			);
-
-			if (extracted.memories.length > 0) {
-				console.log(
-					`[AutoCapture] Starting Qdrant storage for ${extracted.memories.length} memories...`,
-				);
-
-				for (let i = 0; i < extracted.memories.length; i++) {
-					const memory = extracted.memories[i];
-					console.log(
-						`[AutoCapture] Processing memory ${i + 1}/${extracted.memories.length}...`,
-					);
-
-					try {
-						const text =
-							typeof memory === "string"
-								? memory
-								: memory.text || JSON.stringify(memory);
-						if (!text || text.trim().length === 0) {
-							console.warn(
-								`[AutoCapture] Memory ${i + 1} has empty text, skipping`,
-							);
-							continue;
-						}
-
-						console.log(
-							`[AutoCapture] Generating embedding for: "${text.substring(0, 60)}..."`,
-						);
-						let vector: number[];
-						let embeddingMeta: Record<string, any> = {};
-						try {
-							const embeddingResult = await embedWithMetadataCompat(
-								embedding as any,
-								text,
-							);
-							vector = embeddingResult.vector;
-							embeddingMeta = embeddingResult.metadata;
-							console.log(
-								`[AutoCapture] Embedding generated, vector length: ${vector.length}, chunks=${embeddingResult.metadata.embedding_chunks_count}`,
-							);
-						} catch (embedError: any) {
-							console.error(
-								`[AutoCapture] Embedding failed for memory ${i + 1}:`,
-								embedError.message,
-							);
-							continue;
-						}
-
-						// Check for duplicates (scoped to target namespace)
-						console.log(
-							`[AutoCapture] Searching for duplicates in namespace: ${targetNamespace}...`,
-						);
-						let candidates: any[] = [];
-						try {
-							candidates = await qdrant.search(vector, 5, {
-								must: [{ key: "namespace", match: { value: targetNamespace } }],
-							});
-							console.log(
-								`[AutoCapture] Found ${candidates.length} candidate matches`,
-							);
-						} catch (searchError: any) {
-							console.error(
-								`[AutoCapture] Duplicate search failed:`,
-								searchError.message,
-							);
-							candidates = [];
-						}
-
-						const duplicateId = dedupe.findDuplicate(text, candidates);
-						const lifecycle = resolvePromotionMetadata({
-							namespace: targetNamespace,
-							sourceType: "auto_capture",
-						});
-						console.log(
-							`[AutoCapture] Duplicate check result: ${duplicateId ? `found duplicate ${duplicateId}` : "no duplicate"}`,
-						);
-
-						if (duplicateId) {
-							// Update existing memory
-							console.log(
-								`[AutoCapture] Updating existing memory ${duplicateId}...`,
-							);
-							try {
-								await qdrant.upsert([
-									{
-										id: duplicateId,
-										vector,
-										payload: {
-										schema_version: MEMORY_FOUNDATION_SCHEMA_VERSION,
-										text,
-										agent: coreAgent,
-										namespace: targetNamespace,
-										memory_scope: resolveMemoryScopeFromNamespace(targetNamespace),
-										source_agent: coreAgent,
-										source_type: "auto_capture",
-										memory_type: lifecycle.memoryType,
-										promotion_state: lifecycle.promotionState,
-										confidence: lifecycle.confidence,
-											userId: userId,
-											...embeddingMeta,
-											metadata: {
-												...embeddingMeta,
-											},
-											timestamp: Date.now(),
-											updatedAt: Date.now(),
-										},
-									},
-								]);
-								console.log(
-									`[AutoCapture] ✓ Memory updated (duplicate): ${text.substring(0, 50)}...`,
-								);
-								memoriesStored++;
-							} catch (upsertError: any) {
-								console.error(
-									`[AutoCapture] Failed to update duplicate memory:`,
-									upsertError.message,
-								);
-							}
-						} else {
-							// Create new memory
-							const id = crypto.randomUUID();
-							console.log(
-								`[AutoCapture] Creating new memory with ID: ${id}...`,
-							);
-							try {
-								await qdrant.upsert([
-									{
-										id,
-										vector,
-										payload: {
-										schema_version: MEMORY_FOUNDATION_SCHEMA_VERSION,
-										text,
-										agent: coreAgent,
-										namespace: targetNamespace,
-										memory_scope: resolveMemoryScopeFromNamespace(targetNamespace),
-										source_agent: coreAgent,
-										source_type: "auto_capture",
-										memory_type: lifecycle.memoryType,
-										promotion_state: lifecycle.promotionState,
-										confidence: lifecycle.confidence,
-											userId: userId,
-											...embeddingMeta,
-											metadata: {
-												...embeddingMeta,
-											},
-											timestamp: Date.now(),
-										},
-									},
-								]);
-								console.log(
-									`[AutoCapture] ✓ Memory stored: ${text.substring(0, 50)}...`,
-								);
-								memoriesStored++;
-							} catch (upsertError: any) {
-								console.error(
-									`[AutoCapture] Failed to store new memory:`,
-									upsertError.message,
-								);
-							}
-						}
-					} catch (e: any) {
-						console.error(
-							`[AutoCapture] Unexpected error processing memory ${i + 1}:`,
-							e.message,
-						);
-						console.error(`[AutoCapture] Stack:`, e.stack);
-					}
-				}
-				console.log(
-					`[AutoCapture] Memory storage complete: ${memoriesStored}/${extracted.memories.length} stored`,
-				);
-			} else {
-				console.log(
-					`[AutoCapture] No memories to store (empty extraction result)`,
-				);
-			}
 
 			// Auto-summarize project living state after every N actions OR task transition
 			actionCounter += 1;
@@ -1429,7 +1358,7 @@ export function registerAutoCapture(
 			);
 
 			try {
-				const midTerm = await captureMidTermSummary(db, qdrant, embedding, {
+				const midTerm = await captureMidTermSummary(db, {
 					userId,
 					agentId,
 					sessionKey,
@@ -1452,7 +1381,7 @@ export function registerAutoCapture(
 			}
 
 			try {
-				const storedPattern = await captureLongTermPattern(qdrant, embedding, {
+				const storedPattern = await captureLongTermPattern({
 					text: fullText,
 					agentId,
 					userId,
