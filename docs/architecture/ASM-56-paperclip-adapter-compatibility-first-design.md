@@ -1,5 +1,7 @@
 # ASM-56 — Thiết kế Paperclip adapter (compatibility-first)
 
+> **Historical note (2026-04-09, bead agent-smart-memo-r4t.26):** Paperclip support was removed from active ASM runtime/package/test surfaces. Any Paperclip references below are archived design history, not current supported runtime behavior.
+
 > Issue: ASM-56 (Sub-task của ASM-43)  
 > Strategy: code_light (thiết kế + lộ trình tích hợp, **chưa đổi runtime code**)
 
@@ -8,6 +10,7 @@
 Thiết kế `Paperclip adapter` theo hướng **compatibility-first** để có thể tích hợp vào kiến trúc memory core platform mà **không phá hành vi hiện tại** của plugin/runtime đang chạy.
 
 Mục tiêu cụ thể:
+
 - Xác định vai trò `Paperclip adapter` trong boundary `core / services / adapters`.
 - Đề xuất **capability matrix** rõ ràng (must/should/later) cho giai đoạn rollout.
 - Chốt **yêu cầu tối thiểu** để adapter có thể được tích hợp an toàn ở phase implementation.
@@ -20,6 +23,7 @@ Mục tiêu cụ thể:
 - ASM-55 đã chốt boundary runtime adapter cho OpenClaw và anti-corruption layer.
 
 ASM-56 kế thừa các nguyên tắc trên để thêm một adapter mới (`Paperclip`) theo cùng triết lý:
+
 - **Core runtime-agnostic**.
 - Adapter chịu trách nhiệm map wire/runtime shape sang contract core.
 - Rollout theo hướng không breaking.
@@ -27,6 +31,7 @@ ASM-56 kế thừa các nguyên tắc trên để thêm một adapter mới (`Pa
 ## 3) Vai trò Paperclip adapter trong kiến trúc
 
 `Paperclip adapter` là **runtime adapter** ngang hàng với `openclaw adapter`, có trách nhiệm:
+
 1. Nhận request/context từ Paperclip runtime.
 2. Chuẩn hóa thành `CoreRequestEnvelope` + `MemoryContext` + `MemoryNamespace`.
 3. Gọi `MemoryUseCasePort` của core.
@@ -52,13 +57,12 @@ export interface PaperclipRequestEnvelope<TPayload> {
 }
 
 export interface PaperclipAdapter {
-  execute<TReq = unknown, TRes = unknown>(
-    req: PaperclipRequestEnvelope<TReq>
-  ): Promise<TRes>;
+  execute<TReq = unknown, TRes = unknown>(req: PaperclipRequestEnvelope<TReq>): Promise<TRes>;
 }
 ```
 
 Ghi chú:
+
 - Đây là contract ở mức thiết kế để lock boundary; chưa áp vào runtime hiện tại.
 - Mapping thực tế vẫn đi qua `MemoryUseCasePort` để giữ consistency với ASM-55.
 
@@ -66,40 +70,42 @@ Ghi chú:
 
 ### 4.1 Phase-0 (Minimum viable compatibility) — MUST
 
-| Capability | Mô tả | Trạng thái mong muốn |
-|---|---|---|
-| Context mapping | Map `userId/sessionId/workspaceId` -> `MemoryContext` | Bắt buộc |
-| Namespace normalization | Chuẩn hóa namespace đầu vào Paperclip theo contract core | Bắt buộc |
-| Slot read/write/delete/list | Route các thao tác slot cơ bản qua `MemoryUseCasePort` | Bắt buộc |
-| Error normalization | Map `MemoryError` -> mã lỗi/shape Paperclip ổn định | Bắt buộc |
-| Backward compatibility mode | Giữ wire-level cũ (nếu có), không phá caller hiện tại | Bắt buộc |
-| Observability cơ bản | `traceId`, action, outcome, latency buckets | Bắt buộc |
+| Capability                  | Mô tả                                                    | Trạng thái mong muốn |
+| --------------------------- | -------------------------------------------------------- | -------------------- |
+| Context mapping             | Map `userId/sessionId/workspaceId` -> `MemoryContext`    | Bắt buộc             |
+| Namespace normalization     | Chuẩn hóa namespace đầu vào Paperclip theo contract core | Bắt buộc             |
+| Slot read/write/delete/list | Route các thao tác slot cơ bản qua `MemoryUseCasePort`   | Bắt buộc             |
+| Error normalization         | Map `MemoryError` -> mã lỗi/shape Paperclip ổn định      | Bắt buộc             |
+| Backward compatibility mode | Giữ wire-level cũ (nếu có), không phá caller hiện tại    | Bắt buộc             |
+| Observability cơ bản        | `traceId`, action, outcome, latency buckets              | Bắt buộc             |
 
 ### 4.2 Phase-1 (Operational hardening) — SHOULD
 
-| Capability | Mô tả | Trạng thái mong muốn |
-|---|---|---|
-| Idempotency key | Tránh duplicate side-effect khi retry timeout | Nên có |
-| Retry policy rõ ràng | Retry có điều kiện cho lỗi transient | Nên có |
-| Contract tests | Test chống drift giữa Paperclip wire shape và core contract | Nên có |
-| Feature flags | Bật/tắt adapter theo env/tenant để rollout an toàn | Nên có |
+| Capability           | Mô tả                                                       | Trạng thái mong muốn |
+| -------------------- | ----------------------------------------------------------- | -------------------- |
+| Idempotency key      | Tránh duplicate side-effect khi retry timeout               | Nên có               |
+| Retry policy rõ ràng | Retry có điều kiện cho lỗi transient                        | Nên có               |
+| Contract tests       | Test chống drift giữa Paperclip wire shape và core contract | Nên có               |
+| Feature flags        | Bật/tắt adapter theo env/tenant để rollout an toàn          | Nên có               |
 
 ### 4.3 Phase-2 (Extended capabilities) — LATER
 
-| Capability | Mô tả | Trạng thái mong muốn |
-|---|---|---|
-| Batch APIs | Gom nhiều thao tác slot giảm round-trip | Để sau |
-| Streaming/event hooks | Trả tiến trình theo event cho runtime hỗ trợ stream | Để sau |
-| Advanced policy plugins | Policy theo tenant/workspace/custom guardrails | Để sau |
+| Capability              | Mô tả                                               | Trạng thái mong muốn |
+| ----------------------- | --------------------------------------------------- | -------------------- |
+| Batch APIs              | Gom nhiều thao tác slot giảm round-trip             | Để sau               |
+| Streaming/event hooks   | Trả tiến trình theo event cho runtime hỗ trợ stream | Để sau               |
+| Advanced policy plugins | Policy theo tenant/workspace/custom guardrails      | Để sau               |
 
 ## 5) Yêu cầu tối thiểu để tích hợp (integration minimum requirements)
 
 ## 5.1 Contract & mapping
+
 - Có `paperclip-context-mapper` map runtime context -> `MemoryContext`.
 - Có `paperclip-namespace-mapper` chuẩn hóa namespace/scope đầu vào.
 - Tất cả call vào core đi qua `MemoryUseCasePort` (không gọi trực tiếp storage adapters).
 
 ## 5.2 Error handling
+
 - Có `paperclip-error-presenter` chuẩn hóa:
   - `VALIDATION_ERROR`
   - `NOT_FOUND`
@@ -109,11 +115,13 @@ Ghi chú:
 - Không rò stack trace/internal detail ra runtime response mặc định.
 
 ## 5.3 Compatibility guardrails
+
 - Giữ nguyên public behavior/wire shape đã cam kết với Paperclip caller.
 - Nếu cần field mới, chỉ thêm theo hướng backward-compatible (optional fields).
 - Có fallback path khi mapping thiếu field không-critical.
 
 ## 5.4 Observability & vận hành
+
 - Log chuẩn hóa tối thiểu: `traceId`, `action`, `namespace`, `status`, `latencyMs`.
 - Metric tối thiểu:
   - request_total (by action/status)
@@ -136,6 +144,7 @@ src/
 ```
 
 Nguyên tắc:
+
 - `paperclip-bootstrap.ts` chỉ làm composition.
 - `paperclip-tool-router.ts` chỉ route action -> use-case.
 - Không đặt business logic domain trong adapter layer.

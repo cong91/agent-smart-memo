@@ -1,311 +1,427 @@
-/**
- * LLM Extractor for Auto-Capture v2
- * With slot invalidation support
- */
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+	isLearningContent,
+	type MemoryNamespace,
+	toCoreAgent,
+} from "../shared/memory-config.js";
 
-import type { SlotDB } from "../db/slot-db.js";
-import type { MemoryNamespace } from "../shared/memory-config.js";
-
-interface LLMConfig {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-}
-
-export type DistillMode = "principles" | "requirements" | "market_signal" | "general";
+export type DistillMode =
+	| "principles"
+	| "requirements"
+	| "market_signal"
+	| "general";
 
 export interface ExtractionResult {
-  slot_updates: Array<{
-    key: string;
-    value: any;
-    confidence: number;
-    category: string;
-  }>;
-  slot_removals: Array<{
-    key: string;
-    reason: string;
-  }>;
-  memories: Array<{
-    text: string;
-    namespace: MemoryNamespace;
-    confidence: number;
-  }>;
+	slot_updates: Array<{
+		key: string;
+		value: any;
+		confidence: number;
+		category: string;
+	}>;
+	slot_removals: Array<{
+		key: string;
+		reason: string;
+	}>;
+	memories: Array<{
+		text: string;
+		namespace: MemoryNamespace;
+		confidence: number;
+	}>;
+	draft_updates: Array<{
+		text: string;
+		namespace: MemoryNamespace;
+		confidence: number;
+		title?: string;
+	}>;
+	briefing_updates: Array<{
+		text: string;
+		namespace: MemoryNamespace;
+		confidence: number;
+		title?: string;
+	}>;
+	log_entries: Array<{
+		text: string;
+		level: "info" | "warn" | "error";
+	}>;
+	promotion_hints: Array<{
+		text: string;
+		namespace: MemoryNamespace;
+		confidence: number;
+		promotion_state?: string;
+		memory_type?: string;
+	}>;
 }
 
-interface OpenAIChatResponse {
-  choices: Array<{
-    message: { content: string; role: string };
-    finish_reason: string;
-    index: number;
-  }>;
-  model: string;
-  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+export interface IsolatedContinuationInput {
+	agentId: string;
+	sourceSessionKey: string;
+	continuationSessionKey?: string;
+	timeoutMs?: number;
 }
 
-const EMPTY_RESULT: ExtractionResult = { slot_updates: [], slot_removals: [], memories: [] };
-
-function isVietnameseContext(text: string): boolean {
-  const lower = text.toLowerCase();
-  return /(\banh\b|\bem\b|\bđã\b|\bkhông\b|\bvì sao\b|\byêu cầu\b|\bsửa\b|\blỗi\b|\btriển khai\b|\bbáo cáo\b|\bduyệt\b)/i.test(lower)
-    || /[ăâđêôơưáàảãạắằẳẵặấầẩẫậéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]/i.test(text);
+export interface DistillContextMessage {
+	role: "user" | "assistant" | "system" | string;
+	text: string;
 }
 
-function looksLikeRawTranscript(text: string): boolean {
-  const t = text.trim();
-  if (!t) return true;
-  const hardPatterns = [
-    /^\(no output\)/i,
-    /"type"\s*:\s*"toolCall"/i,
-    /"name"\s*:\s*"exec"/i,
-    /"name"\s*:\s*"read"/i,
-    /```[\s\S]*```/,
-    /^\s*#\s+/m,
-    /^\s*\|.+\|\s*$/m,
-    /curl\s+-s\s+"http:\/\/localhost:3001/i,
-    /mapped \{\/trading\//i,
-  ];
-  if (hardPatterns.some((p) => p.test(t))) return true;
-  if (t.length > 1200) return true;
-  return false;
+export interface IsolatedContinuationRuntimeOptions {
+	enableLlmExtraction?: boolean;
+	bootstrapSafeRawFirst?: boolean;
+	contextMessages?: DistillContextMessage[];
+	structuredContract?: Partial<ExtractionResult>;
 }
 
-function englishHeavy(text: string): boolean {
-  const letters = (text.match(/[A-Za-z]/g) || []).length;
-  const viMarks = (text.match(/[ăâđêôơưáàảãạắằẳẵặấầẩẫậéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]/gi) || []).length;
-  return letters > 40 && viMarks === 0;
+interface IsolatedContinuationContext {
+	agentId: string;
+	sourceSessionKey: string;
+	continuationSessionKey: string;
 }
 
-function sanitizeExtractedMemories(memories: ExtractionResult['memories'], vnContext: boolean): ExtractionResult['memories'] {
-  return memories
-    .map((m) => ({ ...m, text: String(m.text || "").replace(/\s+/g, " ").trim() }))
-    .filter((m) => m.text.length >= 20)
-    .filter((m) => !looksLikeRawTranscript(m.text))
-    .filter((m) => !(vnContext && englishHeavy(m.text)))
-    .slice(0, 12);
+interface ContinuationSessionExecutionInput {
+	conversation: string;
+	currentSlots: Record<string, Record<string, any>>;
+	distillMode: DistillMode;
+	continuation: IsolatedContinuationContext;
+	runtimeOptions?: IsolatedContinuationRuntimeOptions;
 }
 
-/**
- * Extract facts using LLM via OpenAI Completions API
- */
-export async function extractWithLLM(
-  conversation: string,
-  currentSlots: Record<string, Record<string, any>>,
-  config: LLMConfig,
-  distillMode: DistillMode = "general"
+export interface ContinuationSessionExecutionEnvelope {
+	ok: boolean;
+	result?: ExtractionResult;
+	error?: string;
+}
+
+export const CONTINUATION_RUNNER_OUTPUT_MARKER = "__ASM_CONTINUATION_RESULT__";
+
+function createEmptyResult(): ExtractionResult {
+	return {
+		slot_updates: [],
+		slot_removals: [],
+		memories: [],
+		draft_updates: [],
+		briefing_updates: [],
+		log_entries: [],
+		promotion_hints: [],
+	};
+}
+
+type ActionableContextSignal =
+	| "planning_approved"
+	| "implementation_packet"
+	| "handoff_or_next_step"
+	| "decision_or_constraints"
+	| "project_context_update";
+
+function truncateForLog(value: string, limit = 180): string {
+	const compact = String(value || "")
+		.replace(/\s+/g, " ")
+		.trim();
+	if (compact.length <= limit) return compact;
+	return `${compact.slice(0, limit)}…`;
+}
+
+function detectActionableContextSignals(
+	conversation: string,
+): ActionableContextSignal[] {
+	const text = String(conversation || "");
+	const lower = text.toLowerCase();
+	const signals = new Set<ActionableContextSignal>();
+
+	const has = (pattern: RegExp): boolean => pattern.test(text);
+
+	if (
+		has(
+			/\b(approved|approve|go ahead|proceed|ship it|đã duyệt|duyệt kế hoạch|đồng ý triển khai|chốt kế hoạch)\b/i,
+		) &&
+		has(
+			/\b(plan|planning|execution plan|implementation|kế hoạch|triển khai|packet)\b/i,
+		)
+	) {
+		signals.add("planning_approved");
+	}
+
+	if (
+		has(
+			/\b(implementation packet|execution plan|task-context|task context|todo list|checklist|wave|milestone|kế hoạch triển khai|gói triển khai|implementation details)\b/i,
+		)
+	) {
+		signals.add("implementation_packet");
+	}
+
+	if (
+		has(
+			/\b(handoff|handover|next step|next steps|next-action|status update|blocked by|owner|bàn giao|bước tiếp theo|trạng thái|chuyển sang)\b/i,
+		) &&
+		has(/\b(task|bead|issue|ticket|project|phase|epic|công việc)\b/i)
+	) {
+		signals.add("handoff_or_next_step");
+	}
+
+	if (
+		has(
+			/\b(decision|decide|approved approach|constraint|non-negotiable|must|must not|do not|trade-off|quyết định|ràng buộc|không được|bắt buộc)\b/i,
+		)
+	) {
+		signals.add("decision_or_constraints");
+	}
+
+	const hasProjectToken =
+		/\b(project|bead|issue|ticket|phase|milestone|roadmap|epic|project context|task context)\b/i.test(
+			text,
+		);
+	const hasUpdateToken =
+		/\b(update|updated|changed|current|now|status|moved|next|cập nhật|đã chuyển|hiện tại|trạng thái)\b/i.test(
+			text,
+		);
+	if (hasProjectToken && hasUpdateToken) {
+		signals.add("project_context_update");
+	}
+
+	if (
+		signals.size === 0 &&
+		(lower.includes("approved") || lower.includes("duyệt")) &&
+		(lower.includes("bead") ||
+			lower.includes("task") ||
+			lower.includes("phase"))
+	) {
+		signals.add("project_context_update");
+	}
+
+	return Array.from(signals);
+}
+
+function formatContextSignals(signals: ActionableContextSignal[]): string {
+	return signals.length > 0 ? signals.join(",") : "none";
+}
+
+function countStructuredSignals(payload: {
+	slot_updates?: any[];
+	slot_removals?: any[];
+	memories?: any[];
+	draft_updates?: any[];
+	briefing_updates?: any[];
+	promotion_hints?: any[];
+}): number {
+	return (
+		(payload.slot_updates?.length || 0) +
+		(payload.slot_removals?.length || 0) +
+		(payload.memories?.length || 0) +
+		(payload.draft_updates?.length || 0) +
+		(payload.briefing_updates?.length || 0) +
+		(payload.promotion_hints?.length || 0)
+	);
+}
+
+function buildContinuationContext(
+	continuation?: IsolatedContinuationInput,
+): IsolatedContinuationContext {
+	return {
+		agentId: continuation?.agentId || "assistant",
+		sourceSessionKey:
+			continuation?.sourceSessionKey || "agent:assistant:default",
+		continuationSessionKey:
+			continuation?.continuationSessionKey ||
+			`agent:${continuation?.agentId || "assistant"}:distill:${Date.now()}`,
+	};
+}
+
+function inferDistillModeFromContext(
+	agentId: string,
+	conversation: string,
+): DistillMode {
+	const coreAgent = toCoreAgent(agentId);
+	if (coreAgent === "trader") return "market_signal";
+	if (isLearningContent(conversation)) return "principles";
+	if (["scrum", "fullstack", "creator"].includes(coreAgent)) {
+		return "requirements";
+	}
+	return "general";
+}
+
+function appendContinuationLog(
+	result: ExtractionResult,
+	continuation: IsolatedContinuationContext,
+	distillMode: DistillMode,
+): ExtractionResult {
+	return {
+		...result,
+		log_entries: [
+			...(result.log_entries || []),
+			{
+				level: "info",
+				text: `isolated continuation distill session=${continuation.continuationSessionKey} source=${continuation.sourceSessionKey} agent=${continuation.agentId} mode=${distillMode} engine=native_continuation`,
+			},
+		],
+	};
+}
+
+function isolatedFailureResult(
+	message: string,
+	continuation: IsolatedContinuationContext,
+	distillMode: DistillMode,
+): ExtractionResult {
+	return appendContinuationLog(
+		{
+			...createEmptyResult(),
+			log_entries: [
+				{
+					level: "error",
+					text: `isolated continuation native distill failed: ${message}`,
+				},
+				{
+					level: "warn",
+					text: "isolated continuation fallback disabled: no local heuristic slot_updates/memories applied",
+				},
+			],
+		},
+		continuation,
+		distillMode,
+	);
+}
+
+function normalizeExtractionResult(
+	value: Partial<ExtractionResult> | null | undefined,
+): ExtractionResult {
+	return {
+		slot_updates: Array.isArray(value?.slot_updates) ? value.slot_updates : [],
+		slot_removals: Array.isArray(value?.slot_removals)
+			? value.slot_removals
+			: [],
+		memories: Array.isArray(value?.memories) ? value.memories : [],
+		draft_updates: Array.isArray(value?.draft_updates)
+			? value.draft_updates
+			: [],
+		briefing_updates: Array.isArray(value?.briefing_updates)
+			? value.briefing_updates
+			: [],
+		log_entries: Array.isArray(value?.log_entries) ? value.log_entries : [],
+		promotion_hints: Array.isArray(value?.promotion_hints)
+			? value.promotion_hints
+			: [],
+	};
+}
+
+export function resolveContinuationRunnerCommand(): {
+	command: string;
+	args: string[];
+} {
+	const currentFilePath = fileURLToPath(import.meta.url);
+	const currentDir = dirname(currentFilePath);
+	const isTsSourceRuntime = currentFilePath.endsWith(".ts");
+
+	if (isTsSourceRuntime) {
+		return {
+			command: "npx",
+			args: [
+				"tsx",
+				resolve(currentDir, "llm-extractor-continuation-runner.ts"),
+			],
+		};
+	}
+
+	return {
+		command: process.execPath,
+		args: [resolve(currentDir, "llm-extractor-continuation-runner.js")],
+	};
+}
+
+export function parseContinuationEnvelope(
+	rawStdout: string,
+): ContinuationSessionExecutionEnvelope {
+	const markerIndex = rawStdout.lastIndexOf(CONTINUATION_RUNNER_OUTPUT_MARKER);
+	if (markerIndex < 0) {
+		throw new Error("missing continuation runner envelope marker");
+	}
+
+	const payloadText = rawStdout
+		.slice(markerIndex + CONTINUATION_RUNNER_OUTPUT_MARKER.length)
+		.trim();
+	if (!payloadText) {
+		throw new Error("empty continuation runner envelope payload");
+	}
+
+	return JSON.parse(payloadText) as ContinuationSessionExecutionEnvelope;
+}
+
+export async function runContinuationNativeDistill(
+	input: ContinuationSessionExecutionInput,
 ): Promise<ExtractionResult> {
-  const systemInstruction = buildSystemInstruction(distillMode);
-  const userPrompt = buildUserPrompt(conversation, currentSlots);
-  
-  const totalPromptChars = systemInstruction.length + userPrompt.length;
-  console.log(`[LLMExtractor] Prompt size: ${totalPromptChars} chars`);
-  
-  try {
-    const response = await fetch(`${config.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.model,
-        messages: [
-          { role: "system", content: systemInstruction },
-          { role: "user", content: userPrompt }
-        ],
-        temperature: 0.2,
-      }),
-    });
+	const continuationCtx = input.continuation;
+	const resolvedDistillMode = input.distillMode;
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`LLM error: ${response.status} - ${errorText}`);
-    }
+	if (input.runtimeOptions?.enableLlmExtraction === false) {
+		return isolatedFailureResult(
+			"distill llm extraction disabled by runtime config",
+			continuationCtx,
+			resolvedDistillMode,
+		);
+	}
 
-    const data = await response.json() as OpenAIChatResponse;
-    const responseText = data.choices?.[0]?.message?.content;
-    
-    if (!responseText) {
-      console.error("[LLMExtractor] No content in response");
-      return EMPTY_RESULT;
-    }
-    
-    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      console.error("[LLMExtractor] No JSON found in response");
-      return EMPTY_RESULT;
-    }
-    
-    let result;
-    try {
-      result = JSON.parse(jsonMatch[0]);
-    } catch (parseError: any) {
-      console.error("[LLMExtractor] JSON parse error:", parseError.message);
-      return EMPTY_RESULT;
-    }
-    
-    const slotUpdates = (result.slot_updates || []).filter((s: any) => s.confidence >= 0.7);
-    const slotRemovals = result.slot_removals || [];
-    const vnContext = isVietnameseContext(conversation);
-    const rawMemories = (result.memories || []).filter((m: any) => m.confidence >= 0.7);
-    const memories = sanitizeExtractedMemories(rawMemories, vnContext);
-    
-    console.log(`[LLMExtractor] Extracted ${slotUpdates.length} updates, ${slotRemovals.length} removals, ${memories.length}/${rawMemories.length} memories (sanitized)`);
-    
-    return { slot_updates: slotUpdates, slot_removals: slotRemovals, memories: memories };
-  } catch (error) {
-    console.error("[LLMExtractor] Error:", error);
-    return EMPTY_RESULT;
-  }
+	const runtimeContract = input.runtimeOptions?.structuredContract;
+	if (!runtimeContract) {
+		return isolatedFailureResult(
+			"missing continuation structured contract",
+			continuationCtx,
+			resolvedDistillMode,
+		);
+	}
+
+	try {
+		const normalized = appendContinuationLog(
+			normalizeExtractionResult(runtimeContract),
+			continuationCtx,
+			resolvedDistillMode,
+		);
+		const contextSignals = detectActionableContextSignals(input.conversation);
+		if (countStructuredSignals(normalized) > 0) {
+			return normalized;
+		}
+
+		if (contextSignals.length > 0) {
+			return isolatedFailureResult(
+				`empty continuation structured contract for actionable context (signals=${formatContextSignals(contextSignals)}; source=continuation_structured_contract)`,
+				continuationCtx,
+				resolvedDistillMode,
+			);
+		}
+
+		return {
+			...normalized,
+			log_entries: [
+				...(normalized.log_entries || []),
+				{
+					level: "info",
+					text: "isolated continuation empty_result accepted reason=no_actionable_context",
+				},
+			],
+		};
+	} catch (error: any) {
+		return isolatedFailureResult(
+			`native continuation extraction exception: ${String(error?.message || error)}`,
+			continuationCtx,
+			resolvedDistillMode,
+		);
+	}
 }
 
-function buildSystemInstruction(distillMode: DistillMode = "general"): string {
-  return `You are a memory extraction assistant. Analyze conversations and extract/update/invalidate facts.
+export async function extractWithIsolatedContinuation(
+	conversation: string,
+	currentSlots: Record<string, Record<string, any>>,
+	distillMode?: DistillMode,
+	continuation?: IsolatedContinuationInput,
+	runtimeOptions?: IsolatedContinuationRuntimeOptions,
+): Promise<ExtractionResult> {
+	const continuationCtx = buildContinuationContext(continuation);
+	const resolvedDistillMode =
+		distillMode ||
+		inferDistillModeFromContext(continuationCtx.agentId, conversation);
 
-LANGUAGE RULE (PRIORITY):
-- If conversation contains Vietnamese context, memories[].text and slot_updates[].value MUST be in Vietnamese.
-- Never output English narrative for VN context; only keep technical tokens unchanged (endpoint, symbol, config key).
-- For mixed-language conversations with VN context, prefer Vietnamese and translate narrative meaning into Vietnamese.
-- Do NOT normalize Vietnamese content into English.
-
-YOUR 3 JOBS:
-1. EXTRACT new facts → slot_updates
-2. INVALIDATE outdated slots → slot_removals (CRITICAL - check currentSlots for stale data!)
-3. CAPTURE important context → memories
-
-SLOT INVALIDATION (NEW - MOST IMPORTANT):
-- Review currentSlots carefully. If conversation shows a task/phase is COMPLETED or CHANGED, add it to slot_removals.
-- Treat these keys as VOLATILE status keys and actively invalidate them when stale:
-  project.current, project.current_task, project.current_epic, project.phase, project.status
-- Trigger invalidation on phrases like: "đã xong", "đã hoàn thành", "done", "completed", "finished", "move to", "moved to", "next phase".
-- Examples of stale data to remove:
-  + project.current_task says "working on X" but conversation shows X is done
-  + project.current_epic says "Phase 10" but team moved to Phase 11
-  + project.phase says "10" but conversation says current phase is 11
-  + environment.current_time from yesterday
-  + Any slot that CONTRADICTS current conversation
-- IMPORTANT: when phase/task changes, prefer BOTH actions: remove stale slot(s) AND add updated slot value.
-- Be aggressive about removing outdated project/task status slots
-
-CATEGORIES: profile, preferences, project, environment, custom
-NAMESPACES: agent.<agent>.working_memory | agent.<agent>.lessons | agent.<agent>.decisions | shared.project_context | shared.rules_slotdb | shared.runbooks | noise.filtered
-
-CONFIDENCE: 0.9-1.0 explicit, 0.8-0.9 strongly implied, 0.7-0.8 inferred. Below 0.7: skip.
-
-DO NOT extract:
-- raw tool transcripts (exec/read/edit output), command logs, stack traces, file listings, HTTP payload dumps
-- routine greetings, insults, pure emotional reactions without decision impact
-- duplicate restatements of already-stored facts
-
-CONTEXT EXTRACTION PRIORITY (highest -> lowest):
-1) explicit decisions/approvals/rejections
-2) constraints/rules/non-negotiables
-3) configuration/runtime changes with concrete values
-4) task ownership, status transitions, blockers, ETAs
-5) risk/guard adjustments and rollout/rollback conditions
-
-CONTEXT QUALITY RULES:
-- If a statement only makes sense with nearby messages, rewrite as self-contained memory with the missing context included.
-- Prefer "because" clauses and trigger-condition clauses in memories (why + when it applies).
-- Keep causal links: "A changed -> B failed -> action C".
-- If conflicting statements exist in the same window, keep the latest and invalidate the stale slot.
-
-RESPONSE FORMAT (JSON only):
-{
-  "slot_updates": [{"key": "project.current_task", "value": "new task", "confidence": 0.9, "category": "project"}],
-  "slot_removals": [{"key": "project.current_task", "reason": "Task completed per conversation"}],
-  "memories": [{"text": "fact description", "namespace": "shared.project_context", "confidence": 0.85}]
-}
-
-DISTILL RULES (CRITICAL - apply to ALL outputs):
-- DISTILL, never summarize. Remove decoration/noise; keep decision-grade core.
-- memories[].text MUST be self-contained and operationally useful in isolation.
-- memory format target: "Context -> Decision/Rule -> Condition/Scope" in 1-2 sentences.
-- Preserve critical numbers, thresholds, symbols, time windows, and environment scope (prod/staging, mode paper/live).
-- If content is mostly noise, return no memory instead of weak memory.
-- slot_updates[].value: concise, actionable. Not "anh Công muốn backup trước khi sửa" -> "Rule: PHẢI backup config trước khi sửa openclaw.json"
-
-MODE-SPECIFIC DISTILL:
-${getDistillDirective(distillMode)}
-
-Return empty arrays if nothing to extract/remove. Quality over quantity.`;
-}
-
-function getDistillDirective(mode: DistillMode): string {
-  switch (mode) {
-    case "principles":
-      return [
-        "Extract invariant principles only.",
-        "Each memory: one principle in atomic form.",
-        "No examples, no anecdotes, no story.",
-      ].join("\n");
-    case "requirements":
-      return [
-        "Extract non-negotiable requirements and constraints.",
-        "Use implementable constraint wording.",
-        "Prefer measurable/observable constraints.",
-      ].join("\n");
-    case "market_signal":
-      return [
-        "Extract tradable market signals only.",
-        "Keep directional signal, risk level, trigger/action.",
-        "No macro storytelling, no generic education.",
-      ].join("\n");
-    case "general":
-    default:
-      return [
-        "Extract decision-grade facts and rules.",
-        "Keep technical details, configurations, constraints.",
-        "Remove conversational noise and pleasantries.",
-      ].join("\n");
-  }
-}
-
-function buildUserPrompt(
-  conversation: string,
-  currentSlots: Record<string, Record<string, any>>
-): string {
-  // Only include non-empty, non-hash slots
-  const filteredSlots: Record<string, Record<string, any>> = {};
-  for (const [cat, slots] of Object.entries(currentSlots)) {
-    const filtered: Record<string, any> = {};
-    for (const [key, value] of Object.entries(slots)) {
-      if (key.startsWith('_autocapture')) continue;
-      filtered[key] = value;
-    }
-    if (Object.keys(filtered).length > 0) {
-      filteredSlots[cat] = filtered;
-    }
-  }
-
-  return `CURRENT SLOTS (check for stale/outdated data):
-${JSON.stringify(filteredSlots, null, 2)}
-
-CONVERSATION TO ANALYZE:
----
-${conversation}
----
-
-Instructions:
-1. Extract NEW facts from conversation with context preservation.
-2. Check currentSlots and mark any OUTDATED/COMPLETED items in slot_removals.
-3. Audit volatile project keys: project.current, project.current_task, project.current_epic, project.phase, project.status.
-4. If a slot value should be UPDATED (not just removed), put new value in slot_updates.
-5. For each memory, include WHY/CONDITION when available (not just WHAT).
-6. Reject noisy/tool-dump content aggressively; quality over quantity.
-7. Return JSON only.`;
-}
-
-/**
- * Health check for LLM service
- */
-export async function checkLLMHealth(baseUrl: string, apiKey: string): Promise<boolean> {
-  try {
-    const response = await fetch(`${baseUrl}/models`, {
-      method: "GET",
-      headers: { "Authorization": `Bearer ${apiKey}` },
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
+	return runContinuationNativeDistill({
+		conversation,
+		currentSlots,
+		distillMode: resolvedDistillMode,
+		continuation: continuationCtx,
+		runtimeOptions,
+	});
 }

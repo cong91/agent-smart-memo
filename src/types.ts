@@ -102,6 +102,8 @@ export interface SearchParams {
 	sessionMode?: "strict" | "soft";
 	userId?: string;
 	minScore?: number;
+	includeDrafts?: boolean;
+	includeRaw?: boolean;
 }
 
 // Tool Output - Match AgentToolResult structure

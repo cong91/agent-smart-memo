@@ -1,0 +1,63 @@
+{
+  "timestamp": "2026-03-19T19:13:11.071Z",
+  "started_at": "2026-03-19T19:08:39.591Z",
+  "duration_ms": 271481,
+  "bridge": {
+    "name": "opencode-coding-runner",
+    "version": "v0-min",
+    "workstream": "coding_execution",
+    "rule": "bridge accepts only coding_execution"
+  },
+  "input": {
+    "task_id": "ASM-122",
+    "packet_path": null,
+    "packet_version": null,
+    "objective": "Không re-plan nữa. Dùng patch-plan đã có trong session này. Bắt đầu code thật Slice 1 = ASM-119 + ASM-121 bootstrap. Mục tiêu: (1) thống nhất namespace/scope contract nền; (2) dựng test bootstrap cho round-trip, alias parity, backward compatibility; (3) chạy test/build liên quan; (4) trả summary những file đã sửa, test đã chạy, blocker còn lại. Trả lời bằng tiếng Việt.",
+    "command": null,
+    "title": "ASM-122 slice1 coding resume smoke",
+    "resume_session_id": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "continue_mode": false,
+    "fork": false
+  },
+  "invocation": {
+    "command": "opencode",
+    "args": [
+      "run",
+      "--format",
+      "json",
+      "--dir",
+      "/Users/mrcagents/Work/projects/agent-smart-memo",
+      "--title",
+      "ASM-122 slice1 coding resume smoke",
+      "--session",
+      "ses_2f891d808ffeYi94e0h5pGTsGy",
+      "Không re-plan nữa. Dùng patch-plan đã có trong session này. Bắt đầu code thật Slice 1 = ASM-119 + ASM-121 bootstrap. Mục tiêu: (1) thống nhất namespace/scope contract nền; (2) dựng test bootstrap cho round-trip, alias parity, backward compatibility; (3) chạy test/build liên quan; (4) trả summary những file đã sửa, test đã chạy, blocker còn lại. Trả lời bằng tiếng Việt."
+    ],
+    "rendered": "opencode run --format json --dir /Users/mrcagents/Work/projects/agent-smart-memo --title ASM-122 slice1 coding resume smoke --session ses_2f891d808ffeYi94e0h5pGTsGy Không re-plan nữa. Dùng patch-plan đã có trong session này. Bắt đầu code thật Slice 1 = ASM-119 + ASM-121 bootstrap. Mục tiêu: (1) thống nhất namespace/scope contract nền; (2) dựng test bootstrap cho round-trip, alias parity, backward compatibility; (3) chạy test/build liên quan; (4) trả summary những file đã sửa, test đã chạy, blocker còn lại. Trả lời bằng tiếng Việt.",
+    "cwd": "/Users/mrcagents/Work/projects/agent-smart-memo"
+  },
+  "opencode": {
+    "agent": null,
+    "model": null,
+    "session_id_input": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "continue_mode": false,
+    "fork": false,
+    "title": "ASM-122 slice1 coding resume smoke",
+    "session_id": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "event_count": 61
+  },
+  "process": {
+    "exit_code": 0,
+    "signal": null
+  },
+  "result": {
+    "status": "success",
+    "error": null,
+    "stdout_preview": "{\"type\":\"step_start\",\"timestamp\":1773947348275,\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"part\":{\"id\":\"prt_d07806531001XkUeVV5XI9NCl6\",\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"messageID\":\"msg_d0780012a001zp9IKcj2d4lqSW\",\"type\":\"step-start\",\"snapshot\":\"d04283ce6417306ac44b8c82db7e7c66366e3cc9\"}}\n{\"type\":\"tool_use\",\"timestamp\":1773947348277,\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"part\":{\"id\":\"prt_d078065340011TqOKWxU5ic8xV\",\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"messageID\":\"msg_d0780012a001zp9IKcj2d4lqSW\",\"type\":\"tool\",\"callID\":\"call_4q39jP32OFluYbPoNc6ezo3H\",\"tool\":\"todowrite\",\"state\":{\"status\":\"completed\",\"input\":{\"todos\":[{\"content\":\"Implement Slice 1 contract v2 defaults (ASM-119) in memory-config + tool/usecase payloads\",\"status\":\"in_progress\",\"priority\":\"high\"},{\"content\":\"Bootstrap ASM-121 tests for round-trip, alias parity, backward compatibility\",\"status\":\"pending\",\"priority\":\"high\"},{\"content\":\"Run targeted tests/build for modified memory paths\",\"status\":\"p",
+    "stderr_preview": ""
+  },
+  "evidence": {
+    "git_commit": "3e68b917c7ebb1c3ed278b069eaa8e3b110a69fa",
+    "output_file": "/Users/mrcagents/Work/projects/agent-smart-memo/artifacts/asm-122/opencode-asm-122-resume-smoke.json"
+  }
+}

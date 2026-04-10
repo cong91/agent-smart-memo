@@ -1,0 +1,18 @@
+Execution packet: export+mapping bead
+
+Primary deliverable candidates:
+- src/scripts/export-qdrant-to-json.ts (or similar)
+- docs section or standalone mapping spec document
+
+Minimum script requirements:
+- connect to configured Qdrant collection
+- dump semantic memory records in deterministic format
+- include text, namespace, timestamp, source_agent, session/user ids, metadata if present
+- dry-run friendly
+
+Minimum mapping spec requirements:
+- canonical grouping logic by topic/page
+- examples of destination pages
+- no one-record-one-file behavior
+
+This bead is the concrete preparatory step before full migration execution.

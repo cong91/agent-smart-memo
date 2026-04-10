@@ -1,0 +1,63 @@
+{
+  "timestamp": "2026-03-19T19:52:10.058Z",
+  "started_at": "2026-03-19T19:48:10.797Z",
+  "duration_ms": 239261,
+  "bridge": {
+    "name": "opencode-coding-runner",
+    "version": "v0-min",
+    "workstream": "coding_execution",
+    "rule": "bridge accepts only coding_execution"
+  },
+  "input": {
+    "task_id": "ASM-122",
+    "packet_path": null,
+    "packet_version": null,
+    "objective": "Không re-plan. Dùng patch-plan đã có trong session này. Bây giờ code ASM-120: unify auto-recall và tool search theo retrieval policy chung, tránh drift giữa tool path và hook/usecase path. Chạy test/build liên quan và trả summary file sửa, test/build, blocker, readiness để expand ASM-121.",
+    "command": null,
+    "title": "ASM-122 slice3 ASM-120 retrieval policy parity",
+    "resume_session_id": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "continue_mode": false,
+    "fork": false
+  },
+  "invocation": {
+    "command": "opencode",
+    "args": [
+      "run",
+      "--format",
+      "json",
+      "--dir",
+      "/Users/mrcagents/Work/projects/agent-smart-memo",
+      "--title",
+      "ASM-122 slice3 ASM-120 retrieval policy parity",
+      "--session",
+      "ses_2f891d808ffeYi94e0h5pGTsGy",
+      "Không re-plan. Dùng patch-plan đã có trong session này. Bây giờ code ASM-120: unify auto-recall và tool search theo retrieval policy chung, tránh drift giữa tool path và hook/usecase path. Chạy test/build liên quan và trả summary file sửa, test/build, blocker, readiness để expand ASM-121."
+    ],
+    "rendered": "opencode run --format json --dir /Users/mrcagents/Work/projects/agent-smart-memo --title ASM-122 slice3 ASM-120 retrieval policy parity --session ses_2f891d808ffeYi94e0h5pGTsGy Không re-plan. Dùng patch-plan đã có trong session này. Bây giờ code ASM-120: unify auto-recall và tool search theo retrieval policy chung, tránh drift giữa tool path và hook/usecase path. Chạy test/build liên quan và trả summary file sửa, test/build, blocker, readiness để expand ASM-121.",
+    "cwd": "/Users/mrcagents/Work/projects/agent-smart-memo"
+  },
+  "opencode": {
+    "agent": null,
+    "model": null,
+    "session_id_input": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "continue_mode": false,
+    "fork": false,
+    "title": "ASM-122 slice3 ASM-120 retrieval policy parity",
+    "session_id": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "event_count": 52
+  },
+  "process": {
+    "exit_code": 0,
+    "signal": null
+  },
+  "result": {
+    "status": "success",
+    "error": null,
+    "stdout_preview": "{\"type\":\"step_start\",\"timestamp\":1773949715578,\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"part\":{\"id\":\"prt_d07a48479001ShGTpWnpdkSZX7\",\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"messageID\":\"msg_d07a42fb0001pldnxaZb7kdoZ5\",\"type\":\"step-start\",\"snapshot\":\"d9aa73255c9062bb1f43256f17024241e1afb5ff\"}}\n{\"type\":\"tool_use\",\"timestamp\":1773949715580,\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"part\":{\"id\":\"prt_d07a4847b001MnCGTH98wOR0yK\",\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"messageID\":\"msg_d07a42fb0001pldnxaZb7kdoZ5\",\"type\":\"tool\",\"callID\":\"call_6mrKmmG4rke4GUZEYsryvHxm\",\"tool\":\"todowrite\",\"state\":{\"status\":\"completed\",\"input\":{\"todos\":[{\"content\":\"Re-verify ASM-120 unified retrieval policy across tool/usecase/auto-recall\",\"status\":\"in_progress\",\"priority\":\"high\"},{\"content\":\"Run ASM-120 related tests and build\",\"status\":\"pending\",\"priority\":\"high\"},{\"content\":\"Summarize modified files, blockers, readiness for ASM-121 expansion\",\"status\":\"pending\",\"priority\":\"high\"}]},\"output\":\"",
+    "stderr_preview": ""
+  },
+  "evidence": {
+    "git_commit": "3e68b917c7ebb1c3ed278b069eaa8e3b110a69fa",
+    "output_file": "/Users/mrcagents/Work/projects/agent-smart-memo/artifacts/asm-122/asm-120.json"
+  }
+}

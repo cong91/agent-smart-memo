@@ -1,0 +1,31 @@
+This bead owns migration of the semantic memory layer from Qdrant to Wiki.
+
+Scope boundaries:
+- In scope: Qdrant-stored semantic memory currently used by memory_store / memory_search / auto-recall.
+- Out of scope: canonical project index artifacts and structured project/code-aware query engine.
+
+Migration phases:
+1. Parallel phase
+- Keep Qdrant writes alive
+- Start writing wiki pages in parallel
+- Compare outputs for quality and gaps
+
+2. Wiki-first phase
+- Retrieve from wiki first
+- Keep Qdrant as fallback only
+- Observe regressions / missing memory classes
+
+3. Cutover
+- Export Qdrant points
+- Group by canonical topic/page
+- Batch-ingest into wiki pages
+- Verify quality / coverage
+- Freeze Qdrant writes
+- Keep backup for rollback
+
+Key migration rule:
+NEVER map one Qdrant point to one markdown file.
+Instead group by canonical destination:
+- session summaries -> sessions/day pages
+- runbooks/lessons -> concepts/decision pages
+- stable preferences / agent context -> entities/ or project pages

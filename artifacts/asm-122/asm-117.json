@@ -1,0 +1,63 @@
+{
+  "timestamp": "2026-03-20T01:29:52.428Z",
+  "started_at": "2026-03-20T01:26:02.170Z",
+  "duration_ms": 230258,
+  "bridge": {
+    "name": "opencode-coding-runner",
+    "version": "v0-min",
+    "workstream": "coding_execution",
+    "rule": "bridge accepts only coding_execution"
+  },
+  "input": {
+    "task_id": "ASM-122",
+    "packet_path": null,
+    "packet_version": null,
+    "objective": "Không re-plan. Dùng patch-plan đã có trong session này. Bây giờ làm ASM-117: precedence rules giữa SlotDB, semantic memory và graph/context. Chốt current truth = SlotDB, semantic = evidence/history/lesson, graph = routing/ranking support. Yêu cầu phải có evidence code-level thật: sửa file thật, thêm/điều chỉnh policy merge/injection thật, thêm test/verification cho precedence thật, chạy test/build liên quan, và trả summary rất cụ thể gồm file đã sửa, test/build đã chạy, blocker còn lại, readiness để sang ASM-116. Trả lời bằng tiếng Việt.",
+    "command": null,
+    "title": "ASM-122 slice6 ASM-117 precedence policy",
+    "resume_session_id": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "continue_mode": false,
+    "fork": false
+  },
+  "invocation": {
+    "command": "opencode",
+    "args": [
+      "run",
+      "--format",
+      "json",
+      "--dir",
+      "/Users/mrcagents/Work/projects/agent-smart-memo",
+      "--title",
+      "ASM-122 slice6 ASM-117 precedence policy",
+      "--session",
+      "ses_2f891d808ffeYi94e0h5pGTsGy",
+      "Không re-plan. Dùng patch-plan đã có trong session này. Bây giờ làm ASM-117: precedence rules giữa SlotDB, semantic memory và graph/context. Chốt current truth = SlotDB, semantic = evidence/history/lesson, graph = routing/ranking support. Yêu cầu phải có evidence code-level thật: sửa file thật, thêm/điều chỉnh policy merge/injection thật, thêm test/verification cho precedence thật, chạy test/build liên quan, và trả summary rất cụ thể gồm file đã sửa, test/build đã chạy, blocker còn lại, readiness để sang ASM-116. Trả lời bằng tiếng Việt."
+    ],
+    "rendered": "opencode run --format json --dir /Users/mrcagents/Work/projects/agent-smart-memo --title ASM-122 slice6 ASM-117 precedence policy --session ses_2f891d808ffeYi94e0h5pGTsGy Không re-plan. Dùng patch-plan đã có trong session này. Bây giờ làm ASM-117: precedence rules giữa SlotDB, semantic memory và graph/context. Chốt current truth = SlotDB, semantic = evidence/history/lesson, graph = routing/ranking support. Yêu cầu phải có evidence code-level thật: sửa file thật, thêm/điều chỉnh policy merge/injection thật, thêm test/verification cho precedence thật, chạy test/build liên quan, và trả summary rất cụ thể gồm file đã sửa, test/build đã chạy, blocker còn lại, readiness để sang ASM-116. Trả lời bằng tiếng Việt.",
+    "cwd": "/Users/mrcagents/Work/projects/agent-smart-memo"
+  },
+  "opencode": {
+    "agent": null,
+    "model": null,
+    "session_id_input": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "continue_mode": false,
+    "fork": false,
+    "title": "ASM-122 slice6 ASM-117 precedence policy",
+    "session_id": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "event_count": 49
+  },
+  "process": {
+    "exit_code": 0,
+    "signal": null
+  },
+  "result": {
+    "status": "success",
+    "error": null,
+    "stdout_preview": "{\"type\":\"step_start\",\"timestamp\":1773969984689,\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"part\":{\"id\":\"prt_d08d9ccb0001lOLndQxmi5PGHU\",\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"messageID\":\"msg_d08d97f87001hB4XQs342SmESM\",\"type\":\"step-start\",\"snapshot\":\"4e289e2e4674d1a7118afbed34e37b3e402a54cd\"}}\n{\"type\":\"tool_use\",\"timestamp\":1773969984695,\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"part\":{\"id\":\"prt_d08d9ccb20015snNK8GlHaOpSK\",\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"messageID\":\"msg_d08d97f87001hB4XQs342SmESM\",\"type\":\"tool\",\"callID\":\"call_ta5raYlF0UsqHYQvfFn5Oar9\",\"tool\":\"todowrite\",\"state\":{\"status\":\"completed\",\"input\":{\"todos\":[{\"content\":\"Implement ASM-117 precedence policy: SlotDB truth > semantic evidence > graph routing support\",\"status\":\"in_progress\",\"priority\":\"high\"},{\"content\":\"Apply precedence merge/injection changes in recall/context codepaths\",\"status\":\"pending\",\"priority\":\"high\"},{\"content\":\"Add precedence-focused tests and run targeted verification/build\",\"",
+    "stderr_preview": ""
+  },
+  "evidence": {
+    "git_commit": "3e68b917c7ebb1c3ed278b069eaa8e3b110a69fa",
+    "output_file": "/Users/mrcagents/Work/projects/agent-smart-memo/artifacts/asm-122/asm-117.json"
+  }
+}

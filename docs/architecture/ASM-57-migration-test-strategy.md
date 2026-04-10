@@ -1,7 +1,9 @@
 # ASM-57 — Migration & test strategy cho ASM refactor
 
+> **Historical note (2026-04-09, bead agent-smart-memo-r4t.26):** Paperclip support was removed from active ASM runtime/package/test surfaces. Any Paperclip references below are archived design history, not current supported runtime behavior.
+
 > Issue: ASM-57 (Sub-task của ASM-43)
-> 
+>
 > Strategy: `code_with_build` (ra tài liệu triển khai + verify build để đảm bảo baseline không vỡ)
 
 ## 1) Mục tiêu
@@ -9,6 +11,7 @@
 Thiết kế kế hoạch migration theo pha cho refactor kiến trúc ASM (core/services/adapters), đồng thời chốt test strategy và checklist rollout/rollback để giảm rủi ro breaking change.
 
 Mục tiêu cụ thể:
+
 - Có lộ trình migration rõ ràng, incremental, có điểm kiểm soát.
 - Có chiến lược test theo tầng: unit, integration, contract, regression.
 - Có tiêu chí go/no-go trước khi bật strict mode và trước khi deprecate đường cũ.
@@ -30,12 +33,14 @@ ASM-57 dùng các baseline trên để chốt **kế hoạch migration thực th
 **Mục tiêu**: đóng băng contract baseline trước khi đổi runtime.
 
 Deliverables:
+
 - Danh sách contract chuẩn dùng chung:
   - `MemoryContext`, `MemoryNamespace`, `MemoryError`, `CapabilityKey`.
 - Inventory các API/hook/tool đang public (wire shape hiện tại) để chống drift.
 - Mapping matrix `legacy input -> canonical contract`.
 
 Exit criteria:
+
 - Không đổi runtime behavior.
 - Có test contract snapshot cho payload chính.
 
@@ -44,11 +49,13 @@ Exit criteria:
 **Mục tiêu**: thêm adapter map input cũ sang use-case port mới, giữ wire behavior cũ.
 
 Deliverables:
+
 - `openclaw-compat-adapter` (nếu chưa complete theo ASM-55).
 - `paperclip-compat-adapter` skeleton theo ASM-56.
 - `error-presenter` chuẩn hoá lỗi theo `MemoryError`.
 
 Exit criteria:
+
 - Caller hiện tại không cần đổi code.
 - Tỷ lệ pass regression contract >= 100% cho golden payloads.
 
@@ -57,12 +64,14 @@ Exit criteria:
 **Mục tiêu**: chuyển dần logic nội bộ sang `MemoryUseCasePort` + registry resolve.
 
 Deliverables:
+
 - Thay thế direct dependency access bằng registry capability resolution.
 - Thêm telemetry event:
   - `registry.resolve` (key, scope, outcome, latency)
   - `namespace.validate` (status, violation)
 
 Exit criteria:
+
 - Build xanh, unit/integration pass.
 - Không tăng lỗi runtime vượt ngân sách (error budget) đã định.
 
@@ -71,6 +80,7 @@ Exit criteria:
 **Mục tiêu**: bật validate chặt cho namespace/context nhưng có kill-switch.
 
 Deliverables:
+
 - Feature flags đề xuất:
   - `ASM_STRICT_NAMESPACE_VALIDATION`
   - `ASM_STRICT_CONTEXT_VALIDATION`
@@ -78,6 +88,7 @@ Deliverables:
 - Runbook bật/tắt theo tenant/session (nếu có scope).
 
 Exit criteria:
+
 - Canary pass theo KPI.
 - No P0/P1 incidents trong cửa sổ theo dõi.
 
@@ -86,11 +97,13 @@ Exit criteria:
 **Mục tiêu**: loại bỏ đường cũ khi ổn định.
 
 Deliverables:
+
 - Deprecation notice (versioned) + timeline.
 - Gỡ bypass path legacy đã có đường thay thế.
 - Cập nhật README/ops docs.
 
 Exit criteria:
+
 - Error rate trong ngưỡng ổn định.
 - Adoption contract mới đạt target.
 
@@ -99,6 +112,7 @@ Exit criteria:
 ## 4.1 Unit tests
 
 Phạm vi:
+
 - Mapper tests:
   - context mapper (OpenClaw/Paperclip -> `MemoryContext`)
   - namespace mapper (legacy -> canonical)
@@ -108,39 +122,46 @@ Phạm vi:
   - conflict handling (`REGISTRY_CONFLICT`)
 
 Tiêu chí:
+
 - Branch coverage ưu tiên các đường lỗi/edge cases.
 - Bắt buộc test cho reserved namespace (`system.*`) và `category=custom`.
 
 ## 4.2 Integration tests
 
 Phạm vi:
+
 - Adapter -> UseCasePort -> store path (happy + sad path).
 - Feature-flag behavior (strict on/off).
 - Retry/idempotency (nếu bật ở adapter/service).
 
 Tiêu chí:
+
 - Có scenario timeout/transient error để verify retry policy không gây duplicate side-effects.
 - Có scenario missing context/namespace invalid.
 
 ## 4.3 Contract tests (anti-drift)
 
 Phạm vi:
+
 - Golden payload tests cho public tools/API hiện hữu:
   - `memory_slot_set/get/list/delete`
   - graph-related payload shape
 - Snapshot response shape cho từng adapter runtime (OpenClaw/Paperclip).
 
 Tiêu chí:
+
 - Contract tests là gate bắt buộc trước merge.
 - Mọi thay đổi payload phải đi kèm migration note và version bump phù hợp.
 
 ## 4.4 Regression & compatibility tests
 
 Phạm vi:
+
 - Chạy bộ smoke/regression ở chế độ legacy + strict mode.
 - So sánh outcome (`status`, `error_code`, side-effects) giữa trước/sau migration.
 
 Tiêu chí:
+
 - Không regression ở hành vi đã cam kết.
 - Nếu khác biệt có chủ đích phải có changelog + deprecation note.
 
@@ -156,16 +177,20 @@ Tiêu chí:
 ## 6) Rollback strategy
 
 Rollback cấp 1 (nhanh):
+
 - Tắt `ASM_STRICT_*` flags về chế độ compatibility.
 
 Rollback cấp 2 (adapter):
+
 - Tắt `ASM_ADAPTER_PAPERCLIP_ENABLED` để quay về OpenClaw-only path.
 
 Rollback cấp 3 (release):
+
 - Revert release về commit ổn định trước migration.
 - Chạy lại contract smoke để xác nhận recovery.
 
 Điều kiện kích hoạt rollback:
+
 - Tăng đột biến `INTERNAL_ERROR`/`COMPAT_MAPPING_FAILED`.
 - SLA latency vượt ngưỡng liên tục theo cửa sổ quan sát.
 - Phát hiện data corruption hoặc duplicate side-effects.
@@ -173,12 +198,14 @@ Rollback cấp 3 (release):
 ## 7) Go / No-Go criteria
 
 ## Go
+
 - Build + test gates pass.
 - Contract regression pass 100% cho golden payloads.
 - Canary đạt KPI (error rate, latency, retry outcome) trong ngưỡng.
 - Có runbook rollback đã kiểm thử.
 
 ## No-Go
+
 - Còn mismatch contract chưa có migration note.
 - Chưa có telemetry tối thiểu hoặc không đọc được outcome theo trace.
 - Tồn tại P1/P0 chưa đóng liên quan mapping/error normalization.

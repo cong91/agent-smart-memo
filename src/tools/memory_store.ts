@@ -1,6 +1,5 @@
-import type { DeduplicationService } from "../services/dedupe.js";
-import type { EmbeddingClient } from "../services/embedding.js";
-import type { QdrantClient } from "../services/qdrant.js";
+import { MEMORY_FOUNDATION_SCHEMA_VERSION } from "../core/migrations/memory-foundation-migration.js";
+import { writeWikiMemoryCapture } from "../core/usecases/semantic-memory-usecase.js";
 import {
 	evaluateNoiseV2,
 	normalizeNamespace,
@@ -10,13 +9,7 @@ import {
 	resolveMemoryTypeFromNamespace,
 	toCoreAgent,
 } from "../shared/memory-config.js";
-import type {
-	MemoryNamespace,
-	Point,
-	StoreParams,
-	ToolResult,
-} from "../types.js";
-import { MEMORY_FOUNDATION_SCHEMA_VERSION } from "../core/migrations/memory-foundation-migration.js";
+import type { MemoryNamespace, StoreParams, ToolResult } from "../types.js";
 
 function resolveAgentFromRuntimeParams(params: {
 	agentId?: string;
@@ -78,12 +71,7 @@ export const memoryStoreSchema = {
 	required: ["text"],
 };
 
-export function createMemoryStoreTool(
-	qdrant: QdrantClient,
-	embedding: EmbeddingClient,
-	dedupe: DeduplicationService,
-	defaultNamespace: MemoryNamespace,
-) {
+export function createMemoryStoreTool(defaultNamespace: MemoryNamespace) {
 	const createDetails = (
 		text: string,
 		extra: Record<string, unknown> = {},
@@ -96,7 +84,7 @@ export function createMemoryStoreTool(
 		name: "memory_store",
 		label: "Memory Store",
 		description:
-			"Store a memory in the vector database. Automatically deduplicates similar content.",
+			"Store a memory in ASM wiki memory. Automatically deduplicates by canonical grouped page.",
 		parameters: memoryStoreSchema,
 
 		async execute(
@@ -169,111 +157,40 @@ export function createMemoryStoreTool(
 				const promotionState = "raw" as const;
 				const defaultConfidence = resolveDefaultConfidence("tool_call");
 
-				// Generate embedding (chunking + weighted average)
-				const embeddingResult =
-					typeof (embedding as any).embedDetailed === "function"
-						? await (embedding as any).embedDetailed(text)
-						: {
-								vector: await embedding.embed(text),
-								metadata: {
-									embedding_chunked: false,
-									embedding_chunks_count: 1,
-									embedding_chunking_strategy: "array_batch_weighted_avg",
-									embedding_model: "unknown",
-									embedding_model_key: "unknown",
-									embedding_provider: "auto",
-									embedding_max_tokens: 0,
-									embedding_safe_chunk_tokens: 0,
-									embedding_source: "docs",
-									embedding_fallback_hash: false,
-								},
-							};
-				const vector = embeddingResult.vector;
-
-				// Check for duplicates
-				const candidates = await qdrant.search(vector, 5, {
-					must: [{ key: "namespace", match: { value: namespace } }],
+				const wikiWrite = writeWikiMemoryCapture({
+					text,
+					namespace,
+					sourceAgent,
+					sourceType: "tool_call",
+					memoryScope,
+					memoryType,
+					confidence: defaultConfidence,
+					sessionId: params.sessionId || undefined,
+					userId: params.userId || undefined,
+					metadata: {
+						schema_version: MEMORY_FOUNDATION_SCHEMA_VERSION,
+						promotion_state: promotionState,
+						noise_score: noise.score,
+						noise_matched_patterns: noise.matchedPatterns,
+						...(params.metadata || {}),
+					},
 				});
 
-				const duplicateId = dedupe.findDuplicate(text, candidates);
-
-				if (duplicateId) {
-					// Update existing memory
-					const point: Point = {
-						id: duplicateId,
-						vector,
-						payload: {
-							text,
-							namespace,
-							agent: sourceAgent,
-							source_agent: sourceAgent,
-							schema_version: MEMORY_FOUNDATION_SCHEMA_VERSION,
-							source_type: "tool_call" as const,
-							memory_scope: memoryScope,
-							memory_type: memoryType,
-							promotion_state: promotionState,
-							confidence: defaultConfidence,
-							sessionId: params.sessionId || null,
-							userId: params.userId || null,
-							metadata: {
-								...(params.metadata || {}),
-								...embeddingResult.metadata,
-								noise_score: noise.score,
-								noise_matched_patterns: noise.matchedPatterns,
-							},
-							...embeddingResult.metadata,
-							timestamp: Date.now(),
-							noise_score: noise.score,
-							updatedAt: Date.now(),
-						},
-					};
-
-					await qdrant.upsert([point]);
-
-					const textOut = `Memory updated (duplicate detected, ID: ${duplicateId})`;
-					return {
-						content: [{ type: "text", text: textOut }],
-						details: createDetails(textOut, { id: duplicateId, updated: true }),
-					};
-				}
-
-				// Create new memory with UUID v4
-				const id = crypto.randomUUID();
-
-				const point: Point = {
-					id,
-					vector,
-					payload: {
-						text,
-						namespace,
-						agent: sourceAgent,
-						source_agent: sourceAgent,
-						schema_version: MEMORY_FOUNDATION_SCHEMA_VERSION,
-						source_type: "tool_call" as const,
-						memory_scope: memoryScope,
-						memory_type: memoryType,
-						promotion_state: promotionState,
-						confidence: defaultConfidence,
-						sessionId: params.sessionId || null,
-						userId: params.userId || null,
-						metadata: {
-							...(params.metadata || {}),
-							...embeddingResult.metadata,
-							noise_score: noise.score,
-							noise_matched_patterns: noise.matchedPatterns,
-						},
-						...embeddingResult.metadata,
-						timestamp: Date.now(),
-						noise_score: noise.score,
-					},
-				};
-
-				await qdrant.upsert([point]);
-
-				const textOut = `Memory stored successfully (ID: ${id})`;
+				const textOut = wikiWrite.updated
+					? `Memory updated (duplicate detected, ID: ${wikiWrite.id})`
+					: `Memory stored successfully (ID: ${wikiWrite.id})`;
 				return {
 					content: [{ type: "text", text: textOut }],
-					details: createDetails(textOut, { id, created: true }),
+					details: createDetails(textOut, {
+						id: wikiWrite.id,
+						created: wikiWrite.created,
+						updated: wikiWrite.updated,
+						wiki: {
+							rawPath: wikiWrite.rawPath,
+							livePath: wikiWrite.livePath,
+							briefingPath: wikiWrite.briefingPath,
+						},
+					}),
 				};
 			} catch (error: any) {
 				const textOut = `Error storing memory: ${error.message}`;

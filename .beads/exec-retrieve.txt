@@ -1,0 +1,26 @@
+Execution packet: retrieve bead
+
+Primary code touchpoints to inspect/patch:
+- src/tools/memory_search.ts
+- src/hooks/auto-recall.ts
+- src/core/usecases/semantic-memory-usecase.ts (replace/bridge)
+- src/core/retrieval-policy.ts
+- src/shared/memory-config.ts
+
+Target behavior:
+1. Determine query route.
+2. Read SlotDB/current state first where relevant.
+3. If project/code-aware query, call canonical project index layer first.
+4. Read wiki briefings/index/live pages.
+5. Return recall-safe synthesis.
+
+Implementation direction:
+- Introduce a wiki retrieval helper/usecase instead of embedding->Qdrant search.
+- Keep current routing/precedence semantics as much as possible.
+- Replace semantic result selection with page selection from briefing/index/live.
+- Preserve existing suppression/guard ideas where useful, but avoid adding large new frameworks in phase 1.
+
+Acceptance refinement:
+- memory_search primary path no longer depends on embedding/Qdrant.
+- auto-recall can build injected context from wiki files.
+- project-aware/canonical facts remain sourced from existing project index pipeline.

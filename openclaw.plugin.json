@@ -1,20 +1,36 @@
 {
-  "id": "agent-smart-memo",
-  "kind": "memory",
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {
-      "asmConfigPath": {
-        "type": "string",
-        "description": "Path to shared ASM config source-of-truth used by the OpenClaw plugin runtime."
-      }
-    }
-  },
-  "uiHints": {
-    "asmConfigPath": {
-      "label": "ASM Config Path",
-      "placeholder": "/Users/you/.config/asm/config.json"
-    }
-  }
+	"id": "agent-smart-memo",
+	"kind": "memory",
+	"configSchema": {
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"projectWorkspaceRoot": {
+				"type": "string",
+				"description": "Project workspace root path used by ASM runtime."
+			},
+			"slotDbDir": {
+				"type": "string",
+				"description": "SlotDB directory used by ASM runtime."
+			},
+			"wikiDir": {
+				"type": "string",
+				"description": "Wiki memory directory used by ASM runtime (qmdRoot is derived internally)."
+			}
+		}
+	},
+	"uiHints": {
+		"projectWorkspaceRoot": {
+			"label": "Project Workspace Root",
+			"placeholder": "/Users/you/Work/projects"
+		},
+		"slotDbDir": {
+			"label": "SlotDB Directory",
+			"placeholder": "/Users/you/.openclaw/agent-memo"
+		},
+		"wikiDir": {
+			"label": "Wiki Directory",
+			"placeholder": "/Users/you/Work/projects/agent-smart-memo/memory/wiki"
+		}
+	}
 }

@@ -1,0 +1,11 @@
+This bead owns the new retrieval path replacing vector semantic recall.
+
+Required retrieval order:
+1. SlotDB / runtime state first for current-session or current-focus questions.
+2. Canonical project index first for project-aware/code-aware queries (repo files, related files, source_rev, subsystem facts, provenance).
+3. Wiki briefings + index + selected live pages for semantic/project-understanding recall.
+
+Important guardrails:
+- Wiki must not replace or override source-of-truth project facts.
+- Briefings are short context packs; live pages hold richer memory; raw is not default recall material.
+- For phase 1, retrieval may simply use index.md plus live page traversal. If scale becomes too large, add BM25/qmd/ripgrep prefilter, but keep wiki pages as the truth layer.

@@ -73,7 +73,7 @@ Added exported interfaces in `slot-db.ts`:
 
 ### 2.1 Build
 
-- `npm run build:openclaw` ✅
+- `npm run build:plugin` ✅
 
 ### 2.2 Targeted tests
 

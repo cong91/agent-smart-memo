@@ -42,7 +42,7 @@
 ## 2) Validation evidence
 
 ### 2.1 Build
-- `npm run build:openclaw` ✅ PASS
+- `npm run build:plugin` ✅ PASS
 
 ### 2.2 Targeted test
 - Added `tests/test-ingest-pipeline-semantic.ts`

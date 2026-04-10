@@ -1,0 +1,63 @@
+{
+  "timestamp": "2026-03-20T01:53:46.285Z",
+  "started_at": "2026-03-20T01:45:48.182Z",
+  "duration_ms": 478104,
+  "bridge": {
+    "name": "opencode-coding-runner",
+    "version": "v0-min",
+    "workstream": "coding_execution",
+    "rule": "bridge accepts only coding_execution"
+  },
+  "input": {
+    "task_id": "ASM-122",
+    "packet_path": null,
+    "packet_version": null,
+    "objective": "Không re-plan. Dùng patch-plan đã có trong session này. Bây giờ làm ASM-116: promotion pipeline raw -> distilled -> promoted dựa trên nền contract/retrieval/precedence đã có. Yêu cầu phải có evidence code-level thật: sửa file thật, thêm/điều chỉnh lifecycle promotion_state và memory_type thật, tránh phình auto-capture vô tổ chức, ưu tiên tách module/service sạch. Thêm test/verification cho transition raw/distilled/promoted và ưu tiên promoted > raw trong retrieval nếu nền đã đủ. Chạy test/build liên quan và trả summary cụ thể gồm file sửa, test/build đã chạy, blocker còn lại, và đánh giá readiness toàn epic ASM-122. Trả lời bằng tiếng Việt.",
+    "command": null,
+    "title": "ASM-122 slice7 ASM-116 promotion pipeline",
+    "resume_session_id": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "continue_mode": false,
+    "fork": false
+  },
+  "invocation": {
+    "command": "opencode",
+    "args": [
+      "run",
+      "--format",
+      "json",
+      "--dir",
+      "/Users/mrcagents/Work/projects/agent-smart-memo",
+      "--title",
+      "ASM-122 slice7 ASM-116 promotion pipeline",
+      "--session",
+      "ses_2f891d808ffeYi94e0h5pGTsGy",
+      "Không re-plan. Dùng patch-plan đã có trong session này. Bây giờ làm ASM-116: promotion pipeline raw -> distilled -> promoted dựa trên nền contract/retrieval/precedence đã có. Yêu cầu phải có evidence code-level thật: sửa file thật, thêm/điều chỉnh lifecycle promotion_state và memory_type thật, tránh phình auto-capture vô tổ chức, ưu tiên tách module/service sạch. Thêm test/verification cho transition raw/distilled/promoted và ưu tiên promoted > raw trong retrieval nếu nền đã đủ. Chạy test/build liên quan và trả summary cụ thể gồm file sửa, test/build đã chạy, blocker còn lại, và đánh giá readiness toàn epic ASM-122. Trả lời bằng tiếng Việt."
+    ],
+    "rendered": "opencode run --format json --dir /Users/mrcagents/Work/projects/agent-smart-memo --title ASM-122 slice7 ASM-116 promotion pipeline --session ses_2f891d808ffeYi94e0h5pGTsGy Không re-plan. Dùng patch-plan đã có trong session này. Bây giờ làm ASM-116: promotion pipeline raw -> distilled -> promoted dựa trên nền contract/retrieval/precedence đã có. Yêu cầu phải có evidence code-level thật: sửa file thật, thêm/điều chỉnh lifecycle promotion_state và memory_type thật, tránh phình auto-capture vô tổ chức, ưu tiên tách module/service sạch. Thêm test/verification cho transition raw/distilled/promoted và ưu tiên promoted > raw trong retrieval nếu nền đã đủ. Chạy test/build liên quan và trả summary cụ thể gồm file sửa, test/build đã chạy, blocker còn lại, và đánh giá readiness toàn epic ASM-122. Trả lời bằng tiếng Việt.",
+    "cwd": "/Users/mrcagents/Work/projects/agent-smart-memo"
+  },
+  "opencode": {
+    "agent": null,
+    "model": null,
+    "session_id_input": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "continue_mode": false,
+    "fork": false,
+    "title": "ASM-122 slice7 ASM-116 promotion pipeline",
+    "session_id": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "event_count": 98
+  },
+  "process": {
+    "exit_code": 0,
+    "signal": null
+  },
+  "result": {
+    "status": "success",
+    "error": null,
+    "stdout_preview": "{\"type\":\"step_start\",\"timestamp\":1773971173054,\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"part\":{\"id\":\"prt_d08ebeebc001GfQHce1msdwoIu\",\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"messageID\":\"msg_d08eb99c0001e4TIh5lcUbIcnm\",\"type\":\"step-start\",\"snapshot\":\"1e92baf9516456ad51f9b0313fbce6570e71b188\"}}\n{\"type\":\"tool_use\",\"timestamp\":1773971173056,\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"part\":{\"id\":\"prt_d08ebeebe001mNkah13d8tiqwh\",\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"messageID\":\"msg_d08eb99c0001e4TIh5lcUbIcnm\",\"type\":\"tool\",\"callID\":\"call_nlJ9LYEHK4h5JNm8dyWLdLYh\",\"tool\":\"todowrite\",\"state\":{\"status\":\"completed\",\"input\":{\"todos\":[{\"content\":\"Implement ASM-116 promotion lifecycle module (raw -> distilled -> promoted) with clean service boundaries\",\"status\":\"in_progress\",\"priority\":\"high\"},{\"content\":\"Integrate promotion_state/memory_type transitions into capture/retrieval paths without bloating auto-capture\",\"status\":\"pending\",\"priority\":\"high\"},{\"content\":\"Add tests for l",
+    "stderr_preview": ""
+  },
+  "evidence": {
+    "git_commit": "3e68b917c7ebb1c3ed278b069eaa8e3b110a69fa",
+    "output_file": "/Users/mrcagents/Work/projects/agent-smart-memo/artifacts/asm-122/asm-116.json"
+  }
+}

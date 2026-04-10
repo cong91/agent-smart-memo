@@ -1,8 +1,0 @@
-{
-  "extends": "./tsconfig.base.json",
-  "compilerOptions": {
-    "outDir": "./dist-paperclip"
-  },
-  "files": ["src/entries/paperclip.ts"],
-  "exclude": ["node_modules", "dist", "dist-openclaw", "dist-paperclip", "dist-core", "tests"]
-}

@@ -1,0 +1,7 @@
+Obsidian integration is viewer/editor/graph layer for memory/wiki.
+
+Requirements:
+- No runtime dependency on Obsidian.
+- Open memory/wiki as vault or linked directory.
+- Let humans inspect/edit live pages, browse briefings, use graph/backlinks/search.
+- Runtime still reads/writes plain markdown on disk.

@@ -1,22 +1,14 @@
 import {
 	normalizeSessionToken,
 	resolveSessionMode,
-	scoreSemanticCandidate,
-	shouldApplyStrictSessionFilter,
 } from "../core/retrieval-policy.js";
-import type { EmbeddingClient } from "../services/embedding.js";
-import type { QdrantClient } from "../services/qdrant.js";
+import { searchWikiMemory } from "../core/usecases/semantic-memory-usecase.js";
 import {
 	getAgentNamespaces,
 	parseExplicitNamespace,
 	toCoreAgent,
 } from "../shared/memory-config.js";
-import type {
-	MemoryNamespace,
-	ScoredPoint,
-	SearchParams,
-	ToolResult,
-} from "../types.js";
+import type { MemoryNamespace, SearchParams, ToolResult } from "../types.js";
 
 function resolveAgentFromRuntimeParams(params: {
 	agentId?: string;
@@ -87,6 +79,14 @@ export const memorySearchSchema = {
 			minimum: 0,
 			maximum: 1,
 		},
+		includeDrafts: {
+			type: "boolean",
+			description: "Include drafts layer in search candidates (default: false)",
+		},
+		includeRaw: {
+			type: "boolean",
+			description: "Include raw layer in search candidates (default: false)",
+		},
 		sourceAgent: {
 			type: "string",
 			description: "Filter by source agent ID",
@@ -95,11 +95,7 @@ export const memorySearchSchema = {
 	required: ["query"],
 };
 
-export function createMemorySearchTool(
-	qdrant: QdrantClient,
-	embedding: EmbeddingClient,
-	defaultNamespace: MemoryNamespace,
-) {
+export function createMemorySearchTool(defaultNamespace: MemoryNamespace) {
 	const createDetails = (
 		text: string,
 		extra: Record<string, unknown> = {},
@@ -145,6 +141,8 @@ export function createMemorySearchTool(
 
 				const limit = Math.min(Math.max(params.limit || 5, 1), 20);
 				const minScore = params.minScore ?? 0.7;
+				const includeDrafts = Boolean((params as any).includeDrafts);
+				const includeRaw = Boolean((params as any).includeRaw);
 				const sessionMode = resolveSessionMode((params as any).sessionMode);
 				const preferredSessionId = normalizeSessionToken(params.sessionId);
 
@@ -153,82 +151,56 @@ export function createMemorySearchTool(
 				const namespaces: MemoryNamespace[] = params.namespace
 					? [parseExplicitNamespace(params.namespace as string, sourceAgent)]
 					: getAgentNamespaces(sourceAgent);
-
-				// Build namespace filter (OR if multiple namespaces)
-				const namespaceConditions = namespaces.map((ns) => ({
-					key: "namespace",
-					match: { value: ns },
-				}));
-
-				const filterConditions: any[] = [];
-
-				if (namespaceConditions.length === 1) {
-					filterConditions.push(namespaceConditions[0]);
-				} else if (namespaceConditions.length > 1) {
-					filterConditions.push({ should: namespaceConditions });
+				if (namespaces.length === 0) {
+					namespaces.push(defaultNamespace);
 				}
 
-				if (shouldApplyStrictSessionFilter(sessionMode, preferredSessionId)) {
-					filterConditions.push({
-						key: "sessionId",
-						match: { value: params.sessionId },
-					});
+				const wikiResults = searchWikiMemory({
+					query,
+					limit,
+					minScore,
+					namespaces,
+					sourceAgent,
+					sessionMode,
+					preferredSessionId,
+					userId: params.userId,
+					sourceAgentFilter: params.sourceAgent,
+					includeDrafts,
+					includeRaw,
+				});
+
+				if (wikiResults.length > 0) {
+					const formatted = wikiResults
+						.map((r, i) => {
+							const date = r.timestamp
+								? new Date(r.timestamp).toLocaleDateString()
+								: "Unknown";
+							const lines = [
+								`[${i + 1}] Score: ${(r.score * 100).toFixed(1)}%`,
+								`Namespace: ${r.namespace || "unknown"}`,
+								`Text: ${r.text}`,
+								`Date: ${date}`,
+							];
+							if (r.metadata && Object.keys(r.metadata).length > 0) {
+								lines.push(`Metadata: ${JSON.stringify(r.metadata)}`);
+							}
+							return lines.join("\n");
+						})
+						.join("\n\n---\n\n");
+
+					const textOut = `Found ${wikiResults.length} relevant memories for "${query}":\n\n${formatted}`;
+					return {
+						content: [{ type: "text", text: textOut }],
+						details: createDetails(textOut, {
+							count: wikiResults.length,
+							query,
+							results: wikiResults,
+							source: "wiki",
+						}),
+					};
 				}
 
-				if (params.userId) {
-					filterConditions.push({
-						key: "userId",
-						match: { value: params.userId },
-					});
-				}
-
-				if (params.sourceAgent) {
-					filterConditions.push({
-						key: "source_agent",
-						match: { value: params.sourceAgent },
-					});
-				}
-
-				const filter =
-					filterConditions.length > 0 ? { must: filterConditions } : undefined;
-
-				// Generate embedding and search
-				const vector = await embedding.embed(query);
-				const results = await qdrant.search(vector, limit, filter);
-
-				// Exclude quarantined noise and apply namespace-priority weighting
-				const weighted = results
-					.filter(
-						(r: ScoredPoint) =>
-							(r.payload?.namespace || "") !== "noise.filtered",
-					)
-					.map((r: ScoredPoint) => {
-						const ns = String(r.payload?.namespace || "");
-						const payloadSession = normalizeSessionToken(r.payload?.sessionId);
-						const scored = scoreSemanticCandidate({
-							rawScore: r.score,
-							agentId: sourceAgent,
-							namespace: ns,
-							sessionMode,
-							preferredSessionId,
-							payloadSessionId: payloadSession,
-							promotionState: r.payload?.promotion_state,
-						});
-						return {
-							...r,
-							_rawScore: r.score,
-							_sessionBoost: scored.sessionBoost,
-							score: scored.finalScore,
-						} as ScoredPoint & { _rawScore: number };
-					})
-					.sort((a: any, b: any) => b.score - a.score);
-
-				// Filter by minScore on weighted score
-				const filtered = weighted.filter(
-					(r: ScoredPoint) => r.score >= minScore,
-				);
-
-				if (filtered.length === 0) {
+				if (wikiResults.length === 0) {
 					const textOut = "No relevant memories found.";
 					return {
 						content: [{ type: "text", text: textOut }],
@@ -236,42 +208,10 @@ export function createMemorySearchTool(
 					};
 				}
 
-				// Format results
-				const formatted = filtered
-					.map((r: ScoredPoint, i: number) => {
-						const payload = r.payload;
-						const date = payload.timestamp
-							? new Date(payload.timestamp).toLocaleDateString()
-							: "Unknown";
-
-						const lines = [
-							`[${i + 1}] Score: ${(r.score * 100).toFixed(1)}%`,
-							`Namespace: ${payload.namespace || "unknown"}`,
-							`Text: ${payload.text}`,
-							`Date: ${date}`,
-						];
-
-						if (payload.metadata && Object.keys(payload.metadata).length > 0) {
-							lines.push(`Metadata: ${JSON.stringify(payload.metadata)}`);
-						}
-
-						return lines.join("\n");
-					})
-					.join("\n\n---\n\n");
-
-				const textOut = `Found ${filtered.length} relevant memories for "${query}":\n\n${formatted}`;
+				const textOut = "No relevant memories found.";
 				return {
-					content: [
-						{
-							type: "text",
-							text: textOut,
-						},
-					],
-					details: createDetails(textOut, {
-						count: filtered.length,
-						query,
-						results: filtered,
-					}),
+					content: [{ type: "text", text: textOut }],
+					details: createDetails(textOut, { count: 0, query }),
 				};
 			} catch (error: any) {
 				const textOut = `Error searching memories: ${error.message}`;

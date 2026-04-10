@@ -11,7 +11,10 @@ import {
 import { GraphDB } from "../db/graph-db.js";
 import { SlotDB } from "../db/slot-db.js";
 import { QdrantClient } from "../services/qdrant.js";
-import { resolveAsmRuntimeConfig } from "../shared/asm-config.js";
+import {
+	resolveAsmAdapterLocalConfig,
+	resolveAsmRuntimeConfig,
+} from "../shared/asm-config.js";
 import { resolveSlotDbDir } from "../shared/slotdb-path.js";
 
 export type MemoryFoundationMigrationMode = "preflight" | "plan" | "apply" | "verify" | "rollback";
@@ -53,8 +56,53 @@ interface SemanticSnapshotFile {
 	entries: SemanticSnapshotEntry[];
 }
 
+interface LegacyQdrantRuntimeConfig {
+	host: string;
+	port: number;
+	collection: string;
+	vectorSize: number;
+}
+
 function nowIso(): string {
 	return new Date().toISOString();
+}
+
+function getLegacyQdrantRuntimeConfig(env: NodeJS.ProcessEnv): LegacyQdrantRuntimeConfig {
+	const adapterConfig = resolveAsmAdapterLocalConfig("qdrant", { env });
+	const host =
+		typeof adapterConfig?.host === "string" && adapterConfig.host.trim().length > 0
+			? adapterConfig.host.trim()
+			: env.QDRANT_HOST?.trim() || "127.0.0.1";
+	const portRaw =
+		typeof adapterConfig?.port === "number" || typeof adapterConfig?.port === "string"
+			? Number(adapterConfig.port)
+			: Number(env.QDRANT_PORT || 6333);
+	const collection =
+		typeof adapterConfig?.collection === "string" &&
+		adapterConfig.collection.trim().length > 0
+			? adapterConfig.collection.trim()
+			: env.QDRANT_COLLECTION?.trim() || "memories";
+	const vectorSizeRaw =
+		typeof adapterConfig?.vectorSize === "number" ||
+		typeof adapterConfig?.vectorSize === "string"
+			? Number(adapterConfig.vectorSize)
+			: Number(env.QDRANT_VECTOR_SIZE || 1536);
+
+	if (!Number.isFinite(portRaw) || portRaw <= 0) {
+		throw new Error("Legacy Qdrant config invalid: port must be a positive number");
+	}
+	if (!Number.isFinite(vectorSizeRaw) || vectorSizeRaw <= 0) {
+		throw new Error(
+			"Legacy Qdrant config invalid: vectorSize must be a positive number",
+		);
+	}
+
+	return {
+		host,
+		port: portRaw,
+		collection,
+		vectorSize: vectorSizeRaw,
+	};
 }
 
 function detectSlotDbVersion(slotDbDir: string): string {
@@ -232,6 +280,7 @@ export async function runMemoryFoundationMigration(
 		env,
 		homeDir: input.homeDir || env.HOME,
 	});
+	const qdrantRuntime = getLegacyQdrantRuntimeConfig(env);
 	const slotDbDir = resolveSlotDbDir({
 		env,
 		homeDir: input.homeDir || env.HOME,
@@ -242,10 +291,10 @@ export async function runMemoryFoundationMigration(
 	const agentId = input.agentId || "assistant";
 	const slotDb = new SlotDB(slotDbDir, { slotDbDir });
 	const qdrant = new QdrantClient({
-		host: runtime.qdrantHost,
-		port: runtime.qdrantPort,
-		collection: runtime.qdrantCollection,
-		vectorSize: runtime.qdrantVectorSize,
+		host: qdrantRuntime.host,
+		port: qdrantRuntime.port,
+		collection: qdrantRuntime.collection,
+		vectorSize: qdrantRuntime.vectorSize,
 	});
 
 	const slotVersion = detectSlotDbVersion(slotDbDir);
@@ -298,7 +347,7 @@ export async function runMemoryFoundationMigration(
 			version: semanticPlan.changed === 0 ? MEMORY_FOUNDATION_SCHEMA_VERSION : "mixed",
 			needsMigration: semanticPlan.changed > 0,
 			details: {
-				collection: runtime.qdrantCollection,
+				collection: qdrantRuntime.collection,
 				total_points: semanticCount,
 				pending_points: semanticPlan.changed,
 			},
@@ -388,7 +437,7 @@ export async function runMemoryFoundationMigration(
 	const snapshotPath = createSlotDbSnapshot(slotDbDir, snapshotDir);
 	const semanticSnapshotPath = createSemanticSnapshot(
 		points,
-		runtime.qdrantCollection,
+		qdrantRuntime.collection,
 		snapshotDir,
 	);
 

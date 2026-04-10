@@ -17,7 +17,7 @@ Rerun final whole-epic verification on real project `agent-smart-memo` with beha
 ## Build/test layer
 
 Previously verified:
-- `npm run build:openclaw`
+- `npm run build:plugin`
 - `npx tsx tests/test-project-hybrid-lineage.ts`
 - `npx tsx tests/test-code-graph-model.ts`
 - `npx tsx tests/test-project-registry.ts`

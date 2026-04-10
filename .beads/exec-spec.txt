@@ -1,0 +1,26 @@
+Execution packet: design spec bead
+
+Primary output file to create:
+- docs/asm-v2-wiki-memory-design.md
+
+Spec must include exact sections:
+1. Why replace Qdrant in ASM (pain points, scope boundary)
+2. What stays unchanged (SlotDB, canonical project index)
+3. Folder contract for memory/wiki
+4. Page contract for raw, live, briefings, index.md, log.md, schema.md
+5. Capture flow from current ASM hooks to wiki pages
+6. Retrieve flow from current ASM search/recall path to wiki pages
+7. Migration rule: group old Qdrant points by topic/page
+8. Obsidian role as viewer/editor only
+
+Concrete repo references the spec should mention:
+- src/hooks/auto-capture.ts
+- src/hooks/auto-recall.ts
+- src/tools/memory_search.ts
+- src/tools/memory_store.ts
+- src/core/usecases/semantic-memory-usecase.ts
+- src/db/slot-db.ts
+
+Acceptance refinement:
+- A future implementer should be able to patch code from the spec without rereading the whole prior discussion.
+- Spec must explicitly state phase 1 minimalism: raw -> live -> briefing.

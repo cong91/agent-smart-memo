@@ -1,0 +1,34 @@
+ASM v2 Wiki track là nhánh thay semantic memory dùng Qdrant bằng LLM Wiki, nhưng KHÔNG thay SlotDB runtime state và KHÔNG thay canonical project index engine.
+
+Hiểu đúng ASM hiện tại:
+1. SlotDB giữ runtime state ngắn hạn, deterministic: current-state, project_living_state, recent updates, dedupe hash, cursors, scoped slot values.
+2. Qdrant/embedding giữ semantic memory: auto-capture -> embed/upsert, memory_search -> embed/query, auto-recall -> inject semantic memories.
+3. Project-aware/index layer giữ canonical facts về repo/project: registry, source_rev, file/subsystem/related_files/feature-pack enrichment, provenance, code-aware retrieval. Đây là backbone phải giữ nguyên.
+
+Vì vậy ASM v2 phase 1 chỉ thay lớp (2) bằng wiki, không đụng vào (1) và (3).
+
+Target architecture phase 1:
+- SlotDB = giữ nguyên cho runtime state.
+- Canonical project index = giữ nguyên cho project/code-aware facts.
+- memory/wiki/ = lớp mới thay semantic memory.
+- Obsidian = viewer/editor/graph cho con người, không phải runtime engine.
+
+Memory/wiki tối giản theo đúng tinh thần Karpathy LLM Wiki + swarm image:
+- raw/ = outputs thô từ chat/tool/agent hoặc artifacts cần distill
+- live/ = page tri thức đã được LLM tổng hợp để dùng recall
+- briefings/ = context pack ngắn cho agent/project/domain
+- index.md = catalog nội dung wiki
+- log.md = timeline ingest/update/correction
+- schema.md = rule tối thiểu cho page format/naming
+- drafts/ là optional, chỉ thêm nếu cần review nhẹ; không bắt buộc ở phase 1.
+
+Flow phase 1:
+- capture: ASM nhận input -> append raw/ -> LLM distill/update live page -> refresh index.md -> optional refresh briefing.
+- search/recall: đọc SlotDB/current state trước; nếu query thuộc project/code-aware thì gọi canonical project index trước; sau đó đọc briefings/index/live pages để synthesize.
+- correct: khi người dùng/chính agent phát hiện sai -> sửa canonical live page + append log.md + rebuild briefing nếu cần.
+
+Ràng buộc quan trọng:
+- Không migrate canonical project index sang wiki.
+- Không để wiki trở thành source-of-truth cho file tree/source_rev/related_files/subsystems.
+- Search trong phase 1 có thể chỉ dùng index + page traversal; nếu scale lớn mới thêm BM25/qmd/ripgrep prefilter.
+- Không over-engineer lifecycle ở phase 1; ưu tiên raw -> live -> briefing.

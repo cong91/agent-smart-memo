@@ -1,0 +1,14 @@
+{
+	"extends": "./tsconfig.base.json",
+	"compilerOptions": {
+		"outDir": "./dist"
+	},
+	"files": [
+		"src/index.ts",
+		"src/cli/platform-installers.ts",
+		"src/shared/asm-config.ts",
+		"src/services/llm-extractor-continuation-runner.ts",
+		"src/types/mjs.d.ts"
+	],
+	"exclude": ["node_modules", "dist", "dist-core", "tests"]
+}

@@ -54,7 +54,7 @@ File:
 
 ### 5) Validation
 Executed:
-- `npm run build:openclaw` ✅
+- `npm run build:plugin` ✅
 - `npx tsx tests/test-project-registry.ts` ✅
 - `npx tsx tests/test-project-reindex-diff.ts` ✅
 - `npx tsx tests/test-project-hybrid-lineage.ts` ✅

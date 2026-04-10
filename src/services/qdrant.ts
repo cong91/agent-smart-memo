@@ -377,8 +377,25 @@ export class QdrantClient {
 			let vector: number[] | undefined;
 			if (Array.isArray(p.vector)) vector = p.vector;
 			else if (p.vector && typeof p.vector === "object") {
-				const values = Object.values(p.vector);
-				if (Array.isArray(values[0])) vector = values[0] as number[];
+				const vectorEntries = Object.entries(p.vector).filter((entry) =>
+					Array.isArray(entry[1]),
+				) as Array<[string, number[]]>;
+				if (vectorEntries.length === 1) {
+					vector = vectorEntries[0][1];
+				} else if (vectorEntries.length > 1) {
+					const preferred = vectorEntries.find(([name]) => name === "default");
+					if (preferred) {
+						vector = preferred[1];
+					} else {
+						const sortedByName = [...vectorEntries].sort((a, b) =>
+							a[0].localeCompare(b[0]),
+						);
+						vector = sortedByName[0][1];
+					}
+					this.logger.warn(
+						`[Qdrant] Multiple named vectors found for point id=${String(p.id)}. Using deterministic fallback vector for export/read path.`,
+					);
+				}
 			}
 			return {
 				id: p.id as any,
@@ -391,6 +408,78 @@ export class QdrantClient {
 			points,
 			nextOffset: response?.result?.next_page_offset,
 		};
+	}
+
+	private offsetsEqual(a: any, b: any): boolean {
+		if (a === b) return true;
+		if (a === undefined || a === null || b === undefined || b === null)
+			return false;
+		try {
+			return JSON.stringify(a) === JSON.stringify(b);
+		} catch {
+			return false;
+		}
+	}
+
+	async scrollAll(options?: {
+		batchSize?: number;
+		withVector?: boolean;
+		maxPoints?: number;
+	}): Promise<
+		Array<{
+			id: string;
+			payload: Record<string, any>;
+			vector?: number[];
+		}>
+	> {
+		const parsedBatchSize = Number(options?.batchSize);
+		const batchSize =
+			Number.isFinite(parsedBatchSize) && parsedBatchSize > 0
+				? Math.floor(parsedBatchSize)
+				: 256;
+
+		const parsedMaxPoints = Number(options?.maxPoints);
+		const maxPoints =
+			Number.isFinite(parsedMaxPoints) && parsedMaxPoints > 0
+				? Math.floor(parsedMaxPoints)
+				: undefined;
+
+		const withVector = Boolean(options?.withVector);
+		const all: Array<{
+			id: string;
+			payload: Record<string, any>;
+			vector?: number[];
+		}> = [];
+
+		let offset: any;
+
+		for (;;) {
+			const { points, nextOffset } = await this.scroll(
+				batchSize,
+				offset,
+				withVector,
+			);
+
+			if (points.length === 0) break;
+			all.push(...points);
+
+			if (maxPoints && all.length >= maxPoints) {
+				return all.slice(0, maxPoints);
+			}
+
+			if (nextOffset === undefined || nextOffset === null) break;
+
+			if (this.offsetsEqual(offset, nextOffset)) {
+				this.logger.warn(
+					"[Qdrant] scrollAll detected unchanged next_page_offset; stopping to avoid infinite loop",
+				);
+				break;
+			}
+
+			offset = nextOffset;
+		}
+
+		return all;
 	}
 
 	async search(

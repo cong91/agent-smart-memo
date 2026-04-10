@@ -1,0 +1,16 @@
+Execution packet: Obsidian bead
+
+Deliverables should be lightweight:
+- docs/asm-v2-obsidian-setup.md or section in main design doc
+- recommended vault path pointing at memory/wiki
+- note conventions for live pages and briefings
+
+Rules:
+- No runtime dependency.
+- No new engine logic inside Obsidian.
+- Human inspection/editing only.
+
+Useful content:
+- how to open memory/wiki as vault
+- what folders humans should inspect first (briefings/, live/)
+- how to correct a page safely and let ASM pick it up

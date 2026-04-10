@@ -1,0 +1,63 @@
+{
+  "timestamp": "2026-03-19T20:00:58.150Z",
+  "started_at": "2026-03-19T19:57:42.297Z",
+  "duration_ms": 195854,
+  "bridge": {
+    "name": "opencode-coding-runner",
+    "version": "v0-min",
+    "workstream": "coding_execution",
+    "rule": "bridge accepts only coding_execution"
+  },
+  "input": {
+    "task_id": "ASM-122",
+    "packet_path": null,
+    "packet_version": null,
+    "objective": "Không re-plan. Dùng patch-plan đã có trong session này. Bây giờ expand ASM-121 parity gate: bổ sung regression strict/non-strict session mode, shared retrieval parity, drift-detection giữa tool/usecase/auto-recall, và các kiểm tra precedence liên quan nếu nền đã sẵn sàng. Chạy test/build liên quan và trả summary file sửa, test/build, blocker, readiness để sang ASM-115. Trả lời bằng tiếng Việt.",
+    "command": null,
+    "title": "ASM-122 slice4 ASM-121 parity expand",
+    "resume_session_id": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "continue_mode": false,
+    "fork": false
+  },
+  "invocation": {
+    "command": "opencode",
+    "args": [
+      "run",
+      "--format",
+      "json",
+      "--dir",
+      "/Users/mrcagents/Work/projects/agent-smart-memo",
+      "--title",
+      "ASM-122 slice4 ASM-121 parity expand",
+      "--session",
+      "ses_2f891d808ffeYi94e0h5pGTsGy",
+      "Không re-plan. Dùng patch-plan đã có trong session này. Bây giờ expand ASM-121 parity gate: bổ sung regression strict/non-strict session mode, shared retrieval parity, drift-detection giữa tool/usecase/auto-recall, và các kiểm tra precedence liên quan nếu nền đã sẵn sàng. Chạy test/build liên quan và trả summary file sửa, test/build, blocker, readiness để sang ASM-115. Trả lời bằng tiếng Việt."
+    ],
+    "rendered": "opencode run --format json --dir /Users/mrcagents/Work/projects/agent-smart-memo --title ASM-122 slice4 ASM-121 parity expand --session ses_2f891d808ffeYi94e0h5pGTsGy Không re-plan. Dùng patch-plan đã có trong session này. Bây giờ expand ASM-121 parity gate: bổ sung regression strict/non-strict session mode, shared retrieval parity, drift-detection giữa tool/usecase/auto-recall, và các kiểm tra precedence liên quan nếu nền đã sẵn sàng. Chạy test/build liên quan và trả summary file sửa, test/build, blocker, readiness để sang ASM-115. Trả lời bằng tiếng Việt.",
+    "cwd": "/Users/mrcagents/Work/projects/agent-smart-memo"
+  },
+  "opencode": {
+    "agent": null,
+    "model": null,
+    "session_id_input": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "continue_mode": false,
+    "fork": false,
+    "title": "ASM-122 slice4 ASM-121 parity expand",
+    "session_id": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "event_count": 34
+  },
+  "process": {
+    "exit_code": 0,
+    "signal": null
+  },
+  "result": {
+    "status": "success",
+    "error": null,
+    "stdout_preview": "{\"type\":\"step_start\",\"timestamp\":1773950286314,\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"part\":{\"id\":\"prt_d07ad39e8001NLAlR053bVOfn2\",\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"messageID\":\"msg_d07ace7d8001AbJWOf5Rke94d7\",\"type\":\"step-start\",\"snapshot\":\"27db83dd8710d949cc9028464072690ff046cfbe\"}}\n{\"type\":\"tool_use\",\"timestamp\":1773950286317,\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"part\":{\"id\":\"prt_d07ad39eb001pa73CP06KpRsH2\",\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"messageID\":\"msg_d07ace7d8001AbJWOf5Rke94d7\",\"type\":\"tool\",\"callID\":\"call_YYyBQkf9sToWeHLLN71N3nIK\",\"tool\":\"todowrite\",\"state\":{\"status\":\"completed\",\"input\":{\"todos\":[{\"content\":\"Expand ASM-121: add regression tests strict/non-strict session mode\",\"status\":\"in_progress\",\"priority\":\"high\"},{\"content\":\"Add shared retrieval parity + drift-detection tests across tool/usecase/auto-recall\",\"status\":\"pending\",\"priority\":\"high\"},{\"content\":\"Add precedence-related checks where current foundation supports\",\"status\":\"pen",
+    "stderr_preview": ""
+  },
+  "evidence": {
+    "git_commit": "3e68b917c7ebb1c3ed278b069eaa8e3b110a69fa",
+    "output_file": "/Users/mrcagents/Work/projects/agent-smart-memo/artifacts/asm-122/asm-121-expand.json"
+  }
+}

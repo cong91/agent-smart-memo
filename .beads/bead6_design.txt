@@ -1,0 +1,6 @@
+Deterministic export and grouping spec feeding migration.
+
+Requirements:
+- Repeatable script to dump Qdrant points with required fields: text, namespace, timestamp, source_agent, sessionId, userId, metadata.
+- Grouping spec that maps points into canonical wiki pages instead of one-file-per-point.
+- Concrete feeder for larger migration bead.

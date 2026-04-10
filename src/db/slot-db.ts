@@ -573,6 +573,7 @@ export interface ProjectFeaturePackProjectOnboardingIndexingSnapshot {
 	aliases: ProjectAliasRecord[];
 	registration: ProjectRegistrationStateRecord | null;
 	tracker_mappings: ProjectTrackerMappingRecord[];
+	active_file_paths: string[];
 	recent_files: Array<{
 		relative_path: string;
 		module: string | null;
@@ -3333,23 +3334,96 @@ export class SlotDB {
 			};
 		}
 
-		const changedFiles = this.uniqueSorted(
+		const rawTouchedFiles = this.uniqueSorted(
 			(lineage.touched_files || [])
 				.map((p) => this.normalizeRelativePath(p))
 				.filter(Boolean),
 		);
 
-		const relatedSymbolsMap = new Map<string, ProjectChangeOverlaySymbol>();
+		const activeFileStmt = this.db.prepare(
+			`SELECT relative_path
+         FROM file_index_state
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND active = 1`,
+		);
+		const activeProjectFiles = new Set(
+			(activeFileStmt.all(
+				scopeUserId,
+				scopeAgentId,
+				input.project_id,
+			) as Array<{ relative_path: string | null }>)
+				.map((row) => String(row.relative_path || "").trim())
+				.filter(Boolean),
+		);
 
-		for (const symbolName of lineage.touched_symbols || []) {
-			const normalized = String(symbolName || "").trim();
-			if (!normalized) continue;
-			const key = `task_registry:${normalized}`;
-			if (!relatedSymbolsMap.has(key)) {
-				relatedSymbolsMap.set(key, {
-					symbol_name: normalized,
-					source: "task_registry",
+		const changedFiles =
+			activeProjectFiles.size > 0
+				? rawTouchedFiles.filter((relativePath) =>
+						activeProjectFiles.has(relativePath),
+					)
+				: rawTouchedFiles;
+
+		const relatedSymbolsMap = new Map<string, ProjectChangeOverlaySymbol>();
+		const rawTouchedSymbols = this.uniqueSorted(
+			(lineage.touched_symbols || [])
+				.map((symbolName) => String(symbolName || "").trim())
+				.filter(Boolean),
+		);
+
+		if (rawTouchedSymbols.length > 0) {
+			const placeholders = rawTouchedSymbols.map(() => "?").join(",");
+			const taskSymbolStmt = this.db.prepare(
+				`SELECT symbol_name, symbol_kind, symbol_fqn, relative_path
+         FROM symbol_registry
+         WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND active = 1
+           AND (symbol_name IN (${placeholders}) OR symbol_fqn IN (${placeholders}))
+         ORDER BY indexed_at DESC, symbol_name ASC`,
+			);
+			const rows = taskSymbolStmt.all(
+				scopeUserId,
+				scopeAgentId,
+				input.project_id,
+				...rawTouchedSymbols,
+				...rawTouchedSymbols,
+			) as Array<{
+				symbol_name: string;
+				symbol_kind: string | null;
+				symbol_fqn: string | null;
+				relative_path: string | null;
+			}>;
+
+			for (const row of rows) {
+				const symbolName = String(row.symbol_name || "").trim();
+				if (!symbolName) continue;
+				const relPath = row.relative_path
+					? String(row.relative_path)
+					: undefined;
+				const symbolFqn = row.symbol_fqn ? String(row.symbol_fqn) : undefined;
+				const key = `task_registry:${symbolName}:${symbolFqn || ""}:${relPath || ""}`;
+				if (!relatedSymbolsMap.has(key)) {
+					relatedSymbolsMap.set(key, {
+						symbol_name: symbolName,
+						symbol_kind: row.symbol_kind ? String(row.symbol_kind) : undefined,
+						symbol_fqn: symbolFqn,
+						relative_path: relPath,
+						source: "task_registry",
+					});
+				}
+			}
+
+			for (const symbolName of rawTouchedSymbols) {
+				const hasRegistryMatch = rows.some((row) => {
+					const rowName = String(row.symbol_name || "").trim();
+					const rowFqn = String(row.symbol_fqn || "").trim();
+					return rowName === symbolName || rowFqn === symbolName;
 				});
+				if (hasRegistryMatch) continue;
+				const key = `task_registry:${symbolName}`;
+				if (!relatedSymbolsMap.has(key)) {
+					relatedSymbolsMap.set(key, {
+						symbol_name: symbolName,
+						source: "task_registry",
+					});
+				}
 			}
 		}
 
@@ -3458,6 +3532,26 @@ export class SlotDB {
 			updated_at: String(row.updated_at),
 		}));
 
+		const activeFileStmt = this.db.prepare(
+			`SELECT relative_path
+       FROM file_index_state
+       WHERE scope_user_id = ? AND scope_agent_id = ? AND project_id = ? AND active = 1
+       ORDER BY relative_path ASC`,
+		);
+		const activeFilePaths = Array.from(
+			new Set(
+				(
+					activeFileStmt.all(
+						scopeUserId,
+						scopeAgentId,
+						projectId,
+					) as Array<{ relative_path: string | null }>
+				)
+					.map((row) => String(row.relative_path || "").trim())
+					.filter(Boolean),
+			),
+		);
+
 		const fileStmt = this.db.prepare(
 			`SELECT relative_path, module, language
        FROM file_index_state
@@ -3529,6 +3623,7 @@ export class SlotDB {
 			aliases,
 			registration,
 			tracker_mappings: trackerMappings,
+			active_file_paths: activeFilePaths,
 			recent_files: recentFiles,
 			recent_symbols: recentSymbols,
 			recent_tasks: recentTasks,

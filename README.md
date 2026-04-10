@@ -2,9 +2,10 @@
 
 > **ASM v5.1** is a super memory platform for coding agents: **conversation memory + project memory + retrieval/control plane**, delivered through a single package and a CLI-first install flow.
 
-`@mrc2204/agent-smart-memo` provides a project-aware memory layer that can be installed into multiple runtimes while keeping one shared memory/config model.
+`@mrc2204/agent-smart-memo` provides a project-aware memory layer for OpenClaw plugin/runtime usage, while keeping one shared memory/config model.
 
 Today ASM provides:
+
 - conversation/runtime continuity
 - structured slot memory
 - semantic retrieval
@@ -12,11 +13,11 @@ Today ASM provides:
 - project registry + onboarding
 - repo-aware indexing / reindexing
 - lineage-aware engineering context retrieval
-- CLI-based platform install flows for OpenClaw, Paperclip, and OpenCode
+- CLI-based platform install flow for OpenClaw (plus optional OpenCode MCP bridge bootstrap)
 
 This means ASM is best understood as:
 
-> **a shared memory platform for coding agents, with OpenClaw as the primary runtime and Paperclip/OpenCode as supported adapters**
+> **a shared memory platform for coding agents, with OpenClaw as the supported plugin/runtime target**
 
 ---
 
@@ -25,7 +26,9 @@ This means ASM is best understood as:
 ASM has 3 practical layers.
 
 ### A. Conversation memory
+
 Used for runtime continuity:
+
 - `memory_search`
 - `memory_store`
 - `memory_slot_*`
@@ -33,7 +36,9 @@ Used for runtime continuity:
 - auto-capture / auto-recall
 
 ### B. Project memory
+
 Used for engineering context:
+
 - project registry
 - repo root / repo remote identity
 - project aliasing
@@ -42,7 +47,9 @@ Used for engineering context:
 - lifecycle-aware retrieval boundaries
 
 ### C. Retrieval/control plane
+
 Used to assemble better context for coding agents:
+
 - semantic recall
 - lexical/project filtering
 - file/symbol/task lineage
@@ -55,34 +62,31 @@ If you only remember one sentence, remember this:
 
 ---
 
-## 2) Runtime targets
+## 2) Runtime target
 
 ### OpenClaw
+
 Primary target today.
 
 Includes:
+
 - OpenClaw plugin entry
 - tools / hooks / runtime wiring
 - CLI bootstrap flow
 - shared ASM config integration
 
 Install:
+
 ```bash
 asm install openclaw
 ```
 
-### Paperclip
-Uses the same shared memory core through a Paperclip adapter.
+### OpenCode (optional MCP integration)
 
-Install:
-```bash
-asm install paperclip
-```
-
-### OpenCode
 Uses the same package and shared config, with MCP/local runtime wiring.
 
 Install:
+
 ```bash
 asm install opencode
 ```
@@ -94,6 +98,7 @@ asm install opencode
 There are currently **two supported install flows**.
 
 ### Flow A — CLI-first (recommended for ASM CLI usage)
+
 Install the CLI globally first:
 
 ```bash
@@ -107,19 +112,20 @@ asm init-setup --yes
 ```
 
 This creates or updates:
+
 ```text
 ~/.config/asm/config.json
 ```
 
-Then install a runtime target:
+Then install runtime/integration target(s):
 
 ```bash
 asm install openclaw
-asm install paperclip
 asm install opencode
 ```
 
 ### Flow B — Plugin-first (direct OpenClaw plugin install)
+
 If you only want the OpenClaw plugin directly, install it through OpenClaw:
 
 ```bash
@@ -129,6 +135,7 @@ openclaw plugins install @mrc2204/agent-smart-memo
 Then continue with OpenClaw-side config/bootstrap as needed.
 
 ### Important note
+
 The command below is **not the recommended primary flow right now**:
 
 ```bash
@@ -144,18 +151,17 @@ Use the two supported flows above until CLI bootstrap is fully separated/standar
 ASM now uses a shared config model.
 
 ### Canonical shared config
+
 ```text
 ~/.config/asm/config.json
 ```
 
 ### What lives there
-Core fields such as:
+
+Runtime/core fields such as:
+
 - `projectWorkspaceRoot`
 - `storage.slotDbDir`
-- `qdrantHost`
-- `qdrantPort`
-- `qdrantCollection`
-- `qdrantVectorSize`
 - `llmBaseUrl`
 - `llmApiKey`
 - `llmModel`
@@ -168,13 +174,44 @@ Core fields such as:
 - `contextWindowMaxTokens`
 - `summarizeEveryActions`
 
+Compatibility fields (migration/export/rollback tooling window):
+
+- `qdrantHost`
+- `qdrantPort`
+- `qdrantCollection`
+- `qdrantVectorSize`
+
+Primary wiki-first runtime memory paths should not be treated as Qdrant-dependent.
+
+Bootstrap-safe behavior (Phase 2 bootstrap lane):
+
+- Fresh environments can run capture flow even when distill/LLM extraction capability is unavailable.
+- Auto-capture keeps SlotDB runtime-state updates active and applies raw-first fallback capture into wiki `raw/live/briefings`.
+- Deterministic briefing generation remains enabled so startup context stays stable across repeated bootstrap runs.
+
+Isolated continuation distill behavior (Phase 2 continuation-safe lane):
+
+- Auto-capture distill extraction now runs in the isolated continuation lane natively (`extractWithIsolatedContinuation`) without spawning an external worker process.
+- Runtime boundary is explicit 3-layer decomposition:
+  - **Extractor layer** (`runExtractorLayerWithLLM` + pattern fallback): candidate signals only.
+  - **Distill layer** (`runDistillLayer`): refine/select/drop/promote hints from candidates.
+  - **Apply / Memory arrangement layer** (`DistillApplyUseCase.execute`): deterministic writes into SlotDB + wiki lanes (`raw`, `drafts`, `live`, `briefings`) with loop guards.
+- Structured distill contract is supported with optional fields: `draft_updates`, `briefing_updates`, `log_entries`, `promotion_hints` in addition to `slot_updates`, `slot_removals`, `memories`.
+- Native continuation fallback translation is continuation-side: the continuation returns a structured fallback contract (deterministic fallback extraction + diagnostic `log_entries`) rather than throwing in the hook path.
+- Host auto-capture path is boundary-only: build context window -> invoke isolated continuation -> pass returned contract into deterministic apply (no host-side distill mode inference/noise routing).
+- Forensic safeguard: same-session direct `sendEventSystemMessage`/`heartbeatnow` distill primitive is not used as primary path because auto-capture is attached to `agent_end` and loop risk is high.
+
 ### Platform-local config
+
 Platform config should stay minimal.
 
 For OpenClaw, `~/.openclaw/openclaw.json` should mainly keep:
+
 - `enabled`
-- `asmConfigPath`
-- adapter-local overrides only when truly needed
+- required runtime fields:
+  - `projectWorkspaceRoot`
+  - `slotDbDir`
+  - `wikiDir`
 
 Example OpenClaw plugin entry:
 
@@ -182,20 +219,21 @@ Example OpenClaw plugin entry:
 {
   "enabled": true,
   "config": {
-    "asmConfigPath": "/Users/your-user/.config/asm/config.json",
+    "projectWorkspaceRoot": "/Users/your-user/Work/projects",
     "slotDbDir": "/Users/your-user/.openclaw/agent-memo",
-    "projectWorkspaceRoot": "/Users/your-user/Work/projects"
+    "wikiDir": "/Users/your-user/Work/projects/agent-smart-memo/memory/wiki"
   }
 }
 ```
 
-This keeps `openclaw.json` from becoming a second core source-of-truth.
+`qmdRoot` stays internal and is derived from `wikiDir` at runtime.
 
 ---
 
 ## 5) OpenClaw quick start
 
 ### Install from npm (CLI-first)
+
 ```bash
 npm install -g @mrc2204/agent-smart-memo
 asm init-setup --yes
@@ -203,11 +241,13 @@ asm install openclaw --yes
 ```
 
 ### Install plugin directly into OpenClaw (plugin-first)
+
 ```bash
 openclaw plugins install @mrc2204/agent-smart-memo
 ```
 
 ### Install locally from source
+
 ```bash
 npm install
 npm run build
@@ -216,10 +256,11 @@ node bin/asm.mjs install openclaw --yes
 ```
 
 ### Verification
+
 ```bash
 npm run test:asm-cli
 npx tsx tests/test-init-openclaw.ts
-npm run build:openclaw
+npm run build:plugin
 ```
 
 ---
@@ -229,11 +270,13 @@ npm run build:openclaw
 ASM supports operator-friendly project onboarding.
 
 ### Telegram/OpenClaw command
+
 ```text
 /asm_project_index <repo_url>
 ```
 
 ### Current behavior
+
 - resolves repo path/identity when possible
 - supports local path import without forced clone
 - can reuse an already-registered remote/project identity
@@ -241,12 +284,14 @@ ASM supports operator-friendly project onboarding.
 - can trigger background index flow
 
 Typical path:
+
 1. operator runs `/asm_project_index <repo_url>`
 2. preview shows resolved repo + onboarding choices
 3. operator confirms
 4. ASM bridges into register / tracker-link / index flow
 
 Relevant areas in the repo include:
+
 - project registry
 - onboarding command flows
 - background indexing hooks
@@ -257,6 +302,7 @@ Relevant areas in the repo include:
 ## 7) Capability overview
 
 ### Memory capabilities
+
 - `memory_search`
 - `memory_store`
 - `memory_slot_get`
@@ -266,6 +312,7 @@ Relevant areas in the repo include:
 - `memory_graph_*`
 
 ### Project capabilities
+
 - project register / list / inspect flows
 - project tracker linking
 - project indexing / reindexing
@@ -273,9 +320,9 @@ Relevant areas in the repo include:
 - hybrid lineage context retrieval
 
 ### Platform/operations capabilities
+
 - shared config bootstrap
 - OpenClaw install flow
-- Paperclip install flow
 - OpenCode install flow
 - build/package/publish targets
 
@@ -284,29 +331,30 @@ Relevant areas in the repo include:
 ## 8) Build targets
 
 ### Default build
+
 ```bash
 npm run build
 ```
 
 ### Explicit targets
+
 ```bash
-npm run build:openclaw
-npm run build:paperclip
+npm run build:plugin
 npm run build:core
 npm run build:all
 ```
 
 ### Packaging
+
 ```bash
-npm run package:openclaw
-npm run package:paperclip
+npm run package:plugin
 npm run package:core
 ```
 
 ### Pack tarballs
+
 ```bash
-npm run pack:openclaw
-npm run pack:paperclip
+npm run pack:plugin
 npm run pack:core
 ```
 
@@ -315,24 +363,21 @@ npm run pack:core
 ## 9) Verification
 
 ### CLI / installer verification
+
 ```bash
 npm run test:asm-cli
 npx tsx tests/test-init-openclaw.ts
 ```
 
 ### OpenClaw verification
-```bash
-npm run test:openclaw
-npm run build:openclaw
-```
 
-### Paperclip verification
 ```bash
-npm run test:paperclip
-npm run build:paperclip
+npm run test:plugin
+npm run build:plugin
 ```
 
 ### Project-aware targeted verification
+
 ```bash
 npx tsx tests/test-project-registry.ts
 npx tsx tests/test-project-hybrid-lineage.ts
@@ -346,7 +391,6 @@ npx tsx tests/test-project-hybrid-lineage.ts
 src/
   adapters/
     openclaw/
-    paperclip/
   core/
     contracts/
     usecases/
@@ -370,9 +414,10 @@ tests/
 
 A good public-facing description for this repo is:
 
-> **Agent Smart Memo is a project-aware super memory platform for coding agents, shipped as one package with CLI-first installation for OpenClaw, Paperclip, and OpenCode.**
+> **Agent Smart Memo is a project-aware super memory platform for coding agents, shipped as one package with CLI-first installation for OpenClaw and optional OpenCode MCP integration.**
 
 It helps agents:
+
 - remember conversation/runtime state
 - store and retrieve structured + semantic knowledge
 - onboard and map projects

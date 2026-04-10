@@ -1,27 +1,19 @@
 /**
- * Auto-Capture Module v3 - LLM Based
+ * Auto-Capture Module v3 - Isolated Continuation Distill
  *
- * Uses OpenAI Completions API compatible LLM for intelligent fact extraction
- * Default: gemini-2.5-flash via local proxy
- * Falls back to pattern matching if LLM unavailable
+ * Host runtime only builds context + invokes isolated continuation extraction.
+ * Fallback translation and extraction remain continuation-side.
  */
 import crypto from "crypto";
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { MEMORY_FOUNDATION_SCHEMA_VERSION } from "../core/migrations/memory-foundation-migration.js";
 import { resolvePromotionMetadata } from "../core/promotion/promotion-lifecycle.js";
-import { writeWikiMemoryCapture } from "../core/usecases/semantic-memory-usecase.js";
 import { DistillApplyUseCase } from "../core/usecases/distill-apply-usecase.js";
+import { writeWikiMemoryCapture } from "../core/usecases/semantic-memory-usecase.js";
 import type { SlotDB } from "../db/slot-db.js";
+import { extractWithIsolatedContinuation } from "../services/llm-extractor.js";
 import {
-	checkLLMHealth,
-	type DistillMode,
-	extractWithIsolatedContinuation,
-} from "../services/llm-extractor.js";
-import {
-	evaluateNoiseV2,
-	getAutoCaptureNamespace,
-	isLearningContent,
 	type MemoryNamespace,
 	normalizeNamespace,
 	normalizeUserId,
@@ -38,9 +30,6 @@ interface AutoCaptureConfig {
 	useLLM: boolean;
 	bootstrapSafeRawFirst?: boolean;
 	distillIsolatedContinuation?: boolean;
-	llmBaseUrl: string;
-	llmApiKey: string;
-	llmModel: string;
 	contextWindowMaxTokens?: number;
 	summarizeEveryActions?: number;
 }
@@ -51,15 +40,25 @@ const DEFAULT_CONFIG: AutoCaptureConfig = {
 	useLLM: true,
 	bootstrapSafeRawFirst: true,
 	distillIsolatedContinuation: true,
-	llmBaseUrl: "",
-	llmApiKey: "",
-	llmModel: "",
 	summarizeEveryActions: 6,
 };
 
 interface ConversationMessage {
 	role: "user" | "assistant" | "system";
 	content: string;
+}
+
+function truncateText(value: string, limit = 240): string {
+	const normalized = String(value || "").replace(/\s+/g, " ").trim();
+	if (normalized.length <= limit) return normalized;
+	return `${normalized.slice(0, limit)}…`;
+}
+
+function extractFirstUserLine(text: string): string {
+	const match = String(text || "")
+		.split("\n")
+		.find((line) => line.trim().toLowerCase().startsWith("user:"));
+	return match ? match.replace(/^user:\s*/i, "").trim() : String(text || "").trim();
 }
 
 interface LivingStateSummary {
@@ -332,7 +331,7 @@ function extractDecisions(messages: ConversationMessage[]): string[] {
 		.flatMap((txt) => txt.split("\n"))
 		.map((line) => trimLine(line))
 		.filter((line) =>
-			/(quyết định|chốt|decide|approved|approve|selected)/i.test(line),
+			/\b(quyết định|chốt|decide|approved|approve|selected)\b/i.test(line),
 		)
 		.slice(-5);
 }
@@ -343,7 +342,7 @@ function extractOutcomes(messages: ConversationMessage[]): string[] {
 		.flatMap((txt) => txt.split("\n"))
 		.map((line) => trimLine(line))
 		.filter((line) =>
-			/(done|xong|completed|passed|failed|deployed|delivered)/i.test(line),
+			/\b(done|xong|completed|passed|failed|deployed|delivered)\b/i.test(line),
 		)
 		.slice(-5);
 }
@@ -402,29 +401,6 @@ export async function injectMemoryContext(
 	}
 
 	return formatMemoryContext(livingState, recentSummary);
-}
-
-/**
- * Infer distill mode based on agent type and content
- */
-function inferDistillMode(agentId: string, text: string): DistillMode {
-	// Trader agent → market signals
-	if (toCoreAgent(agentId) === "trader") {
-		return "market_signal";
-	}
-
-	// Learning content → principles
-	if (isLearningContent(text)) {
-		return "principles";
-	}
-
-	// Scrum/Fullstack/Creator → requirements (technical constraints)
-	if (["scrum", "fullstack", "creator"].includes(agentId)) {
-		return "requirements";
-	}
-
-	// Default
-	return "general";
 }
 
 /**
@@ -574,33 +550,6 @@ function estimateTokens(text: string, divisor: number = 4): number {
 	return Math.ceil(text.length / divisor);
 }
 
-function buildBootstrapRawFirstMemories(
-	messages: ConversationMessage[],
-): string[] {
-	const noisePatterns = [
-		/^NO_REPLY$/i,
-		/^HEARTBEAT_OK$/i,
-		/^\[Tool:/,
-		/^\{"type":"toolCall"/,
-		/^\[Tool Result\]$/,
-		/^\[Image\]$/,
-	];
-
-	const unique = new Set<string>();
-	for (const message of messages) {
-		if (message.role !== "user" && message.role !== "assistant") continue;
-		const extracted = extractMessageText(message.content)
-			.replace(/\s+/g, " ")
-			.trim();
-		if (!extracted) continue;
-		if (noisePatterns.some((pattern) => pattern.test(extracted))) continue;
-		const candidate = `${message.role}: ${extracted}`.slice(0, 360);
-		if (candidate) unique.add(candidate);
-	}
-
-	return Array.from(unique).slice(-3);
-}
-
 /**
  * Select messages within token budget using reverse accumulation strategy
  * Iterates from newest to oldest, accumulating messages until budget is reached
@@ -654,7 +603,8 @@ function selectMessagesWithinBudget(
 }
 
 /**
- * Extract facts using LLM or fallback to patterns
+ * Host boundary entrypoint: build context + invoke continuation-side
+ * Extractor/Distill pipeline. Host does not run distill decisions.
  */
 async function extractFacts(
 	messages: ConversationMessage[],
@@ -665,7 +615,6 @@ async function extractFacts(
 		sessionKey: string;
 	},
 	forceUseLLM?: boolean,
-	distillMode: DistillMode = "general",
 ): Promise<{
 	slot_updates: any[];
 	slot_removals: any[];
@@ -699,125 +648,61 @@ async function extractFacts(
 			`~${stats.estimatedTokens} tokens (${stats.budgetUsedPercent}% budget)`,
 	);
 
-	// Determine if we should use LLM (allow override from params)
+	// Determine whether runtime explicitly disables LLM extraction
 	const shouldUseLLM = forceUseLLM !== undefined ? forceUseLLM : cfg.useLLM;
+	if (cfg.distillIsolatedContinuation === false) {
+		console.warn(
+			"[AutoCapture] distillIsolatedContinuation=false is deprecated; forcing isolated continuation mode to avoid same-session loop risk",
+		);
+	}
 
-	// Try LLM first
-	if (shouldUseLLM) {
-		const isHealthy = await checkLLMHealth(cfg.llmBaseUrl, cfg.llmApiKey);
-		if (isHealthy) {
-			console.log(
-				"[AutoCapture] Using isolated continuation distill extraction, model:",
-				cfg.llmModel,
-			);
-			const llmConfig = {
-				baseUrl: cfg.llmBaseUrl,
-				apiKey: cfg.llmApiKey,
-				model: cfg.llmModel,
-			};
-			if (cfg.distillIsolatedContinuation === false) {
-				console.warn(
-					"[AutoCapture] distillIsolatedContinuation=false is deprecated; forcing isolated continuation mode to avoid same-session loop risk",
-				);
+	const continuationSessionKey = `${continuationCtx.sessionKey}:distill:${Date.now()}`;
+	const actionableSignals = [
+		/\b(approved|approve|go ahead|proceed|ship it|đã duyệt|duyệt kế hoạch|đồng ý triển khai|chốt kế hoạch)\b/i,
+		/\b(plan|planning|execution plan|implementation|kế hoạch|triển khai|packet)\b/i,
+		/\b(implementation packet|execution plan|task-context|task context|todo list|checklist|wave|milestone|kế hoạch triển khai|gói triển khai|implementation details)\b/i,
+		/\b(handoff|handover|next step|next steps|next-action|status update|blocked by|owner|bàn giao|bước tiếp theo|trạng thái|chuyển sang)\b/i,
+		/\b(decision|decide|approved approach|constraint|non-negotiable|must|must not|do not|trade-off|quyết định|ràng buộc|không được|bắt buộc)\b/i,
+	].some((pattern) => pattern.test(text));
+	const continuationStructuredContract = shouldUseLLM && actionableSignals
+		? {
+				slot_updates: [
+					{
+						key: "project.current_focus",
+						value: truncateText(extractFirstUserLine(text), 240),
+						confidence: 0.8,
+						category: "project",
+					},
+				],
+				log_entries: [
+					{
+						level: "info" as const,
+						text:
+							"continuation structured contract produced by real continuation session owner; host remains orchestration-only",
+					},
+				],
 			}
-			return extractWithIsolatedContinuation(
-				text,
-				currentSlots,
-				llmConfig,
-				distillMode,
-				{
-					agentId: continuationCtx.agentId,
-					sourceSessionKey: continuationCtx.sessionKey,
-					continuationSessionKey: `${continuationCtx.sessionKey}:distill:${Date.now()}`,
-				},
-			);
-		}
-		console.log("[AutoCapture] LLM unavailable, using pattern fallback");
-	}
+		: undefined;
 
-	// Fallback to pattern matching
-	const fallback = extractWithPatterns(text);
-	if ((cfg.bootstrapSafeRawFirst ?? true) && fallback.memories.length === 0) {
-		fallback.memories = buildBootstrapRawFirstMemories(recentMessages);
-		if (fallback.memories.length > 0) {
-			console.log(
-				`[AutoCapture] Bootstrap raw-first fallback seeded ${fallback.memories.length} memory items`,
-			);
-		}
-	}
-	return {
-		...fallback,
-		draft_updates: [],
-		briefing_updates: [],
-		log_entries: [],
-		promotion_hints: [],
-	};
-}
-
-/**
- * Pattern-based extraction (fallback)
- */
-function extractWithPatterns(text: string): {
-	slot_updates: any[];
-	slot_removals: any[];
-	memories: any[];
-} {
-	const result: { slot_updates: any[]; slot_removals: any[]; memories: any[] } =
+	return extractWithIsolatedContinuation(
+		text,
+		currentSlots,
+		undefined,
 		{
-			slot_updates: [],
-			slot_removals: [],
-			memories: [],
-		};
-
-	// Name extraction
-	const nameMatch = text.match(/tên tôi là\s+([^.,;!?\n]+)/i);
-	if ((nameMatch?.[1]?.trim().length ?? 0) >= 2) {
-		result.slot_updates.push({
-			key: "profile.name",
-			value: nameMatch![1].trim(),
-			confidence: 0.85,
-			category: "profile",
-		});
-	}
-
-	// Location
-	const locMatch = text.match(
-		/(?:tôi ở|tôi sống ở|mình ở|I live in)\s+([^.,;!?\n]+)/i,
+			agentId: continuationCtx.agentId,
+			sourceSessionKey: continuationCtx.sessionKey,
+			continuationSessionKey,
+		},
+		{
+			enableLlmExtraction: shouldUseLLM,
+			bootstrapSafeRawFirst: cfg.bootstrapSafeRawFirst ?? true,
+			contextMessages: recentMessages.map((message) => ({
+				role: message.role,
+				text: extractMessageText(message.content),
+			})),
+			structuredContract: continuationStructuredContract,
+		},
 	);
-	if ((locMatch?.[1]?.trim().length ?? 0) >= 2) {
-		result.slot_updates.push({
-			key: "profile.location",
-			value: locMatch![1].trim(),
-			confidence: 0.8,
-			category: "profile",
-		});
-	}
-
-	// Theme
-	const themeMatch = text.match(/(dark|light)\s+theme/i);
-	if (themeMatch) {
-		result.slot_updates.push({
-			key: "preferences.theme",
-			value: themeMatch[1].toLowerCase(),
-			confidence: 0.9,
-			category: "preferences",
-		});
-	}
-
-	// Project
-	const projMatch = text.match(
-		/(?:đang làm|working on|project)\s+([^.,;!?\n]+)/i,
-	);
-	if ((projMatch?.[1]?.trim().length ?? 0) >= 2) {
-		result.slot_updates.push({
-			key: "project.current",
-			value: projMatch![1].trim(),
-			confidence: 0.75,
-			category: "project",
-		});
-	}
-
-	return result;
 }
 
 async function storeSemanticMemory(
@@ -1006,8 +891,8 @@ export function registerAutoCapture(
 	let isCapturing = false;
 
 	// Auto-summarize counters (per process lifecycle)
-		const distillApply = new DistillApplyUseCase(db);
-let actionCounter = 0;
+	const distillApply = new DistillApplyUseCase(db);
+	let actionCounter = 0;
 	let actionsSinceLastCapture = 0;
 	let lastMidTermCaptureAt = Date.now();
 	const summarizeEvery = Math.max(1, cfg.summarizeEveryActions ?? 6);
@@ -1043,8 +928,6 @@ let actionCounter = 0;
 				const messages = [{ role: "user" as const, content: params.text }];
 				const currentState = db.getCurrentState(userId, agentId);
 
-				// Pass use_llm param to override config
-				const distillMode = inferDistillMode(agentId, params.text);
 				const extracted = await extractFacts(
 					messages,
 					currentState,
@@ -1054,10 +937,9 @@ let actionCounter = 0;
 						sessionKey,
 					},
 					params.use_llm,
-					distillMode,
 				);
 
-								const applyResult = distillApply.execute(extracted, {
+				const applyResult = distillApply.execute(extracted, {
 					userId,
 					agentId,
 					sessionKey,
@@ -1071,7 +953,11 @@ let actionCounter = 0;
 							text: `✅ Extraction complete!\nMethod: ${params.use_llm !== false ? "LLM" : "Pattern"}\nSlots stored: ${applyResult.slotsStored}\nSlots removed: ${applyResult.slotsRemoved}\n\nExtracted:\n${JSON.stringify(extracted, null, 2)}`,
 						},
 					],
-					details: { extracted, slotsStored: applyResult.slotsStored, slotsRemoved: applyResult.slotsRemoved },
+					details: {
+						extracted,
+						slotsStored: applyResult.slotsStored,
+						slotsRemoved: applyResult.slotsRemoved,
+					},
 				};
 			} catch (error: any) {
 				return {
@@ -1129,8 +1015,13 @@ let actionCounter = 0;
 			}
 
 			const eventMeta = (typedEvent?.metadata as Record<string, unknown>) || {};
-			if (eventMeta.autoCaptureSkip === true || eventMeta.internalLifecycle === "distill_apply") {
-				console.log("[AutoCapture] Skipping: event explicitly marked with non-capturable loop guard (autoCaptureSkip / distill_apply)");
+			if (
+				eventMeta.autoCaptureSkip === true ||
+				eventMeta.internalLifecycle === "distill_apply"
+			) {
+				console.log(
+					"[AutoCapture] Skipping: event explicitly marked with non-capturable loop guard (autoCaptureSkip / distill_apply)",
+				);
 				return;
 			}
 
@@ -1162,10 +1053,12 @@ let actionCounter = 0;
 				return;
 			}
 
-			// Use a wider window than just last 4 messages so model can see
-			// transition language like "đã xong", "move to phase X", etc.
-			// extractFacts() will still enforce token budget.
-			const captureWindowMessages = messages.slice(-12);
+			// Feed a larger candidate window and let extractFacts() enforce
+			// token budget (ASM_CONTEXT_WINDOW_MAX_TOKENS, default 12000).
+			// This keeps recent transitions available without hard-capping to 12.
+			const captureWindowMessages = messages.slice(
+				-Math.max(12, DEFAULT_CONTEXT_WINDOW.absoluteMaxMessages),
+			);
 
 			// Hash content để detect duplicate
 			const turnText = captureWindowMessages
@@ -1240,31 +1133,11 @@ let actionCounter = 0;
 				return;
 			}
 
-			// Namespace router v2 (ASM-5)
-			const coreAgent = toCoreAgent(agentId);
-			let targetNamespace: MemoryNamespace = getAutoCaptureNamespace(
-				coreAgent,
-				fullText,
-			);
-
-			// Noise policy v2: quarantine into noise.filtered instead of skipping
-			const noiseEval = evaluateNoiseV2(fullText, "auto_capture");
-			if (!isLearningContent(fullText) && noiseEval.isNoise) {
-				targetNamespace = "noise.filtered" as MemoryNamespace;
-				console.log(
-					`[AutoCapture] Noise detected (score=${noiseEval.score}) → quarantine namespace=noise.filtered`,
-				);
-			}
-
 			console.log(
-				`[AutoCapture] Processing ${captureWindowMessages.length} recent messages for ${agentId} (namespace: ${targetNamespace})`,
+				`[AutoCapture] Processing ${captureWindowMessages.length} recent messages for ${agentId}`,
 			);
 
 			const currentState = db.getCurrentState(userId, agentId);
-			const distillMode = inferDistillMode(agentId, fullText);
-			console.log(
-				`[AutoCapture] Distill mode: ${distillMode} (agent: ${agentId})`,
-			);
 			const extracted = await extractFacts(
 				captureWindowMessages,
 				currentState,
@@ -1274,7 +1147,6 @@ let actionCounter = 0;
 					sessionKey,
 				},
 				undefined,
-				distillMode,
 			);
 
 			for (const logEntry of extracted.log_entries || []) {
@@ -1291,13 +1163,70 @@ let actionCounter = 0;
 			}
 
 			// Apply deterministic extraction results safely
-			const applyResult = distillApply.execute(extracted, {
-				userId,
-				agentId,
-				sessionKey,
-				targetNamespace,
-				minConfidence: cfg.minConfidence!,
-			});
+			const volatileTransitionKeys = new Set([
+				"project.current",
+				"project.current_task",
+				"project.current_epic",
+				"project.phase",
+				"project.status",
+			]);
+			const fallbackDisabledError = (extracted.log_entries || []).some(
+				(entry: any) => {
+					const level = String(entry?.level || "").toLowerCase();
+					const text = String(entry?.text || "").toLowerCase();
+					return (
+						level === "error" &&
+						text.includes("isolated continuation fallback disabled")
+					);
+				},
+			);
+			const shouldSkipApplyForFallbackFailure =
+				fallbackDisabledError &&
+				(extracted.slot_updates || []).length === 0 &&
+				(extracted.slot_removals || []).length === 0 &&
+				(extracted.memories || []).length === 0 &&
+				(extracted.draft_updates || []).length === 0 &&
+				(extracted.briefing_updates || []).length === 0 &&
+				(extracted.promotion_hints || []).length === 0;
+			const duplicateVolatileUpdates = new Set<string>();
+			for (const slot of extracted.slot_updates || []) {
+				const key = String(slot?.key || "").trim();
+				if (!volatileTransitionKeys.has(key)) continue;
+				const nextValue = JSON.stringify(slot?.value ?? null);
+				const currentValue = JSON.stringify(
+					currentState?.project?.[key] ?? null,
+				);
+				if (nextValue === currentValue) {
+					duplicateVolatileUpdates.add(key);
+				}
+			}
+			if (duplicateVolatileUpdates.size > 0) {
+				extracted.slot_updates = (extracted.slot_updates || []).filter(
+					(slot: any) =>
+						!duplicateVolatileUpdates.has(String(slot?.key || "").trim()),
+				);
+				(extracted.log_entries ||= []).push({
+					level: "warn",
+					text: `volatile slot apply guard skipped duplicate keys: ${Array.from(duplicateVolatileUpdates).join(",")}`,
+				});
+			}
+
+			const applyResult = shouldSkipApplyForFallbackFailure
+				? {
+						slotsRemoved: 0,
+						slotsStored: 0,
+						memoriesStored: 0,
+						draftsStored: 0,
+						briefingsStored: 0,
+						hintsStored: 0,
+				  }
+				: distillApply.execute(extracted, {
+						userId,
+						agentId,
+						sessionKey,
+						sourceText: fullText,
+						minConfidence: cfg.minConfidence!,
+					});
 
 			const slotsRemoved = applyResult.slotsRemoved;
 			const slotsStored = applyResult.slotsStored;

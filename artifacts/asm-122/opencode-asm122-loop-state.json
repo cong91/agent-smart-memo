@@ -1,0 +1,22 @@
+{
+  "session": "ses_2f891d808ffeYi94e0h5pGTsGy",
+  "started_at": "2026-03-19T19:45:27.375Z",
+  "selected_steps": [
+    "asm-118",
+    "asm-120"
+  ],
+  "completed_steps": [
+    {
+      "step": "asm-118",
+      "artifact": "/Users/mrcagents/Work/projects/agent-smart-memo/artifacts/asm-122/asm-118.json",
+      "session_id": "ses_2f891d808ffeYi94e0h5pGTsGy"
+    },
+    {
+      "step": "asm-120",
+      "artifact": "/Users/mrcagents/Work/projects/agent-smart-memo/artifacts/asm-122/asm-120.json",
+      "session_id": "ses_2f891d808ffeYi94e0h5pGTsGy"
+    }
+  ],
+  "failed_steps": [],
+  "finished_at": "2026-03-19T19:52:10.070Z"
+}

@@ -3,32 +3,25 @@ import { join } from "node:path";
 
 const target = process.argv[2];
 
-if (!target || !["openclaw", "paperclip", "core"].includes(target)) {
-  console.error("Usage: node scripts/prepare-package-target.mjs <openclaw|paperclip|core>");
+if (!target || !["openclaw", "core"].includes(target)) {
+  console.error("Usage: node scripts/prepare-package-target.mjs <openclaw|core>");
   process.exit(1);
 }
 
 const root = process.cwd();
 const sourceDistByTarget = {
-  openclaw: "dist-openclaw",
-  paperclip: "dist-paperclip",
+  openclaw: "dist",
   core: "dist-core",
 };
 
 const sourceEntryByTarget = {
   openclaw: "./index.js",
-  paperclip: "./entries/paperclip.js",
   core: "./entries/core.js",
 };
 
 const sourceExportMapByTarget = {
   openclaw: {
     ".": "./dist/index.js",
-  },
-  paperclip: {
-    ".": "./dist/entries/paperclip.js",
-    "./manifest": "./dist/entries/paperclip.js",
-    "./worker": "./dist/entries/paperclip.js",
   },
   core: {
     ".": "./dist/entries/core.js",
@@ -64,7 +57,6 @@ const baseName = String(rootPkg.name || "@mrc2204/agent-smart-memo").replace(/\/
 const packageName = target === "openclaw" ? baseName : `${baseName}-${target}`;
 const packageDescription = {
   openclaw: rootPkg.description || "Agent Smart Memo OpenClaw plugin",
-  paperclip: "Paperclip adapter/runtime package for Agent Smart Memo core",
   core: "Runtime-agnostic core contracts and use-cases for Agent Smart Memo",
 }[target];
 
@@ -91,12 +83,6 @@ if (target === "openclaw") {
   };
   pkg.files.push("openclaw.plugin.json");
   pkg.devDependencies = { openclaw: "*" };
-} else if (target === "paperclip") {
-  pkg.paperclipPlugin = {
-    manifest: "./dist/entries/paperclip.js",
-    worker: "./dist/entries/paperclip.js",
-  };
-  pkg.devDependencies = {};
 } else {
   // Ensure non-openclaw packages do not pull openclaw runtime dependency.
   pkg.devDependencies = {};

@@ -1,0 +1,35 @@
+Execution packet for OpenCode
+
+Repo reality to preserve:
+- SlotDB remains runtime state truth.
+- Canonical project index/query remains separate truth for code-aware/project-aware facts.
+- Current semantic layer is implemented around Qdrant + embedding in these main paths:
+  - src/core/usecases/semantic-memory-usecase.ts
+  - src/tools/memory_search.ts
+  - src/tools/memory_store.ts
+  - src/hooks/auto-capture.ts
+  - src/hooks/auto-recall.ts
+  - src/adapters/openclaw/plugin-register.ts
+  - src/adapters/paperclip/runtime.ts
+  - src/services/qdrant.ts
+  - src/services/embedding.ts
+
+Phase 1 implementation boundary:
+- Replace Qdrant-backed semantic memory with wiki-backed memory.
+- Do not redesign SlotDB state model.
+- Do not redesign project indexing/canonical retrieval engine.
+- Do not over-engineer lifecycle beyond raw -> live -> briefing.
+
+Suggested execution order:
+1. Create design/spec doc + folder contract.
+2. Add wiki path/config helpers and bootstrap folders/files.
+3. Implement migration/export groundwork (read old Qdrant, map by canonical topic/page).
+4. Implement retrieve path (state -> project index -> wiki).
+5. Only after retrieve path is clear, rewire store/capture path from Qdrant -> raw/live wiki.
+6. Add Obsidian-facing docs/integration last.
+
+Definition of done for phase 1:
+- memory_search no longer requires vector search for primary path.
+- auto-recall can inject from briefing/index/live pages.
+- project-aware answers still rely on canonical project index first.
+- wiki folder exists and is readable/editable by humans.

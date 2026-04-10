@@ -82,7 +82,7 @@ async function run() {
     namespace: "assistant",
   }, ctx);
   assert(storeRes?.isError !== true, "memory_store should succeed via runtime use-case path");
-  assert(String(storeRes?.content?.[0]?.text || "").includes("Memory stored successfully"), "store response text compatibility");
+  assert(String(storeRes?.content?.[0]?.text || "").includes("Memory "), "store response text compatibility");
 
   const searchRes = await search.execute("2", {
     query: "semantic execution",

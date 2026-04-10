@@ -1,0 +1,44 @@
+This bead produces the implementation-facing design spec for ASM v2 Wiki memory.
+
+The spec must be intentionally minimal for phase 1 and avoid over-engineering. It must reflect the user correction that the initial analysis drifted too far beyond Karpathy Wiki + the swarm raw/live/briefing image.
+
+What the spec must contain:
+1. Clear split of responsibilities
+- SlotDB: runtime state only
+- Project index engine: canonical project/code-aware facts only
+- Wiki: semantic memory replacement only
+- Obsidian: viewer/editor only
+
+2. Folder structure for phase 1
+memory/wiki/
+  raw/
+  live/
+  briefings/
+  index.md
+  log.md
+  schema.md
+Optional: drafts/ only if a review layer is truly needed later.
+
+3. Page taxonomy kept simple
+- live/projects/<project>.md = project understanding / lessons / summaries
+- live/concepts/<topic>.md = reusable lessons / runbooks / decisions
+- live/entities/<entity>.md = stable preferences or named concepts if needed
+- briefings/<project-or-agent>.md = short context pack for injection
+No giant taxonomy explosion in phase 1.
+
+4. Capture flow
+- Capture raw event/output into raw/
+- Distill into a canonical live page
+- Update index.md and log.md
+- Optionally update affected briefing
+
+5. Retrieval flow
+- Read SlotDB current state first
+- If code-aware/project-aware query: call project index engine first
+- Then read briefing + index + selected live pages
+- Synthesize answer
+
+6. Migration guidance
+- Only memory layer migrates from Qdrant
+- Group old vectors by canonical topic/page
+- Do not create one markdown file per vector point

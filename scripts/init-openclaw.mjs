@@ -273,6 +273,7 @@ export function validateAnswers(answers) {
   }
 
   if (!String(answers.slotDbDir || "").trim()) errors.push("slotDbDir is required");
+  if (!String(answers.wikiDir || "").trim()) errors.push("wikiDir is required");
 
   const projectWorkspaceRoot = String(
     answers.projectWorkspaceRoot || "",
@@ -305,13 +306,23 @@ export function buildPatchedConfig(existingConfig, answers, mapMemorySlot = true
 
   const prevEntry = asObj(entries[PLUGIN_ID]);
   const prevEntryConfig = asObj(prevEntry.config);
-  const asmConfigPath = String(options.asmConfigPath || prevEntryConfig.asmConfigPath || "").trim();
+  const projectWorkspaceRoot = String(
+    options.projectWorkspaceRoot || answers.projectWorkspaceRoot || prevEntryConfig.projectWorkspaceRoot || "",
+  ).trim();
+  const slotDbDir = String(
+    options.slotDbDir || answers.slotDbDir || prevEntryConfig.slotDbDir || "",
+  ).trim();
+  const wikiDir = String(
+    options.wikiDir || answers.wikiDir || prevEntryConfig.wikiDir || "",
+  ).trim();
 
   const entry = {
     ...prevEntry,
     enabled: true,
     config: {
-      ...(asmConfigPath ? { asmConfigPath } : {}),
+      projectWorkspaceRoot,
+      slotDbDir,
+      wikiDir,
     },
   };
 
@@ -438,7 +449,9 @@ export function buildSetupSummary(currentConfig, answers, nextConfig) {
   );
 
   const managedConfigKeys = [
-    "asmConfigPath",
+    "projectWorkspaceRoot",
+    "slotDbDir",
+    "wikiDir",
   ];
 
   for (const key of managedConfigKeys) {
@@ -592,6 +605,7 @@ async function promptWizard(defaults) {
     const embedDimensions = toIntOrDefault(await ask("Embedding dimensions", String(defaults.embedDimensions)), defaults.embedDimensions);
 
     const slotDbDir = await ask("slotDbDir", defaults.slotDbDir);
+    const wikiDir = await ask("wikiDir", defaults.wikiDir);
     const projectWorkspaceRoot = await ask("projectWorkspaceRoot", defaults.projectWorkspaceRoot);
 
     const mapMemorySlotRaw = await ask("Map plugins.slots.memory = agent-smart-memo? (y/n)", defaults.mapMemorySlot ? "y" : "n");
@@ -618,6 +632,7 @@ async function promptWizard(defaults) {
       embedModel,
       embedDimensions,
       slotDbDir,
+      wikiDir,
       projectWorkspaceRoot,
       mapMemorySlot,
       telegramOnboardingCommands,
@@ -645,9 +660,9 @@ export async function runInitOpenClaw({ env = process.env, interactive = true, a
     embedBackend: String(sharedCore.embedBackend || ""),
     embedModel: String(sharedCore.embedModel || ""),
     embedDimensions: toIntOrDefault(sharedCore.embedDimensions, 0),
-    slotDbDir: String(sharedCore.storage?.slotDbDir || ""),
+    slotDbDir: String(sharedCore.slotDbDir || sharedCore.storage?.slotDbDir || ""),
+    wikiDir: String(sharedCore.wikiDir || ""),
     projectWorkspaceRoot: String(sharedCore.projectWorkspaceRoot || ""),
-    asmConfigPath,
     mapMemorySlot: asObj(asObj(current.plugins).slots).memory === PLUGIN_ID,
     telegramOnboardingCommands: dedupeStringArray([
       "asm_project_index",
@@ -661,7 +676,7 @@ export async function runInitOpenClaw({ env = process.env, interactive = true, a
     throw new Error(`Validation failed:\n- ${errors.join("\n- ")}`);
   }
 
-  const next = buildPatchedConfig(current, answers, answers.mapMemorySlot, { asmConfigPath: answers.asmConfigPath });
+  const next = buildPatchedConfig(current, answers, answers.mapMemorySlot);
   const summary = buildSetupSummary(current, answers, next);
   const beforeText = toJson(current);
   const afterText = toJson(next);

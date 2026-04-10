@@ -1,19 +1,27 @@
 import type { SlotDB } from "../../db/slot-db.js";
-import { MEMORY_FOUNDATION_SCHEMA_VERSION } from "../migrations/memory-foundation-migration.js";
-import { resolvePromotionMetadata } from "../promotion/promotion-lifecycle.js";
 import {
+	evaluateNoiseV2,
+	getAutoCaptureNamespace,
+	isLearningContent,
 	type MemoryNamespace,
 	normalizeNamespace,
 	resolveMemoryScopeFromNamespace,
 	toCoreAgent,
 } from "../../shared/memory-config.js";
+import { MEMORY_FOUNDATION_SCHEMA_VERSION } from "../migrations/memory-foundation-migration.js";
+import { resolvePromotionMetadata } from "../promotion/promotion-lifecycle.js";
 import { writeWikiMemoryCapture } from "./semantic-memory-usecase.js";
 
 /**
  * Common shape for Distill results (from llm-extractor)
  */
 export interface DistillApplyInput {
-	slot_updates?: Array<{ key: string; value: any; confidence: number; category: string }>;
+	slot_updates?: Array<{
+		key: string;
+		value: any;
+		confidence: number;
+		category: string;
+	}>;
 	slot_removals?: Array<{ key: string; reason: string }>;
 	memories?: Array<any>;
 	draft_updates?: Array<any>;
@@ -27,6 +35,7 @@ export interface DistillApplyContext {
 	agentId: string;
 	sessionKey: string;
 	targetNamespace?: MemoryNamespace;
+	sourceText?: string;
 	minConfidence: number;
 }
 
@@ -37,6 +46,31 @@ export interface DistillApplyResult {
 	draftsStored: number;
 	briefingsStored: number;
 	hintsStored: number;
+}
+
+function resolveDefaultApplyNamespace(
+	ctx: DistillApplyContext,
+): MemoryNamespace {
+	if (ctx.targetNamespace) {
+		return normalizeNamespace(ctx.targetNamespace, ctx.agentId);
+	}
+
+	const coreAgent = toCoreAgent(ctx.agentId);
+	const defaultNamespace =
+		`agent.${coreAgent}.working_memory` as MemoryNamespace;
+	const sourceText = String(ctx.sourceText || "").trim();
+	if (!sourceText) return defaultNamespace;
+
+	let namespace = getAutoCaptureNamespace(coreAgent, sourceText);
+	const noiseEval = evaluateNoiseV2(sourceText, "auto_capture");
+	if (!isLearningContent(sourceText) && noiseEval.isNoise) {
+		namespace = "noise.filtered" as MemoryNamespace;
+		console.log(
+			`[DistillApply] Noise detected (score=${noiseEval.score}) → namespace=noise.filtered`,
+		);
+	}
+
+	return normalizeNamespace(namespace, ctx.agentId);
 }
 
 /**
@@ -62,7 +96,8 @@ export class DistillApplyUseCase {
 
 		const { userId, agentId, sessionKey, minConfidence } = ctx;
 		const coreAgent = toCoreAgent(agentId);
-		const defaultNamespace: MemoryNamespace = ctx.targetNamespace || `agent.${coreAgent}.working_memory` as MemoryNamespace;
+		const defaultNamespace = resolveDefaultApplyNamespace(ctx);
+		console.log(`[DistillApply] Default namespace: ${defaultNamespace}`);
 
 		// 1. Process log entries
 		for (const logEntry of extracted.log_entries || []) {
@@ -81,7 +116,9 @@ export class DistillApplyUseCase {
 					const deleted = this.db.delete(userId, agentId, removal.key);
 					if (deleted) {
 						result.slotsRemoved++;
-						console.log(`[DistillApply] Removed stale slot: ${removal.key} (reason: ${removal.reason})`);
+						console.log(
+							`[DistillApply] Removed stale slot: ${removal.key} (reason: ${removal.reason})`,
+						);
 					}
 				} catch (e) {
 					console.error("[DistillApply] Failed to remove slot:", e);
@@ -103,7 +140,9 @@ export class DistillApplyUseCase {
 						// Add non-capturable metadata to slot if needed, though SlotDB doesn't store arbitrary metadata at root level
 					});
 					result.slotsStored++;
-					console.log(`[DistillApply] Stored: ${fact.key} = ${JSON.stringify(fact.value)}`);
+					console.log(
+						`[DistillApply] Stored: ${fact.key} = ${JSON.stringify(fact.value)}`,
+					);
 				} catch (e) {
 					console.error("[DistillApply] Failed to store slot:", e);
 				}
@@ -115,11 +154,16 @@ export class DistillApplyUseCase {
 			for (let i = 0; i < extracted.memories.length; i++) {
 				const memory = extracted.memories[i];
 				try {
-					const text = typeof memory === "string" ? memory : memory.text || JSON.stringify(memory);
+					const text =
+						typeof memory === "string"
+							? memory
+							: memory.text || JSON.stringify(memory);
 					if (!text || text.trim().length === 0) continue;
 
-					const memoryNamespace = memory.namespace ? normalizeNamespace(memory.namespace, agentId) : defaultNamespace;
-					
+					const memoryNamespace = memory.namespace
+						? normalizeNamespace(memory.namespace, agentId)
+						: defaultNamespace;
+
 					const lifecycle = resolvePromotionMetadata({
 						namespace: memoryNamespace,
 						sourceType: "auto_capture",
@@ -146,7 +190,10 @@ export class DistillApplyUseCase {
 					});
 					result.memoriesStored++;
 				} catch (e: any) {
-					console.error(`[DistillApply] Error processing memory ${i + 1}:`, e.message);
+					console.error(
+						`[DistillApply] Error processing memory ${i + 1}:`,
+						e.message,
+					);
 				}
 			}
 		}
@@ -156,7 +203,10 @@ export class DistillApplyUseCase {
 			for (const draft of extracted.draft_updates) {
 				const text = String(draft?.text || "").trim();
 				if (!text) continue;
-				const namespace = normalizeNamespace(String(draft?.namespace || defaultNamespace), agentId);
+				const namespace = normalizeNamespace(
+					String(draft?.namespace || defaultNamespace),
+					agentId,
+				);
 				try {
 					const lifecycle = resolvePromotionMetadata({
 						namespace,
@@ -171,7 +221,10 @@ export class DistillApplyUseCase {
 						memoryScope: resolveMemoryScopeFromNamespace(namespace),
 						memoryType: lifecycle.memoryType,
 						promotionState: "raw",
-						confidence: typeof draft?.confidence === "number" ? draft.confidence : lifecycle.confidence,
+						confidence:
+							typeof draft?.confidence === "number"
+								? draft.confidence
+								: lifecycle.confidence,
 						sessionId: sessionKey,
 						userId,
 						metadata: {
@@ -196,7 +249,10 @@ export class DistillApplyUseCase {
 			for (const briefing of extracted.briefing_updates) {
 				const text = String(briefing?.text || "").trim();
 				if (!text) continue;
-				const namespace = normalizeNamespace(String(briefing?.namespace || "shared.project_context"), agentId);
+				const namespace = normalizeNamespace(
+					String(briefing?.namespace || "shared.project_context"),
+					agentId,
+				);
 				try {
 					const lifecycle = resolvePromotionMetadata({
 						namespace,
@@ -211,7 +267,10 @@ export class DistillApplyUseCase {
 						memoryScope: resolveMemoryScopeFromNamespace(namespace),
 						memoryType: lifecycle.memoryType,
 						promotionState: "distilled",
-						confidence: typeof briefing?.confidence === "number" ? briefing.confidence : lifecycle.confidence,
+						confidence:
+							typeof briefing?.confidence === "number"
+								? briefing.confidence
+								: lifecycle.confidence,
 						sessionId: sessionKey,
 						userId,
 						metadata: {
@@ -235,15 +294,27 @@ export class DistillApplyUseCase {
 			for (const hint of extracted.promotion_hints) {
 				const text = String(hint?.text || "").trim();
 				if (!text) continue;
-				const namespace = normalizeNamespace(String(hint?.namespace || defaultNamespace), agentId);
-				const promotionState = typeof hint?.promotion_state === "string" ? hint.promotion_state : "distilled";
+				const namespace = normalizeNamespace(
+					String(hint?.namespace || defaultNamespace),
+					agentId,
+				);
+				const promotionState =
+					typeof hint?.promotion_state === "string"
+						? hint.promotion_state
+						: "distilled";
 				try {
 					const lifecycle = resolvePromotionMetadata({
 						namespace,
 						sourceType: "auto_capture",
 						promotionState,
-						memoryType: typeof hint?.memory_type === "string" ? hint.memory_type : undefined,
-						confidence: typeof hint?.confidence === "number" ? hint.confidence : undefined,
+						memoryType:
+							typeof hint?.memory_type === "string"
+								? hint.memory_type
+								: undefined,
+						confidence:
+							typeof hint?.confidence === "number"
+								? hint.confidence
+								: undefined,
 					});
 					writeWikiMemoryCapture({
 						text,
@@ -253,7 +324,10 @@ export class DistillApplyUseCase {
 						memoryScope: resolveMemoryScopeFromNamespace(namespace),
 						memoryType: lifecycle.memoryType,
 						promotionState: lifecycle.promotionState,
-						confidence: typeof hint?.confidence === "number" ? hint.confidence : lifecycle.confidence,
+						confidence:
+							typeof hint?.confidence === "number"
+								? hint.confidence
+								: lifecycle.confidence,
 						sessionId: sessionKey,
 						userId,
 						metadata: {

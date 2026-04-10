@@ -2,13 +2,19 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SemanticMemoryUseCase, writeWikiMemoryCapture } from "../src/core/usecases/semantic-memory-usecase.js";
+import {
+	SemanticMemoryUseCase,
+	searchWikiMemory,
+	writeWikiMemoryCapture,
+} from "../src/core/usecases/semantic-memory-usecase.js";
 import { DeduplicationService } from "../src/services/dedupe.js";
 import { extractWithIsolatedContinuation } from "../src/services/llm-extractor.js";
 
@@ -53,28 +59,52 @@ async function run() {
 
 	const context = { userId: "u1", agentId: "assistant", sessionId: "s1" };
 	const previousWikiRoot = process.env.ASM_WIKI_ROOT;
+	const previousBackend = process.env.ASM_WIKI_STORAGE_BACKEND;
 	const wikiRoot = mkdtempSync(join(tmpdir(), "asm-wiki-write-"));
 	process.env.ASM_WIKI_ROOT = wikiRoot;
+	let qmdWikiRoot: string | null = null;
 
 	try {
-		const isolatedContractResult = await extractWithIsolatedContinuation(
-			"user: ghi lại rule rollback cho phase 2 và cập nhật briefing vận hành",
-			{
-				project: {
-					"project.current": "phase-2-distill",
+		const hostLogs: string[] = [];
+		const originalLog = console.log;
+		let isolatedContractResult: Awaited<
+			ReturnType<typeof extractWithIsolatedContinuation>
+		>;
+		console.log = (...args: unknown[]) => {
+			hostLogs.push(args.map((arg) => String(arg)).join(" "));
+			originalLog(...args);
+		};
+		try {
+			isolatedContractResult = await extractWithIsolatedContinuation(
+				"user: tên tôi là Trần B, tôi sống ở Hà Nội và đang làm asm boundary cleanup",
+				{
+					project: {
+						"project.current": "phase-2-distill",
+					},
 				},
-			},
-			{
-				baseUrl: "http://127.0.0.1:9",
-				apiKey: "test-key",
-				model: "fake-model",
-			},
-			"general",
-			{
-				agentId: "assistant",
-				sourceSessionKey: "agent:assistant:test-session",
-				timeoutMs: 8000,
-			},
+				"general",
+				{
+					agentId: "assistant",
+					sourceSessionKey: "agent:assistant:test-session",
+					timeoutMs: 8000,
+				},
+			);
+		} finally {
+			console.log = originalLog;
+		}
+
+		assert(
+			!hostLogs.some((line) => line.includes("[LLMExtractor] Distilled")),
+			"host orchestration path must not run local distill core",
+		);
+
+		assert(
+			isolatedContractResult.log_entries.some((entry: any) =>
+				String(entry?.text || "").includes(
+					"missing continuation structured contract",
+				),
+			),
+			"without continuation-owned structured contract, isolated continuation should fail closed instead of using local extractor fallback",
 		);
 
 		assert(
@@ -115,11 +145,97 @@ async function run() {
 		);
 		assert(
 			isolatedContractResult.log_entries.some((entry: any) =>
+				String(entry?.text || "").includes("engine=native_continuation"),
+			),
+			"isolated continuation result should include native continuation execution marker",
+		);
+
+		const planningConversation = [
+			"user: Operator approved the implementation plan for bead agent-smart-memo-r4t.25.",
+			"assistant: Next step is implementation packet prep, then handoff with blockers and ETA.",
+			"user: Non-negotiable constraint: preserve safe fallback semantics and Extractor/Distill/Apply boundary.",
+		].join("\n");
+
+		const planningResult = await extractWithIsolatedContinuation(
+			planningConversation,
+			{
+				project: {
+					"project.current_task": "triage prompt issue",
+				},
+			},
+			"general",
+			{
+				agentId: "assistant",
+				sourceSessionKey: "agent:assistant:planning-session",
+				timeoutMs: 12000,
+			},
+			{
+				bootstrapSafeRawFirst: true,
+				contextMessages: [
+					{
+						role: "user",
+						text: "Operator approved plan for r4t.25. Prepare implementation packet and next-step handoff.",
+					},
+					{
+						role: "assistant",
+						text: "Will execute prompt/extraction policy changes while preserving fallback guarantees.",
+					},
+				],
+			},
+		);
+
+		assert(
+			planningResult.log_entries.some((entry: any) =>
 				String(entry?.text || "").includes(
-					"isolated continuation distill worker failed",
+					"missing continuation structured contract",
 				),
 			),
-			"isolated continuation result should keep structured warning log on worker failure",
+			"planning/task-context case should fail closed when continuation session does not own a structured contract",
+		);
+		assert(
+			planningResult.log_entries.some((entry: any) =>
+				String(entry?.text || "").includes("engine=native_continuation"),
+			),
+			"planning/task-context case should record native continuation execution marker",
+		);
+
+		const neutralResult = await extractWithIsolatedContinuation(
+			"user: chào bạn\nassistant: chào bạn, mình sẵn sàng hỗ trợ.",
+			{},
+			"general",
+			{
+				agentId: "assistant",
+				sourceSessionKey: "agent:assistant:neutral-session",
+				timeoutMs: 12000,
+			},
+			{
+				bootstrapSafeRawFirst: true,
+				contextMessages: [
+					{ role: "user", text: "chào bạn" },
+					{ role: "assistant", text: "chào bạn" },
+				],
+			},
+		);
+
+		const neutralStructuredCount =
+			neutralResult.slot_updates.length +
+			neutralResult.slot_removals.length +
+			neutralResult.memories.length +
+			neutralResult.draft_updates.length +
+			neutralResult.briefing_updates.length +
+			neutralResult.promotion_hints.length;
+
+		assert(
+			neutralStructuredCount === 0,
+			"non-actionable generic chatter may remain all-empty",
+		);
+		assert(
+			neutralResult.log_entries.some((entry: any) =>
+				String(entry?.text || "")
+					.toLowerCase()
+					.includes("missing continuation structured contract"),
+			),
+			"non-actionable case should also fail closed when no continuation-owned structured contract is available",
 		);
 
 		const captureRes = await usecase.capture(
@@ -177,6 +293,7 @@ async function run() {
 				query: "semantic usecase path",
 				namespace: "assistant",
 				minScore: 0.1,
+				includeDrafts: true,
 			},
 			context,
 		);
@@ -203,35 +320,34 @@ async function run() {
 			"duplicate capture should update existing wiki entry",
 		);
 
-
 		const deterministicTimestamp = "2026-04-07T00:00:00.000Z";
 		const deterministicCaptureB = writeWikiMemoryCapture({
-				text: "ASM deterministic tie-break item B",
-				namespace: "agent.assistant.working_memory",
-				sourceAgent: "assistant",
-				sourceType: "auto_capture",
-				memoryScope: "agent",
-				memoryType: "episodic_trace",
-				promotionState: "distilled",
-				confidence: 0.9,
-				timestamp: deterministicTimestamp,
-				updatedAt: deterministicTimestamp,
-				sessionId: "s1",
-				userId: "u1"
+			text: "ASM deterministic tie-break item B",
+			namespace: "agent.assistant.working_memory",
+			sourceAgent: "assistant",
+			sourceType: "auto_capture",
+			memoryScope: "agent",
+			memoryType: "episodic_trace",
+			promotionState: "distilled",
+			confidence: 0.9,
+			timestamp: deterministicTimestamp,
+			updatedAt: deterministicTimestamp,
+			sessionId: "s1",
+			userId: "u1",
 		});
 		const deterministicCaptureA = writeWikiMemoryCapture({
-				text: "ASM deterministic tie-break item A",
-				namespace: "agent.assistant.working_memory",
-				sourceAgent: "assistant",
-				sourceType: "auto_capture",
-				memoryScope: "agent",
-				memoryType: "episodic_trace",
-				promotionState: "distilled",
-				confidence: 0.9,
-				timestamp: deterministicTimestamp,
-				updatedAt: deterministicTimestamp,
-				sessionId: "s1",
-				userId: "u1"
+			text: "ASM deterministic tie-break item A",
+			namespace: "agent.assistant.working_memory",
+			sourceAgent: "assistant",
+			sourceType: "auto_capture",
+			memoryScope: "agent",
+			memoryType: "episodic_trace",
+			promotionState: "distilled",
+			confidence: 0.9,
+			timestamp: deterministicTimestamp,
+			updatedAt: deterministicTimestamp,
+			sessionId: "s1",
+			userId: "u1",
 		});
 
 		const deterministicBriefing = readFileSync(
@@ -281,6 +397,7 @@ async function run() {
 				minScore: 0.1,
 				sessionMode: "strict",
 				sessionId: "strict-session",
+				includeDrafts: true,
 			},
 			context,
 		);
@@ -300,6 +417,7 @@ async function run() {
 				minScore: 0.1,
 				sessionMode: "soft",
 				sessionId: "strict-session",
+				includeDrafts: true,
 			},
 			context,
 		);
@@ -371,10 +489,112 @@ async function run() {
 			String(wikiSearch.results[0]?.metadata?.source_type || "") === "wiki",
 			"wiki-first search should label source_type=wiki",
 		);
+
+		qmdWikiRoot = mkdtempSync(join(tmpdir(), "asm-qmd-write-"));
+		process.env.ASM_WIKI_ROOT = qmdWikiRoot;
+		process.env.ASM_WIKI_STORAGE_BACKEND = "qmd";
+
+		writeWikiMemoryCapture({
+			text: "QMD draft-only zephyr-quartz sentinel",
+			namespace: "agent.assistant.working_memory",
+			sourceAgent: "assistant",
+			sourceType: "auto_capture",
+			memoryScope: "agent",
+			memoryType: "episodic_trace",
+			promotionState: "raw",
+			confidence: 0.8,
+			sessionId: "qmd-session",
+			userId: "u1",
+		});
+		writeWikiMemoryCapture({
+			text: "QMD live canonical retrieval signal",
+			namespace: "agent.assistant.working_memory",
+			sourceAgent: "assistant",
+			sourceType: "auto_capture",
+			memoryScope: "agent",
+			memoryType: "episodic_trace",
+			promotionState: "distilled",
+			confidence: 0.92,
+			sessionId: "qmd-session",
+			userId: "u1",
+		});
+
+		const qmdDefaultDraftExcluded = searchWikiMemory({
+			query: "zephyr-quartz sentinel",
+			limit: 5,
+			minScore: 0.1,
+			namespaces: ["agent.assistant.working_memory"],
+			sourceAgent: "assistant",
+			sessionMode: "soft",
+			preferredSessionId: "qmd-session",
+			userId: "u1",
+		});
+		assert(
+			qmdDefaultDraftExcluded.length === 0,
+			"QMD default search must exclude drafts unless includeDrafts=true",
+		);
+
+		const qmdDraftIncluded = searchWikiMemory({
+			query: "zephyr-quartz sentinel",
+			limit: 5,
+			minScore: 0.1,
+			namespaces: ["agent.assistant.working_memory"],
+			sourceAgent: "assistant",
+			sessionMode: "soft",
+			preferredSessionId: "qmd-session",
+			userId: "u1",
+			includeDrafts: true,
+		});
+		assert(
+			qmdDraftIncluded.length >= 1,
+			"QMD search should return draft content when includeDrafts=true",
+		);
+
+		const qmdLiveResults = searchWikiMemory({
+			query: "live canonical retrieval signal",
+			limit: 5,
+			minScore: 0.1,
+			namespaces: ["agent.assistant.working_memory"],
+			sourceAgent: "assistant",
+			sessionMode: "soft",
+			preferredSessionId: "qmd-session",
+			userId: "u1",
+		});
+		assert(
+			qmdLiveResults.length >= 1,
+			"QMD default search should retrieve live canonical entries",
+		);
+		assert(
+			String(qmdLiveResults[0]?.id || "").startsWith("wiki-qmd:"),
+			"QMD search ids should be wiki-qmd scoped",
+		);
+
+		const qmdRootPath = join(qmdWikiRoot, "wiki-qmd");
+		const countQmdFiles = (root: string): number => {
+			if (!existsSync(root)) return 0;
+			let total = 0;
+			for (const name of readdirSync(root)) {
+				const abs = join(root, name);
+				const st = statSync(abs);
+				if (st.isDirectory()) {
+					total += countQmdFiles(abs);
+				} else if (name.endsWith(".qmd")) {
+					total += 1;
+				}
+			}
+			return total;
+		};
+		assert(
+			countQmdFiles(qmdRootPath) > 0,
+			"QMD flow should materialize non-zero .qmd files",
+		);
 	} finally {
 		if (previousWikiRoot) process.env.ASM_WIKI_ROOT = previousWikiRoot;
 		else delete process.env.ASM_WIKI_ROOT;
+		if (previousBackend) process.env.ASM_WIKI_STORAGE_BACKEND = previousBackend;
+		else delete process.env.ASM_WIKI_STORAGE_BACKEND;
 		rmSync(wikiRoot, { recursive: true, force: true });
+		if (qmdWikiRoot) rmSync(qmdWikiRoot, { recursive: true, force: true });
 	}
 
 	console.log("✅ semantic memory usecase tests passed\n");

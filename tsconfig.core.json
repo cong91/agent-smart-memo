@@ -1,8 +1,8 @@
 {
-  "extends": "./tsconfig.base.json",
-  "compilerOptions": {
-    "outDir": "./dist-core"
-  },
-  "files": ["src/entries/core.ts"],
-  "exclude": ["node_modules", "dist", "dist-openclaw", "dist-paperclip", "dist-core", "tests"]
+	"extends": "./tsconfig.base.json",
+	"compilerOptions": {
+		"outDir": "./dist-core"
+	},
+	"files": ["src/entries/core.ts"],
+	"exclude": ["node_modules", "dist", "dist-core", "tests"]
 }

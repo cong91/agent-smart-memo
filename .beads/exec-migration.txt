@@ -1,0 +1,31 @@
+Execution packet: migration bead
+
+Likely code/artifact touchpoints:
+- src/services/qdrant.ts (read/export compatibility only during migration window)
+- src/scripts/ (new export or migration helper)
+- docs/asm-v2-wiki-memory-design.md (migration section)
+- memory/wiki/ bootstrap files
+
+Migration implementation split:
+A. Export old semantic records from Qdrant with these minimum fields:
+- text
+- namespace
+- timestamp
+- source_agent
+- sessionId/userId if present
+- metadata
+
+B. Mapping/grouping rules:
+- session summary style entries -> grouped day pages
+- lessons/runbooks -> grouped concept or decision pages
+- working memory/preferences -> grouped entity or project pages
+- never emit one markdown file per vector point
+
+C. Rollout:
+- parallel write window
+- wiki-first read window
+- final cutover with Qdrant backup retained
+
+Validation tasks:
+- Compare a handful of known recall cases before/after.
+- Ensure project-aware answers still rely on canonical project index, not migrated wiki guesses.

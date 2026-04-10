@@ -1,7 +1,7 @@
 {
 	"name": "@mrc2204/agent-smart-memo",
 	"version": "5.1.20",
-	"description": "Smart Memory Plugin for OpenClaw — structured slot memory with auto-capture, auto-recall, essence distillation, and Qdrant vector search",
+	"description": "Smart Memory Plugin for OpenClaw — structured slot memory with wiki-first memory capture/recall and migration compatibility tooling",
 	"keywords": [
 		"agent",
 		"ai",
@@ -9,8 +9,8 @@
 		"memory",
 		"openclaw",
 		"plugin",
-		"qdrant",
-		"smart-memo"
+		"smart-memo",
+		"wiki-memory"
 	],
 	"license": "MIT",
 	"author": "mrc2204",
@@ -37,35 +37,24 @@
 		"access": "public"
 	},
 	"scripts": {
-		"build": "npm run build:openclaw && npm run sync:openclaw:dist",
-		"build:all": "npm run build:openclaw && npm run build:paperclip && npm run build:core",
-		"build:openclaw": "tsc -p tsconfig.openclaw.json",
-		"build:paperclip": "tsc -p tsconfig.paperclip.json",
+		"build": "npm run build:plugin",
+		"build:all": "npm run build:plugin && npm run build:core",
+		"build:plugin": "tsc -p tsconfig.plugin.json",
 		"build:core": "tsc -p tsconfig.core.json",
-		"sync:openclaw:dist": "node scripts/sync-openclaw-dist.mjs",
-		"package:openclaw": "npm run build:openclaw && node scripts/prepare-package-target.mjs openclaw",
-		"package:paperclip": "npm run build:paperclip && node scripts/prepare-package-target.mjs paperclip",
+		"package:plugin": "npm run build:plugin && node scripts/prepare-package-target.mjs openclaw",
 		"package:core": "npm run build:core && node scripts/prepare-package-target.mjs core",
-		"pack:openclaw": "npm run package:openclaw && (cd artifacts/npm/openclaw && npm pack)",
-		"pack:paperclip": "npm run package:paperclip && (cd artifacts/npm/paperclip && npm pack)",
-		"package:paperclip:plugin-local": "npm run build:paperclip && node scripts/prepare-paperclip-plugin-local.mjs",
-		"pack:paperclip:plugin-local": "npm run package:paperclip:plugin-local && (cd artifacts/paperclip-plugin-local && npm pack)",
+		"pack:plugin": "npm run package:plugin && (cd artifacts/npm/openclaw && npm pack)",
 		"pack:core": "npm run package:core && (cd artifacts/npm/core && npm pack)",
-		"publish:openclaw": "npm run package:openclaw && node scripts/publish-target.mjs openclaw",
-		"publish:paperclip": "npm run package:paperclip && node scripts/publish-target.mjs paperclip",
+		"publish:plugin": "npm run package:plugin && node scripts/publish-target.mjs openclaw",
 		"publish:core": "npm run package:core && node scripts/publish-target.mjs core",
 		"test": "npx tsx tests/test.ts && npx tsx tests/test-auto-recall.ts && npx tsx tests/test-memory-config.ts",
-		"test:openclaw": "npx tsx tests/test-openclaw-adapter-contract.ts && npx tsx tests/test-openclaw-semantic-tools-integration.ts",
-		"test:paperclip": "npx tsx tests/test-paperclip-contracts.ts && npx tsx tests/test-paperclip-runtime-e2e.ts",
 		"test:asm-cli": "npx tsx tests/test-asm-cli.ts",
-		"smoke:paperclip:local": "npm run build:paperclip && node scripts/paperclip-local-smoke-debug.mjs",
-		"clean": "rm -rf dist dist-openclaw dist-paperclip dist-core artifacts/npm",
+		"clean": "rm -rf dist dist-core artifacts/npm",
 		"migrate:namespaces": "npx tsx scripts/migrate-namespaces.ts",
 		"migrate:memory-foundation": "npx tsx scripts/migrate-memory-foundation.ts",
-		"distill:namespaces": "npx tsx scripts/distill-by-namespace.ts",
-		"validate:ab": "npx tsx scripts/validate-ab.ts",
 		"init-openclaw": "node scripts/init-openclaw.mjs",
-		"asm": "node bin/asm.mjs"
+		"asm": "node bin/asm.mjs",
+		"test:plugin": "npx tsx tests/test-openclaw-adapter-contract.ts && npx tsx tests/test-openclaw-semantic-tools-integration.ts"
 	},
 	"dependencies": {
 		"dotenv": "^17.3.1"

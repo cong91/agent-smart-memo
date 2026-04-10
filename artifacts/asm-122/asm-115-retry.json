@@ -1,0 +1,63 @@
+{
+  "timestamp": "2026-03-20T01:19:35.608Z",
+  "started_at": "2026-03-20T01:09:23.553Z",
+  "duration_ms": 612057,
+  "bridge": {
+    "name": "opencode-coding-runner",
+    "version": "v0-min",
+    "workstream": "coding_execution",
+    "rule": "bridge accepts only coding_execution"
+  },
+  "input": {
+    "task_id": "ASM-122",
+    "packet_path": null,
+    "packet_version": null,
+    "objective": "Không re-plan. ASM-115 lần trước chưa pass theo chuẩn evidence vì chưa thấy code-level changes đáng tin trong working tree. Bây giờ phải làm lại ASM-115 với yêu cầu cứng: (1) sửa file thật trong repo; (2) tạo surface script/CLI/operator command thật cho migration/check version; (3) dùng shared config để resolve path/config; (4) detect current version/schema/payload thật cho SlotDB, Graph/index, semantic/vector; (5) có preflight + no-op + plan/apply/verify/rollback contract ở mức runnable surface; (6) chạy verify thật; (7) cuối cùng trả summary cực cụ thể gồm file đã sửa, command/script mới, test/build đã chạy, blocker còn lại. Không được chỉ nghiên cứu hay planning nữa. Trả lời bằng tiếng Việt.",
+    "command": null,
+    "title": "ASM-122 slice5b ASM-115 enforce code evidence",
+    "resume_session_id": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "continue_mode": false,
+    "fork": false
+  },
+  "invocation": {
+    "command": "opencode",
+    "args": [
+      "run",
+      "--format",
+      "json",
+      "--dir",
+      "/Users/mrcagents/Work/projects/agent-smart-memo",
+      "--title",
+      "ASM-122 slice5b ASM-115 enforce code evidence",
+      "--session",
+      "ses_2f891d808ffeYi94e0h5pGTsGy",
+      "Không re-plan. ASM-115 lần trước chưa pass theo chuẩn evidence vì chưa thấy code-level changes đáng tin trong working tree. Bây giờ phải làm lại ASM-115 với yêu cầu cứng: (1) sửa file thật trong repo; (2) tạo surface script/CLI/operator command thật cho migration/check version; (3) dùng shared config để resolve path/config; (4) detect current version/schema/payload thật cho SlotDB, Graph/index, semantic/vector; (5) có preflight + no-op + plan/apply/verify/rollback contract ở mức runnable surface; (6) chạy verify thật; (7) cuối cùng trả summary cực cụ thể gồm file đã sửa, command/script mới, test/build đã chạy, blocker còn lại. Không được chỉ nghiên cứu hay planning nữa. Trả lời bằng tiếng Việt."
+    ],
+    "rendered": "opencode run --format json --dir /Users/mrcagents/Work/projects/agent-smart-memo --title ASM-122 slice5b ASM-115 enforce code evidence --session ses_2f891d808ffeYi94e0h5pGTsGy Không re-plan. ASM-115 lần trước chưa pass theo chuẩn evidence vì chưa thấy code-level changes đáng tin trong working tree. Bây giờ phải làm lại ASM-115 với yêu cầu cứng: (1) sửa file thật trong repo; (2) tạo surface script/CLI/operator command thật cho migration/check version; (3) dùng shared config để resolve path/config; (4) detect current version/schema/payload thật cho SlotDB, Graph/index, semantic/vector; (5) có preflight + no-op + plan/apply/verify/rollback contract ở mức runnable surface; (6) chạy verify thật; (7) cuối cùng trả summary cực cụ thể gồm file đã sửa, command/script mới, test/build đã chạy, blocker còn lại. Không được chỉ nghiên cứu hay planning nữa. Trả lời bằng tiếng Việt.",
+    "cwd": "/Users/mrcagents/Work/projects/agent-smart-memo"
+  },
+  "opencode": {
+    "agent": null,
+    "model": null,
+    "session_id_input": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "continue_mode": false,
+    "fork": false,
+    "title": "ASM-122 slice5b ASM-115 enforce code evidence",
+    "session_id": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "event_count": 104
+  },
+  "process": {
+    "exit_code": 0,
+    "signal": null
+  },
+  "result": {
+    "status": "success",
+    "error": null,
+    "stdout_preview": "{\"type\":\"step_start\",\"timestamp\":1773969000109,\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"part\":{\"id\":\"prt_d08cac6a8001hCvyUQvmx9Ggsd\",\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"messageID\":\"msg_d08ca45f2001nrSgFzTvYkl5Ja\",\"type\":\"step-start\",\"snapshot\":\"51576c58ef6b57e78cdb91309ec1acb894db2b5c\"}}\n{\"type\":\"tool_use\",\"timestamp\":1773969000111,\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"part\":{\"id\":\"prt_d08cac6ae0011AfI87EEBv67sS\",\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"messageID\":\"msg_d08ca45f2001nrSgFzTvYkl5Ja\",\"type\":\"tool\",\"callID\":\"call_2SRwTuXmZxSGevL3eDek7fvG\",\"tool\":\"todowrite\",\"state\":{\"status\":\"completed\",\"input\":{\"todos\":[{\"content\":\"Implement ASM-115 runnable migration/check runner with preflight/plan/apply/verify/rollback/no-op\",\"status\":\"in_progress\",\"priority\":\"high\"},{\"content\":\"Expose operator surfaces via script + asm CLI command parsing/dispatch\",\"status\":\"pending\",\"priority\":\"high\"},{\"content\":\"Add tests for CLI parse and ASM-115 runner core behavior\",\"st",
+    "stderr_preview": ""
+  },
+  "evidence": {
+    "git_commit": "3e68b917c7ebb1c3ed278b069eaa8e3b110a69fa",
+    "output_file": "/Users/mrcagents/Work/projects/agent-smart-memo/artifacts/asm-122/asm-115-retry.json"
+  }
+}

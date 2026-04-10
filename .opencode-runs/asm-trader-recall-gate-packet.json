@@ -1,0 +1,14 @@
+{
+  "packet_version": 1,
+  "task_id": "asm-trader-recall-gate-20260322",
+  "owner_agent": "fullstack",
+  "workstream": "coding_execution",
+  "objective": "Implement a deeper trader recall gate in /Users/mrcagents/Work/projects/agent-smart-memo so ASM generic auto-recall does not semantically recall trader tactical memory into the generic path. Scope: edit only agent-smart-memo files. Primary targets: src/hooks/auto-recall.ts and src/core/retrieval-policy.ts, with narrow test updates only if needed. Requirements: (1) add deterministic suppression/routing logic so trader tactical semantic candidates are excluded or strongly suppressed from ASM generic recall when the session/agent context is not explicitly the trader tactical owner path; (2) preserve generic/shared recall for non-trader content; (3) keep curated/shared rules/runbooks available when appropriate; (4) add/adjust tests proving trader tactical semantic memory is suppressed from generic recall while same-thread/project/shared generic memory behavior still works; (5) rerun build + targeted tests relevant to recall. Do not implement pointer/export bridge yet. After editing, stop and report exact diff summary only.",
+  "constraints": [
+    "Edit only agent-smart-memo files",
+    "Prefer src/hooks/auto-recall.ts and src/core/retrieval-policy.ts",
+    "Do not break generic/shared recall behavior",
+    "Do not implement export bridge yet",
+    "Keep relevant tests green"
+  ]
+}

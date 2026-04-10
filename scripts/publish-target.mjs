@@ -3,8 +3,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 const target = process.argv[2];
-if (!target || !["openclaw", "paperclip", "core"].includes(target)) {
-  console.error("Usage: node scripts/publish-target.mjs <openclaw|paperclip|core>");
+if (!target || !["openclaw", "core"].includes(target)) {
+  console.error("Usage: node scripts/publish-target.mjs <openclaw|core>");
   process.exit(1);
 }
 

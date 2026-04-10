@@ -1,0 +1,14 @@
+{
+  "packet_version": 1,
+  "task_id": "asm-trader-routing-gate-slice1-20260322",
+  "owner_agent": "fullstack",
+  "workstream": "coding_execution",
+  "objective": "Implement the first real trader routing/capture gate in /Users/mrcagents/Work/projects/agent-smart-memo using OpenCode. Scope: edit only agent-smart-memo files. Add a classifier for trader tactical events/memory candidates and suppress ASM generic auto-capture for those classes so they can be owned by trader_brain_plugin instead. Primary touchpoint should be src/hooks/auto-capture.ts, with minimal helper additions elsewhere only if necessary. Requirements: (1) add a deterministic function/classifier that identifies trader tactical payloads/events (wake payloads, decision packets, HOLD/SKIP tactical rationale, risk/execution/post-close tactical cases, lesson/rule/invalidated assumption tactical content); (2) in auto-capture path, when classifier matches trader tactical domain, skip/suppress normal ASM capture and return structured suppression metadata/reason; (3) preserve existing generic/shared capture behavior for non-trader content; (4) add targeted tests proving trader tactical cases are suppressed while generic/shared cases still capture; (5) do not implement dual-write/export bridge yet; (6) do not modify trader_brain_plugin in this slice. Keep relevant tests green. After editing, stop and report exact diff summary only.",
+  "constraints": [
+    "Edit only agent-smart-memo files",
+    "Prefer src/hooks/auto-capture.ts and narrowly related test files",
+    "Do not add dual-write/export yet",
+    "Do not change trader_brain_plugin in this slice",
+    "Keep tests green"
+  ]
+}

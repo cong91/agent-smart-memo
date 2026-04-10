@@ -109,7 +109,6 @@ export function printHelp(log = console.log) {
   log("  asm setup-openclaw [--yes]");
   log("  asm setup openclaw [--yes]");
   log("  asm install openclaw [--yes]");
-  log("  asm install paperclip");
   log("  asm install opencode");
   log("  asm init-setup [--yes]");
   log("  asm init setup [--yes]");
@@ -271,7 +270,6 @@ export async function runCliBootstrapFlow({ log = console.log } = {}) {
   log('[ASM-CLI] Next steps:');
   log('  1) asm install openclaw');
   log('  2) asm install opencode');
-  log('  3) asm install paperclip');
   return { ok: true, step: 'install-cli', details: installed };
 }
 

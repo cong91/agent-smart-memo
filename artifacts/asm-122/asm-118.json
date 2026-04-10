@@ -1,0 +1,63 @@
+{
+  "timestamp": "2026-03-19T19:48:10.708Z",
+  "started_at": "2026-03-19T19:45:27.425Z",
+  "duration_ms": 163285,
+  "bridge": {
+    "name": "opencode-coding-runner",
+    "version": "v0-min",
+    "workstream": "coding_execution",
+    "rule": "bridge accepts only coding_execution"
+  },
+  "input": {
+    "task_id": "ASM-122",
+    "packet_path": null,
+    "packet_version": null,
+    "objective": "Không re-plan. Dùng patch-plan đã có trong session này. Bây giờ code ASM-118: bỏ hard-filter session mặc định, chuyển sang strict mode hoặc soft boost đúng contract đã chốt. Bám các file/hàm đã map trước đó. Chạy test/build liên quan và trả summary file sửa, test/build, blocker, readiness để sang ASM-120.",
+    "command": null,
+    "title": "ASM-122 slice2 ASM-118 session scope semantics",
+    "resume_session_id": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "continue_mode": false,
+    "fork": false
+  },
+  "invocation": {
+    "command": "opencode",
+    "args": [
+      "run",
+      "--format",
+      "json",
+      "--dir",
+      "/Users/mrcagents/Work/projects/agent-smart-memo",
+      "--title",
+      "ASM-122 slice2 ASM-118 session scope semantics",
+      "--session",
+      "ses_2f891d808ffeYi94e0h5pGTsGy",
+      "Không re-plan. Dùng patch-plan đã có trong session này. Bây giờ code ASM-118: bỏ hard-filter session mặc định, chuyển sang strict mode hoặc soft boost đúng contract đã chốt. Bám các file/hàm đã map trước đó. Chạy test/build liên quan và trả summary file sửa, test/build, blocker, readiness để sang ASM-120."
+    ],
+    "rendered": "opencode run --format json --dir /Users/mrcagents/Work/projects/agent-smart-memo --title ASM-122 slice2 ASM-118 session scope semantics --session ses_2f891d808ffeYi94e0h5pGTsGy Không re-plan. Dùng patch-plan đã có trong session này. Bây giờ code ASM-118: bỏ hard-filter session mặc định, chuyển sang strict mode hoặc soft boost đúng contract đã chốt. Bám các file/hàm đã map trước đó. Chạy test/build liên quan và trả summary file sửa, test/build, blocker, readiness để sang ASM-120.",
+    "cwd": "/Users/mrcagents/Work/projects/agent-smart-memo"
+  },
+  "opencode": {
+    "agent": null,
+    "model": null,
+    "session_id_input": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "continue_mode": false,
+    "fork": false,
+    "title": "ASM-122 slice2 ASM-118 session scope semantics",
+    "session_id": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "event_count": 37
+  },
+  "process": {
+    "exit_code": 0,
+    "signal": null
+  },
+  "result": {
+    "status": "success",
+    "error": null,
+    "stdout_preview": "{\"type\":\"step_start\",\"timestamp\":1773949551183,\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"part\":{\"id\":\"prt_d07a2024d0016Ggv6y08Ud3WbM\",\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"messageID\":\"msg_d07a1b0d8001M9qi307A74lQmh\",\"type\":\"step-start\",\"snapshot\":\"f1da36ff6168e503a9208d9bada979c2bf362307\"}}\n{\"type\":\"tool_use\",\"timestamp\":1773949551185,\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"part\":{\"id\":\"prt_d07a20250001mu7wF1NqZ3GfJH\",\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"messageID\":\"msg_d07a1b0d8001M9qi307A74lQmh\",\"type\":\"tool\",\"callID\":\"call_8fwydgx6rYMJIAyDzEc7eEVw\",\"tool\":\"todowrite\",\"state\":{\"status\":\"completed\",\"input\":{\"todos\":[{\"content\":\"Re-verify ASM-118 session semantics (strict vs soft) on tool/usecase paths\",\"status\":\"in_progress\",\"priority\":\"high\"},{\"content\":\"Run ASM-118 related tests and build\",\"status\":\"pending\",\"priority\":\"high\"},{\"content\":\"Summarize files, verification, blockers, readiness for ASM-120\",\"status\":\"pending\",\"priority\":\"high\"}]},\"output\":\"[\\n  ",
+    "stderr_preview": ""
+  },
+  "evidence": {
+    "git_commit": "3e68b917c7ebb1c3ed278b069eaa8e3b110a69fa",
+    "output_file": "/Users/mrcagents/Work/projects/agent-smart-memo/artifacts/asm-122/asm-118.json"
+  }
+}

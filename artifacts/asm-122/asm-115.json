@@ -1,0 +1,63 @@
+{
+  "timestamp": "2026-03-19T20:21:53.481Z",
+  "started_at": "2026-03-19T20:14:08.386Z",
+  "duration_ms": 465096,
+  "bridge": {
+    "name": "opencode-coding-runner",
+    "version": "v0-min",
+    "workstream": "coding_execution",
+    "rule": "bridge accepts only coding_execution"
+  },
+  "input": {
+    "task_id": "ASM-122",
+    "packet_path": null,
+    "packet_version": null,
+    "objective": "Không re-plan. Dùng patch-plan đã có trong session này. Bây giờ làm ASM-115 theo hướng thực dụng, không chỉ note/planning. Yêu cầu bắt buộc: (1) migration-safe; (2) version-aware; (3) shared-config-driven; (4) phải có surface script/CLI để user/operator dùng được; (5) phải kiểm tra dữ liệu hiện tại trước khi migrate, không được migrate bừa; (6) phải cover SlotDB, Graph DB/index plane, semantic/vector DB; (7) có preflight + snapshot/backup strategy + plan/apply/verify/rollback contract; (8) no-op khi đã đúng version hoặc không cần migrate. Ưu tiên implement migration runner/checker thật, detect current version/schema/payload, resolve path/config từ shared config, và trả summary file sửa, command mới, verify đã chạy, blocker còn lại. Trả lời bằng tiếng Việt.",
+    "command": null,
+    "title": "ASM-122 slice5 ASM-115 migration-first safety",
+    "resume_session_id": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "continue_mode": false,
+    "fork": false
+  },
+  "invocation": {
+    "command": "opencode",
+    "args": [
+      "run",
+      "--format",
+      "json",
+      "--dir",
+      "/Users/mrcagents/Work/projects/agent-smart-memo",
+      "--title",
+      "ASM-122 slice5 ASM-115 migration-first safety",
+      "--session",
+      "ses_2f891d808ffeYi94e0h5pGTsGy",
+      "Không re-plan. Dùng patch-plan đã có trong session này. Bây giờ làm ASM-115 theo hướng thực dụng, không chỉ note/planning. Yêu cầu bắt buộc: (1) migration-safe; (2) version-aware; (3) shared-config-driven; (4) phải có surface script/CLI để user/operator dùng được; (5) phải kiểm tra dữ liệu hiện tại trước khi migrate, không được migrate bừa; (6) phải cover SlotDB, Graph DB/index plane, semantic/vector DB; (7) có preflight + snapshot/backup strategy + plan/apply/verify/rollback contract; (8) no-op khi đã đúng version hoặc không cần migrate. Ưu tiên implement migration runner/checker thật, detect current version/schema/payload, resolve path/config từ shared config, và trả summary file sửa, command mới, verify đã chạy, blocker còn lại. Trả lời bằng tiếng Việt."
+    ],
+    "rendered": "opencode run --format json --dir /Users/mrcagents/Work/projects/agent-smart-memo --title ASM-122 slice5 ASM-115 migration-first safety --session ses_2f891d808ffeYi94e0h5pGTsGy Không re-plan. Dùng patch-plan đã có trong session này. Bây giờ làm ASM-115 theo hướng thực dụng, không chỉ note/planning. Yêu cầu bắt buộc: (1) migration-safe; (2) version-aware; (3) shared-config-driven; (4) phải có surface script/CLI để user/operator dùng được; (5) phải kiểm tra dữ liệu hiện tại trước khi migrate, không được migrate bừa; (6) phải cover SlotDB, Graph DB/index plane, semantic/vector DB; (7) có preflight + snapshot/backup strategy + plan/apply/verify/rollback contract; (8) no-op khi đã đúng version hoặc không cần migrate. Ưu tiên implement migration runner/checker thật, detect current version/schema/payload, resolve path/config từ shared config, và trả summary file sửa, command mới, verify đã chạy, blocker còn lại. Trả lời bằng tiếng Việt.",
+    "cwd": "/Users/mrcagents/Work/projects/agent-smart-memo"
+  },
+  "opencode": {
+    "agent": null,
+    "model": null,
+    "session_id_input": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "continue_mode": false,
+    "fork": false,
+    "title": "ASM-122 slice5 ASM-115 migration-first safety",
+    "session_id": "ses_2f891d808ffeYi94e0h5pGTsGy",
+    "event_count": 101
+  },
+  "process": {
+    "exit_code": 0,
+    "signal": null
+  },
+  "result": {
+    "status": "success",
+    "error": null,
+    "stdout_preview": "{\"type\":\"step_start\",\"timestamp\":1773951273032,\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"part\":{\"id\":\"prt_d07bc4846001hd4Zez0ZvxQlCz\",\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"messageID\":\"msg_d07bbf5480010XQO0SPvnV3Eum\",\"type\":\"step-start\",\"snapshot\":\"d6fd7e983e101a8d29af83ed8d54e8d22a982e9e\"}}\n{\"type\":\"tool_use\",\"timestamp\":1773951273043,\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"part\":{\"id\":\"prt_d07bc484b001v4Pmtnb0DWGkXr\",\"sessionID\":\"ses_2f891d808ffeYi94e0h5pGTsGy\",\"messageID\":\"msg_d07bbf5480010XQO0SPvnV3Eum\",\"type\":\"tool\",\"callID\":\"call_NmT4kX1pCJQx3vfA0xT1tEmD\",\"tool\":\"todowrite\",\"state\":{\"status\":\"completed\",\"input\":{\"todos\":[{\"content\":\"Khảo sát runtime storage/config để xác định version/schema hiện tại cho SlotDB, Graph/index, semantic/vector\",\"status\":\"in_progress\",\"priority\":\"high\"},{\"content\":\"Implement migration runner ASM-115 (preflight, snapshot, plan/apply/verify/rollback, no-op, version-aware, shared-config-driven)\",\"status\":\"pending\",\"priority\":\"high\"},{\"co",
+    "stderr_preview": ""
+  },
+  "evidence": {
+    "git_commit": "3e68b917c7ebb1c3ed278b069eaa8e3b110a69fa",
+    "output_file": "/Users/mrcagents/Work/projects/agent-smart-memo/artifacts/asm-122/asm-115.json"
+  }
+}
