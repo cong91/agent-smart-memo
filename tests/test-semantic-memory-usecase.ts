@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	buildWikiWorkingSet,
 	SemanticMemoryUseCase,
 	searchWikiMemory,
 	writeWikiMemoryCapture,
@@ -519,6 +520,28 @@ async function run() {
 			userId: "u1",
 		});
 
+		const projectedLivePage = readFileSync(
+			join(qmdWikiRoot, "live", "entities", "assistant", "u1-qmd-session.md"),
+			"utf8",
+		);
+		assert(
+			projectedLivePage.includes("canonical_backend: qmd") &&
+				projectedLivePage.includes("working_surface: markdown") &&
+				projectedLivePage.includes("derived_from: qmd://live/"),
+			"QMD mode should materialize markdown as a working-surface projection with explicit canonical backend metadata",
+		);
+
+		const projectedDraftPage = readFileSync(
+			join(qmdWikiRoot, "drafts", "entities", "assistant", "u1-qmd-session.md"),
+			"utf8",
+		);
+		assert(
+			projectedDraftPage.includes("canonical_backend: qmd") &&
+				projectedDraftPage.includes("working_surface: markdown") &&
+				projectedDraftPage.includes("derived_from: qmd://drafts/"),
+			"QMD draft pages should also remain explicit markdown working-surface projections",
+		);
+
 		const qmdDefaultDraftExcluded = searchWikiMemory({
 			query: "zephyr-quartz sentinel",
 			limit: 5,
@@ -587,6 +610,145 @@ async function run() {
 		assert(
 			countQmdFiles(qmdRootPath) > 0,
 			"QMD flow should materialize non-zero .qmd files",
+		);
+
+		rmSync(
+			join(qmdWikiRoot, "live", "entities", "assistant", "u1-qmd-session.md"),
+			{
+				force: true,
+			},
+		);
+		const qmdLiveCatalog = readFileSync(
+			join(qmdRootPath, "catalog.json"),
+			"utf8",
+		);
+		const liveShardPath = String(
+			JSON.parse(qmdLiveCatalog).shards.find(
+				(entry: any) =>
+					entry.layer === "live" &&
+					entry.page_key === "entities/assistant/u1-qmd-session",
+			)?.path || "",
+		);
+		assert(
+			liveShardPath.length > 0,
+			"QMD catalog should expose live shard path",
+		);
+		const liveQmdPath = join(qmdRootPath, liveShardPath);
+		const originalLiveQmd = readFileSync(liveQmdPath, "utf8");
+		const bumpedLiveQmd = originalLiveQmd.replace(
+			/updated_at: .*\n/,
+			"updated_at: 2026-04-10T03:00:00.000Z\n",
+		);
+		writeFileSync(liveQmdPath, bumpedLiveQmd, "utf8");
+
+		const rebuiltWorkingSet = buildWikiWorkingSet({
+			namespaces: ["agent.assistant.working_memory"],
+			sourceAgent: "assistant",
+			query: "live canonical retrieval signal",
+			preferredSessionId: "qmd-session",
+			userId: "u1",
+		});
+		assert(
+			Boolean(rebuiltWorkingSet),
+			"building the wiki working set should rematerialize markdown projections from canonical QMD state",
+		);
+		const rematerializedLivePage = readFileSync(
+			join(qmdWikiRoot, "live", "entities", "assistant", "u1-qmd-session.md"),
+			"utf8",
+		);
+		assert(
+			rematerializedLivePage.includes(
+				"refresh_policy: on_write_and_on_read_if_missing_or_stale",
+			) &&
+				rematerializedLivePage.includes(
+					"materialized_from: qmd-canonical-state",
+				) &&
+				rematerializedLivePage.includes("derived_from: qmd://live/"),
+			"QMD markdown working pages should be rematerialized on read with explicit refresh/materialization metadata",
+		);
+
+		const forgedMarkdownPage = rematerializedLivePage
+			.replace(
+				/materialized_at: .*\n/,
+				"materialized_at: 1999-01-01T00:00:00.000Z\n",
+			)
+			.replace(/updatedAt: .*\n/, "updatedAt: 2099-01-01T00:00:00.000Z\n");
+		writeFileSync(
+			join(qmdWikiRoot, "live", "entities", "assistant", "u1-qmd-session.md"),
+			forgedMarkdownPage,
+			"utf8",
+		);
+		buildWikiWorkingSet({
+			namespaces: ["agent.assistant.working_memory"],
+			sourceAgent: "assistant",
+			query: "live canonical retrieval signal",
+			preferredSessionId: "qmd-session",
+			userId: "u1",
+		});
+		const refreshedAfterForgery = readFileSync(
+			join(qmdWikiRoot, "live", "entities", "assistant", "u1-qmd-session.md"),
+			"utf8",
+		);
+		assert(
+			!refreshedAfterForgery.includes(
+				"materialized_at: 1999-01-01T00:00:00.000Z",
+			),
+			"projection refresh should trust materialized_at/canonical state, not a forged markdown updatedAt",
+		);
+
+		const tamperedMarkdownPage = refreshedAfterForgery.replace(
+			"QMD live canonical retrieval signal",
+			"FORGED markdown drift signal",
+		);
+		writeFileSync(
+			join(qmdWikiRoot, "live", "entities", "assistant", "u1-qmd-session.md"),
+			tamperedMarkdownPage,
+			"utf8",
+		);
+
+		const searchAfterTamper = searchWikiMemory({
+			query: "live canonical retrieval signal",
+			limit: 5,
+			minScore: 0.1,
+			namespaces: ["agent.assistant.working_memory"],
+			sourceAgent: "assistant",
+			sessionMode: "soft",
+			preferredSessionId: "qmd-session",
+			userId: "u1",
+		});
+		assert(
+			searchAfterTamper.length >= 1 &&
+				searchAfterTamper.some((result) =>
+					String(result.text || "").includes(
+						"QMD live canonical retrieval signal",
+					),
+				),
+			"QMD search should continue reading canonical backend truth even if markdown working pages drift",
+		);
+		assert(
+			searchAfterTamper.every(
+				(result) =>
+					!String(result.text || "").includes("FORGED markdown drift signal"),
+			),
+			"QMD search results must not trust forged markdown working-surface body text as canonical truth",
+		);
+
+		buildWikiWorkingSet({
+			namespaces: ["agent.assistant.working_memory"],
+			sourceAgent: "assistant",
+			query: "live canonical retrieval signal",
+			preferredSessionId: "qmd-session",
+			userId: "u1",
+		});
+		const refreshedAfterBodyTamper = readFileSync(
+			join(qmdWikiRoot, "live", "entities", "assistant", "u1-qmd-session.md"),
+			"utf8",
+		);
+		assert(
+			refreshedAfterBodyTamper.includes(
+				"QMD live canonical retrieval signal",
+			) && !refreshedAfterBodyTamper.includes("FORGED markdown drift signal"),
+			"wiki working-set reads should rematerialize markdown body content from canonical QMD when working-surface text drifts",
 		);
 	} finally {
 		if (previousWikiRoot) process.env.ASM_WIKI_ROOT = previousWikiRoot;

@@ -114,7 +114,7 @@ export const AGENT_MEMO_CONFIG_SCHEMA = {
 		wikiDir: {
 			type: "string",
 			description:
-				"Wiki memory directory used by ASM runtime (qmdRoot is derived internally)",
+				"Markdown wiki working-surface directory used by ASM runtime (canonical QMD backend root is derived internally)",
 		},
 	},
 } as const;

@@ -18,6 +18,7 @@ export interface RecallPrecedencePolicy {
 	wikiWorkingSet: "primary";
 	semanticEvidence: "support";
 	graphRoutingSupport: "support";
+	canonicalPersistence: "qmd-backend" | "md-files";
 }
 
 export const DEFAULT_RECALL_PRECEDENCE_POLICY: RecallPrecedencePolicy = {
@@ -25,6 +26,7 @@ export const DEFAULT_RECALL_PRECEDENCE_POLICY: RecallPrecedencePolicy = {
 	wikiWorkingSet: "primary",
 	semanticEvidence: "support",
 	graphRoutingSupport: "support",
+	canonicalPersistence: "qmd-backend",
 };
 
 function formatRecallMeta(

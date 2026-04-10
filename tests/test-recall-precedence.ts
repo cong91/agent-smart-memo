@@ -64,9 +64,12 @@ test("asm runtime contract exposes wiki-first working-surface guidance", () => {
 		asmRuntime: `<asm-runtime>
   <run-mode>wiki-first</run-mode>
   <contract>working-surface</contract>
+  <storage-boundary><canonical-persistence>qmd-backend</canonical-persistence><working-surface>markdown-wiki</working-surface><slotdb-role>state-control</slotdb-role><graph-role>support-routing</graph-role></storage-boundary>
   <guidance>
     <instruction index="1">treat wiki pages as the primary working surface for this run</instruction>
-    <instruction index="2">inspect wiki root, entrypoint, and canonical pages before leaning on supporting recall</instruction>
+    <instruction index="2">treat markdown wiki pages as a rendered working surface, not the only storage truth</instruction>
+    <instruction index="3">keep QMD-backed persistence as canonical backend state when runtime is configured for QMD storage</instruction>
+    <instruction index="4">inspect wiki root, entrypoint, and canonical pages before leaning on supporting recall</instruction>
   </guidance>
 </asm-runtime>`,
 		currentState: "<current-state><task>truth</task></current-state>",
@@ -85,7 +88,15 @@ test("asm runtime contract exposes wiki-first working-surface guidance", () => {
 		"asm runtime should declare the working-surface contract",
 	);
 	assert(
+		runtime.includes(
+			"<canonical-persistence>qmd-backend</canonical-persistence>",
+		) && runtime.includes("<working-surface>markdown-wiki</working-surface>"),
+		"asm runtime should expose explicit canonical-backend vs markdown-working-surface boundary",
+	);
+	assert(
 		runtime.includes("primary working surface") &&
+			runtime.includes("not the only storage truth") &&
+			runtime.includes("canonical backend state") &&
 			runtime.includes("before leaning on supporting recall"),
 		"asm runtime should guide wiki-first inspection before supporting recall",
 	);

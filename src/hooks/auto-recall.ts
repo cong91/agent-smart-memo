@@ -302,6 +302,8 @@ function formatAsmRuntime(input: {
 		input.runMode === "wiki-first"
 			? [
 					"treat wiki pages as the primary working surface for this run",
+					"treat markdown wiki pages as a rendered working surface, not the only storage truth",
+					"keep QMD-backed persistence as canonical backend state when runtime is configured for QMD storage",
 					"inspect wiki root, entrypoint, and canonical pages before leaning on supporting recall",
 					"use supporting recall and graph context only as routing/evidence, not as the primary cognition layer",
 				]
@@ -331,6 +333,10 @@ function formatAsmRuntime(input: {
 				? "write-back"
 				: "light";
 	xml += "</contract>";
+	if (input.runMode === "wiki-first") {
+		xml +=
+			"\n  <storage-boundary><canonical-persistence>qmd-backend</canonical-persistence><working-surface>markdown-wiki</working-surface><slotdb-role>state-control</slotdb-role><graph-role>support-routing</graph-role></storage-boundary>";
+	}
 	if (reasons) {
 		xml += `\n  <reasons>\n${reasons}\n  </reasons>`;
 	}

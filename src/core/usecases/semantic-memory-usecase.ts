@@ -28,6 +28,7 @@ import {
 	shouldApplyStrictSessionFilter,
 } from "../retrieval-policy.js";
 import type { QmdLayer } from "./qmd-catalog.js";
+import { readQmdCatalog } from "./qmd-catalog.js";
 import {
 	ensureWikiQmdBootstrap,
 	loadQmdEntriesForPage,
@@ -149,11 +150,23 @@ export interface WikiWorkingSetResult {
 interface WikiFrontmatter {
 	namespace?: string;
 	sessionId?: string;
+	session_id?: string;
 	userId?: string;
+	user_id?: string;
 	source_agent?: string;
 	timestamp?: string;
 	updatedAt?: string;
+	updated_at?: string;
+	time_from?: string;
+	time_to?: string;
 	title?: string;
+	storage_backend?: string;
+	canonical_backend?: string;
+	working_surface?: string;
+	derived_from?: string;
+	refresh_policy?: string;
+	materialized_at?: string;
+	materialized_from?: string;
 	[key: string]: string | undefined;
 }
 
@@ -202,6 +215,9 @@ interface WikiMemoryWriteResult {
 	updated: boolean;
 	namespace: MemoryNamespace;
 	wikiRoot: string;
+	storageBackend: WikiStorageBackend;
+	canonicalBackend: "qmd" | "md";
+	workingSurface: "markdown";
 	rawPath: string;
 	draftPath: string;
 	livePath: string;
@@ -518,6 +534,10 @@ export function buildWikiWorkingSet(
 ): WikiWorkingSetResult | null {
 	const wikiRoot = resolveWikiRootPath();
 	if (!wikiRoot) return null;
+	materializeMarkdownWorkingSurfaceFromQmd({
+		wikiRoot,
+		includeDrafts: input.includeDrafts,
+	});
 
 	const docs = loadWikiDocuments(input.namespaces, input.sourceAgent, {
 		includeDrafts: input.includeDrafts,
@@ -767,6 +787,83 @@ function writeMarkdownFile(
 	);
 }
 
+function resolveCanonicalBackend(backend: WikiStorageBackend): "qmd" | "md" {
+	return backend === "md" ? "md" : "qmd";
+}
+
+function buildWorkingSurfaceFrontmatter(input: {
+	base: WikiFrontmatter;
+	storageBackend: WikiStorageBackend;
+	canonicalBackend: "qmd" | "md";
+	derivedFrom: string;
+	materializedAt?: string;
+	materializedFrom?: string;
+}): WikiFrontmatter {
+	return {
+		...input.base,
+		storage_backend: input.storageBackend,
+		canonical_backend: input.canonicalBackend,
+		working_surface: "markdown",
+		derived_from: input.derivedFrom,
+		refresh_policy:
+			input.canonicalBackend === "qmd"
+				? "on_write_and_on_read_if_missing_or_stale"
+				: "self_managed_markdown",
+		materialized_at: input.materializedAt,
+		materialized_from: input.materializedFrom,
+	};
+}
+
+function resolveWikiGroupingIdentity(input: {
+	namespace: MemoryNamespace;
+	sourceAgent?: string;
+	sessionId?: string;
+	userId?: string;
+}): {
+	liveRelPath: string;
+	draftRelPath: string;
+	briefingRelPath: string;
+	rawRelPath: string;
+	pageKey: string;
+	title: string;
+} {
+	const agentSlug = slugifySegment(input.sourceAgent, "assistant");
+	const userSlug = slugifySegment(input.userId, "anon");
+	const sessionSlug = slugifySegment(input.sessionId, "shared");
+	const dateKey = new Date().toISOString().slice(0, 10);
+
+	if (input.namespace === "shared.project_context") {
+		return {
+			liveRelPath: `live/projects/${userSlug}/${sessionSlug}.md`,
+			draftRelPath: `drafts/projects/${userSlug}/${sessionSlug}.md`,
+			briefingRelPath: `briefings/project-${userSlug}-${sessionSlug}.md`,
+			rawRelPath: `raw/${dateKey}/project-${userSlug}-${sessionSlug}.md`,
+			pageKey: `projects/${userSlug}/${sessionSlug}`,
+			title: "Project Context Memory",
+		};
+	}
+
+	if (String(input.namespace).endsWith(".lessons")) {
+		return {
+			liveRelPath: `live/concepts/${agentSlug}/${userSlug}-${sessionSlug}.md`,
+			draftRelPath: `drafts/concepts/${agentSlug}/${userSlug}-${sessionSlug}.md`,
+			briefingRelPath: `briefings/concepts-${agentSlug}-${userSlug}-${sessionSlug}.md`,
+			rawRelPath: `raw/${dateKey}/concepts-${agentSlug}-${userSlug}-${sessionSlug}.md`,
+			pageKey: `concepts/${agentSlug}/${userSlug}-${sessionSlug}`,
+			title: `${input.sourceAgent || "assistant"} Lessons Memory`,
+		};
+	}
+
+	return {
+		liveRelPath: `live/entities/${agentSlug}/${userSlug}-${sessionSlug}.md`,
+		draftRelPath: `drafts/entities/${agentSlug}/${userSlug}-${sessionSlug}.md`,
+		briefingRelPath: `briefings/entities-${agentSlug}-${userSlug}-${sessionSlug}.md`,
+		rawRelPath: `raw/${dateKey}/entities-${agentSlug}-${userSlug}-${sessionSlug}.md`,
+		pageKey: `entities/${agentSlug}/${userSlug}-${sessionSlug}`,
+		title: `${input.sourceAgent || "assistant"} Working Memory`,
+	};
+}
+
 function ensureWikiBootstrap(wikiRoot: string): void {
 	const dirs = [
 		join(wikiRoot, "raw"),
@@ -841,41 +938,225 @@ function resolveWikiGroupingPaths(input: WikiMemoryWriteInput): {
 	pageKey: string;
 	title: string;
 } {
-	const agentSlug = slugifySegment(input.sourceAgent, "assistant");
-	const userSlug = slugifySegment(input.userId, "anon");
-	const sessionSlug = slugifySegment(input.sessionId, "shared");
-	const dateKey = new Date().toISOString().slice(0, 10);
+	return resolveWikiGroupingIdentity({
+		namespace: input.namespace,
+		sourceAgent: input.sourceAgent,
+		sessionId: input.sessionId,
+		userId: input.userId,
+	});
+}
 
-	if (input.namespace === "shared.project_context") {
-		return {
-			liveRelPath: `live/projects/${userSlug}/${sessionSlug}.md`,
-			draftRelPath: `drafts/projects/${userSlug}/${sessionSlug}.md`,
-			briefingRelPath: `briefings/project-${userSlug}-${sessionSlug}.md`,
-			rawRelPath: `raw/${dateKey}/project-${userSlug}-${sessionSlug}.md`,
-			pageKey: `projects/${userSlug}/${sessionSlug}`,
-			title: "Project Context Memory",
-		};
+function buildEntryBlocksFromParsedEntries(
+	entries: ParsedWikiMemoryEntry[],
+): string {
+	return entries
+		.slice()
+		.sort(compareEntriesDeterministically)
+		.map((entry) =>
+			buildWikiMemoryEntry(
+				{
+					text: entry.text,
+					namespace:
+						(entry.namespace as MemoryNamespace | undefined) ||
+						("agent.assistant.working_memory" as MemoryNamespace),
+					sourceAgent: "assistant",
+					sourceType: entry.sourceType || "qmd_materialized",
+					memoryScope: entry.memoryScope || "agent",
+					memoryType: entry.memoryType || "episodic_trace",
+					promotionState: entry.promotionState,
+					confidence: Number(entry.confidence || 0) || 0,
+					sessionId: entry.sessionId,
+					userId: entry.userId,
+				},
+				entry.id,
+				entry.timestamp,
+			),
+		)
+		.join("\n\n");
+}
+
+function needsQmdProjectionRefresh(input: {
+	absPath: string;
+	canonicalUpdatedAt: string;
+	derivedFrom: string;
+	title: string;
+	namespace: string;
+	expectedBody?: string;
+}): boolean {
+	if (!existsSync(input.absPath)) return true;
+	try {
+		const canonicalTime = Date.parse(input.canonicalUpdatedAt);
+		if (!Number.isFinite(canonicalTime) || canonicalTime <= 0) return true;
+		const parsed = parseWikiFrontmatter(readFileSync(input.absPath, "utf8"));
+		if (parsed.frontmatter.canonical_backend !== "qmd") return true;
+		if (parsed.frontmatter.working_surface !== "markdown") return true;
+		if (parsed.frontmatter.derived_from !== input.derivedFrom) return true;
+		if (parsed.frontmatter.title !== input.title) return true;
+		if (parsed.frontmatter.namespace !== input.namespace) return true;
+		const materializedAt =
+			parsed.frontmatter.materialized_at || parsed.frontmatter.updatedAt || "";
+		const materializedTime = Date.parse(materializedAt);
+		if (!Number.isFinite(materializedTime) || materializedTime <= 0)
+			return true;
+		if (
+			typeof input.expectedBody === "string" &&
+			parsed.body.trim() !== input.expectedBody.trim()
+		) {
+			return true;
+		}
+		return materializedTime < canonicalTime;
+	} catch {
+		return true;
+	}
+}
+
+function materializeMarkdownWorkingSurfaceFromQmd(input: {
+	wikiRoot: string;
+	includeDrafts?: boolean;
+}): void {
+	const backend = resolveWikiStorageBackend();
+	if (!supportsQmdWrite(backend)) return;
+
+	ensureWikiBootstrap(input.wikiRoot);
+	const qmdRoot = ensureWikiQmdBootstrap(input.wikiRoot);
+	const catalog = readQmdCatalog(qmdRoot);
+	if (catalog.shards.length === 0) return;
+
+	const selectedLayers: QmdLayer[] = ["live", "briefings"];
+	if (input.includeDrafts) selectedLayers.push("drafts");
+	const layerSet = new Set(selectedLayers);
+	const latestByPage = new Map<string, (typeof catalog.shards)[number]>();
+
+	for (const shard of catalog.shards) {
+		if (!layerSet.has(shard.layer)) continue;
+		const key = `${shard.layer}::${shard.namespace}::${shard.page_key}`;
+		const current = latestByPage.get(key);
+		if (!current) {
+			latestByPage.set(key, shard);
+			continue;
+		}
+		const nextTime = Date.parse(shard.updated_at || "") || 0;
+		const currentTime = Date.parse(current.updated_at || "") || 0;
+		if (
+			nextTime > currentTime ||
+			(nextTime === currentTime && shard.shard_seq > current.shard_seq)
+		) {
+			latestByPage.set(key, shard);
+		}
 	}
 
-	if (String(input.namespace).endsWith(".lessons")) {
-		return {
-			liveRelPath: `live/concepts/${agentSlug}/${userSlug}-${sessionSlug}.md`,
-			draftRelPath: `drafts/concepts/${agentSlug}/${userSlug}-${sessionSlug}.md`,
-			briefingRelPath: `briefings/concepts-${agentSlug}-${userSlug}-${sessionSlug}.md`,
-			rawRelPath: `raw/${dateKey}/concepts-${agentSlug}-${userSlug}-${sessionSlug}.md`,
-			pageKey: `concepts/${agentSlug}/${userSlug}-${sessionSlug}`,
-			title: `${input.sourceAgent} Lessons Memory`,
-		};
-	}
+	for (const shard of latestByPage.values()) {
+		const absQmdPath = join(qmdRoot, shard.path);
+		if (!existsSync(absQmdPath)) continue;
+		const parsedQmd = parseWikiFrontmatter(readFileSync(absQmdPath, "utf8"));
+		const namespace =
+			(String(parsedQmd.frontmatter.namespace || shard.namespace).trim() as
+				| MemoryNamespace
+				| "") || (shard.namespace as MemoryNamespace);
+		const grouping = resolveWikiGroupingIdentity({
+			namespace,
+			sourceAgent: parsedQmd.frontmatter.source_agent,
+			sessionId: parsedQmd.frontmatter.session_id,
+			userId: parsedQmd.frontmatter.user_id,
+		});
+		const relPath =
+			shard.layer === "live"
+				? grouping.liveRelPath
+				: shard.layer === "drafts"
+					? grouping.draftRelPath
+					: grouping.briefingRelPath;
+		const absPath = join(input.wikiRoot, relPath);
+		const title =
+			String(parsedQmd.frontmatter.title || "").trim() ||
+			(shard.layer === "briefings"
+				? `${grouping.title} Briefing`
+				: shard.layer === "drafts"
+					? `${grouping.title} Draft`
+					: grouping.title);
+		const canonicalUpdatedAt = String(
+			parsedQmd.frontmatter.updated_at ||
+				shard.updated_at ||
+				new Date().toISOString(),
+		);
+		const derivedFrom = `qmd://${shard.path}`;
 
-	return {
-		liveRelPath: `live/entities/${agentSlug}/${userSlug}-${sessionSlug}.md`,
-		draftRelPath: `drafts/entities/${agentSlug}/${userSlug}-${sessionSlug}.md`,
-		briefingRelPath: `briefings/entities-${agentSlug}-${userSlug}-${sessionSlug}.md`,
-		rawRelPath: `raw/${dateKey}/entities-${agentSlug}-${userSlug}-${sessionSlug}.md`,
-		pageKey: `entities/${agentSlug}/${userSlug}-${sessionSlug}`,
-		title: `${input.sourceAgent} Working Memory`,
-	};
+		const entries = loadQmdEntriesForPage({
+			wikiRoot: input.wikiRoot,
+			layer: shard.layer,
+			namespace,
+			pageKey: shard.page_key,
+		})
+			.map((entry) => ({
+				id: entry.id,
+				timestamp: entry.timestamp,
+				namespace: entry.namespace,
+				text: entry.text,
+				sourceType: entry.sourceType,
+				memoryScope: entry.memoryScope,
+				memoryType: entry.memoryType,
+				promotionState: entry.promotionState,
+				confidence: entry.confidence,
+				sessionId: entry.sessionId,
+				userId: entry.userId,
+			}))
+			.sort(compareEntriesDeterministically);
+
+		const body =
+			shard.layer === "briefings"
+				? [
+						`# ${title}`,
+						"",
+						buildBriefingSummaryText(entries, canonicalUpdatedAt),
+					].join("\n")
+				: `# ${title}\n\n${buildEntryBlocksFromParsedEntries(entries)}`;
+
+		if (
+			!needsQmdProjectionRefresh({
+				absPath,
+				canonicalUpdatedAt,
+				derivedFrom,
+				title,
+				namespace,
+				expectedBody: body,
+			})
+		) {
+			continue;
+		}
+
+		writeMarkdownFile(
+			absPath,
+			buildWorkingSurfaceFrontmatter({
+				base: {
+					title,
+					namespace,
+					sessionId: parsedQmd.frontmatter.session_id,
+					userId: parsedQmd.frontmatter.user_id,
+					source_agent: parsedQmd.frontmatter.source_agent,
+					timestamp: String(
+						parsedQmd.frontmatter.time_from ||
+							entries[0]?.timestamp ||
+							canonicalUpdatedAt,
+					),
+					updatedAt: canonicalUpdatedAt,
+				},
+				storageBackend: backend,
+				canonicalBackend: "qmd",
+				derivedFrom,
+				materializedAt: new Date().toISOString(),
+				materializedFrom: "qmd-canonical-state",
+			}),
+			body,
+		);
+
+		if (shard.layer === "live") {
+			refreshWikiIndex(
+				input.wikiRoot,
+				grouping.title,
+				grouping.liveRelPath,
+				grouping.briefingRelPath,
+			);
+		}
+	}
 }
 
 interface ParsedWikiMemoryEntry {
@@ -1086,6 +1367,7 @@ export function writeWikiMemoryCapture(
 	}
 	ensureWikiBootstrap(wikiRoot);
 	const backend = resolveWikiStorageBackend();
+	const canonicalBackend = resolveCanonicalBackend(backend);
 	if (supportsQmdWrite(backend)) {
 		ensureWikiQmdBootstrap(wikiRoot);
 	}
@@ -1115,6 +1397,7 @@ export function writeWikiMemoryCapture(
 	};
 
 	let actionUpsert = { updated: false, body: "" };
+	let projectionDerivedFrom = "md://self";
 
 	if (supportsQmdWrite(backend)) {
 		const rawWrite = writeQmdMemoryEntry({
@@ -1136,6 +1419,7 @@ export function writeWikiMemoryCapture(
 			mode: "append",
 		});
 		outputPaths.rawPath = rawWrite.relPath;
+		projectionDerivedFrom = `qmd://${rawWrite.relPath}`;
 
 		if (isLive) {
 			const liveWrite = writeQmdMemoryEntry({
@@ -1158,6 +1442,7 @@ export function writeWikiMemoryCapture(
 			});
 			actionUpsert.updated = liveWrite.updated;
 			outputPaths.livePath = liveWrite.relPath;
+			projectionDerivedFrom = `qmd://${liveWrite.relPath}`;
 
 			const refreshedEntries = loadQmdEntriesForPage({
 				wikiRoot,
@@ -1237,34 +1522,61 @@ export function writeWikiMemoryCapture(
 			});
 			actionUpsert.updated = draftWrite.updated;
 			outputPaths.draftPath = draftWrite.relPath;
+			projectionDerivedFrom = `qmd://${draftWrite.relPath}`;
 		}
 	}
 
-	if (backend === "md" && isLive) {
+	if (isLive) {
 		const existingLiveRaw = existsSync(liveAbsPath)
 			? readFileSync(liveAbsPath, "utf8")
 			: "";
 		const existingLive = parseWikiFrontmatter(existingLiveRaw);
 		actionUpsert = upsertWikiMemoryEntry(existingLive.body, id, entryBlock);
 
-		const liveFrontmatter: WikiFrontmatter = {
-			title: paths.title,
-			namespace: input.namespace,
-			sessionId: input.sessionId,
-			userId: input.userId,
-			source_agent: input.sourceAgent,
-			timestamp: existingLive.frontmatter.timestamp || timestampIso,
-			updatedAt: updatedAtIso,
-		};
+		const liveFrontmatter = buildWorkingSurfaceFrontmatter({
+			base: {
+				title: paths.title,
+				namespace: input.namespace,
+				sessionId: input.sessionId,
+				userId: input.userId,
+				source_agent: input.sourceAgent,
+				timestamp: existingLive.frontmatter.timestamp || timestampIso,
+				updatedAt: updatedAtIso,
+			},
+			storageBackend: backend,
+			canonicalBackend,
+			derivedFrom: projectionDerivedFrom,
+		});
 		writeMarkdownFile(
 			liveAbsPath,
 			liveFrontmatter,
 			`# ${paths.title}\n\n${actionUpsert.body}`,
 		);
 
-		const refreshedEntries = parseWikiMemoryEntries(
-			parseWikiFrontmatter(readFileSync(liveAbsPath, "utf8")).body,
-		).sort(compareEntriesDeterministically);
+		const refreshedEntries = supportsQmdWrite(backend)
+			? loadQmdEntriesForPage({
+					wikiRoot,
+					layer: "live",
+					namespace: input.namespace,
+					pageKey: paths.pageKey,
+				})
+					.map((entry) => ({
+						id: entry.id,
+						timestamp: entry.timestamp,
+						namespace: entry.namespace,
+						text: entry.text,
+						sourceType: entry.sourceType,
+						memoryScope: entry.memoryScope,
+						memoryType: entry.memoryType,
+						promotionState: entry.promotionState,
+						confidence: entry.confidence,
+						sessionId: entry.sessionId,
+						userId: entry.userId,
+					}))
+					.sort(compareEntriesDeterministically)
+			: parseWikiMemoryEntries(
+					parseWikiFrontmatter(readFileSync(liveAbsPath, "utf8")).body,
+				).sort(compareEntriesDeterministically);
 		const briefingBody = [
 			`# ${paths.title} Briefing`,
 			"",
@@ -1277,33 +1589,43 @@ export function writeWikiMemoryCapture(
 		].join("\n");
 		writeMarkdownFile(
 			briefingAbsPath,
-			{
-				title: `${paths.title} Briefing`,
-				namespace: input.namespace,
-				sessionId: input.sessionId,
-				userId: input.userId,
-				source_agent: input.sourceAgent,
-				timestamp: timestampIso,
-				updatedAt: updatedAtIso,
-			},
+			buildWorkingSurfaceFrontmatter({
+				base: {
+					title: `${paths.title} Briefing`,
+					namespace: input.namespace,
+					sessionId: input.sessionId,
+					userId: input.userId,
+					source_agent: input.sourceAgent,
+					timestamp: timestampIso,
+					updatedAt: updatedAtIso,
+				},
+				storageBackend: backend,
+				canonicalBackend,
+				derivedFrom: projectionDerivedFrom,
+			}),
 			briefingBody,
 		);
-	} else if (backend === "md" && isDraft) {
+	} else if (isDraft) {
 		const existingDraftRaw = existsSync(draftAbsPath)
 			? readFileSync(draftAbsPath, "utf8")
 			: "";
 		const existingDraft = parseWikiFrontmatter(existingDraftRaw);
 		actionUpsert = upsertWikiMemoryEntry(existingDraft.body, id, entryBlock);
 
-		const draftFrontmatter: WikiFrontmatter = {
-			title: `${paths.title} Draft`,
-			namespace: input.namespace,
-			sessionId: input.sessionId,
-			userId: input.userId,
-			source_agent: input.sourceAgent,
-			timestamp: existingDraft.frontmatter.timestamp || timestampIso,
-			updatedAt: updatedAtIso,
-		};
+		const draftFrontmatter = buildWorkingSurfaceFrontmatter({
+			base: {
+				title: `${paths.title} Draft`,
+				namespace: input.namespace,
+				sessionId: input.sessionId,
+				userId: input.userId,
+				source_agent: input.sourceAgent,
+				timestamp: existingDraft.frontmatter.timestamp || timestampIso,
+				updatedAt: updatedAtIso,
+			},
+			storageBackend: backend,
+			canonicalBackend,
+			derivedFrom: projectionDerivedFrom,
+		});
 		writeMarkdownFile(
 			draftAbsPath,
 			draftFrontmatter,
@@ -1312,15 +1634,20 @@ export function writeWikiMemoryCapture(
 	}
 
 	if (backend === "md") {
-		const rawFrontmatter: WikiFrontmatter = {
-			title: `${paths.title} Raw Capture`,
-			namespace: input.namespace,
-			sessionId: input.sessionId,
-			userId: input.userId,
-			source_agent: input.sourceAgent,
-			timestamp: timestampIso,
-			updatedAt: updatedAtIso,
-		};
+		const rawFrontmatter = buildWorkingSurfaceFrontmatter({
+			base: {
+				title: `${paths.title} Raw Capture`,
+				namespace: input.namespace,
+				sessionId: input.sessionId,
+				userId: input.userId,
+				source_agent: input.sourceAgent,
+				timestamp: timestampIso,
+				updatedAt: updatedAtIso,
+			},
+			storageBackend: backend,
+			canonicalBackend,
+			derivedFrom: "md://self",
+		});
 		if (!existsSync(rawAbsPath)) {
 			writeMarkdownFile(
 				rawAbsPath,
@@ -1352,6 +1679,9 @@ export function writeWikiMemoryCapture(
 		updated: actionUpsert.updated,
 		namespace: input.namespace,
 		wikiRoot,
+		storageBackend: backend,
+		canonicalBackend,
+		workingSurface: "markdown",
 		rawPath: outputPaths.rawPath,
 		draftPath: outputPaths.draftPath,
 		livePath: outputPaths.livePath,
@@ -1393,6 +1723,10 @@ function loadWikiDocuments(
 ): WikiPageDocument[] {
 	const wikiRoot = resolveWikiRootPath();
 	if (!wikiRoot) return [];
+	materializeMarkdownWorkingSurfaceFromQmd({
+		wikiRoot,
+		includeDrafts: options?.includeDrafts,
+	});
 
 	const selected = new Set<string>();
 	const indexPath = join(wikiRoot, "index.md");
